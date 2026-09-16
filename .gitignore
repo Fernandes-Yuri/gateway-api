@@ -1,7 +1,11 @@
-﻿__pycache__/
+__pycache__/
 venv/
 .env
 node_modules/
 logs/
 build/
 dist/
+*.jsonl
+*.log
+releases/*.apk
+

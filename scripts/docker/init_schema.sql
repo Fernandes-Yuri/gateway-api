@@ -282,7 +282,7 @@ CREATE INDEX IF NOT EXISTS idx_family_bindings_code ON family_bindings(connectio
 CREATE INDEX IF NOT EXISTS idx_family_bindings_patient ON family_bindings(patient_id, status);
 CREATE INDEX IF NOT EXISTS idx_family_bindings_caregiver ON family_bindings(caregiver_id, status);
 
--- 19. MENSAGENS DE CARINHO FAMILIAR
+-- 19. MENSAGENS DE CARINHO FAMILIAR (D47: retenção máxima de 24h)
 CREATE TABLE IF NOT EXISTS family_messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     patient_id VARCHAR(128) NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
@@ -291,10 +291,20 @@ CREATE TABLE IF NOT EXISTS family_messages (
     message_text TEXT NOT NULL,
     icon_type VARCHAR(50) DEFAULT 'LOVE',
     is_read BOOLEAN DEFAULT FALSE,
-    sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours'),
+    deleted_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_family_messages_patient ON family_messages(patient_id, sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_family_messages_expiry ON family_messages(expires_at);
+
+-- D47 (16/09/2026): idempotente para bancos já existentes — TTL de 24h e tombstone de exclusão
+ALTER TABLE family_messages ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+ALTER TABLE family_messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+UPDATE family_messages SET expires_at = sent_at + INTERVAL '24 hours' WHERE expires_at IS NULL;
+ALTER TABLE family_messages ALTER COLUMN expires_at SET NOT NULL;
+ALTER TABLE family_messages ALTER COLUMN expires_at SET DEFAULT (NOW() + INTERVAL '24 hours');
 
 -- 20. AUDITORIA LGPD (Exclusão de Contas)
 CREATE TABLE IF NOT EXISTS user_deletion_logs (

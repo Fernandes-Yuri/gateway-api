@@ -13,6 +13,12 @@ class AcceptInvitation(BaseModel):
     caregiverRelation: str
 
 
+class DeleteFamilyMessage(BaseModel):
+    id: str
+    patientId: str | None = None
+    sentAt: str | None = None
+
+
 class CreateConsultation(BaseModel):
     title: str
     scheduledDate: str  # ISO format string
@@ -33,6 +39,56 @@ def serialize_binding(row):
         if result.get(key):
             result[key] = result[key].isoformat()
     return result
+
+
+def serialize_message(row):
+    """D47: inclui expires_at/deleted_at para o app aplicar TTL e tombstones."""
+    result = dict(row)
+    result['id'] = str(result['id'])
+    for key in ('sent_at', 'expires_at', 'deleted_at'):
+        if result.get(key):
+            result[key] = result[key].isoformat()
+    if result.get('deleted_at'):
+        result['message_text'] = ''
+        result['sender_name'] = ''
+        result['icon_type'] = 'LOVE'
+    return result
+
+
+def message_lifetime(sent_at: str, now=None):
+    """Retries and delayed uploads never extend the original 24-hour lifetime."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        sent = datetime.fromisoformat(sent_at.replace('Z', '+00:00'))
+        if sent.tzinfo is None:
+            raise ValueError('timezone required')
+        sent = sent.astimezone(timezone.utc)
+    except (ValueError, AttributeError):
+        raise HTTPException(422, 'Horário de envio inválido.')
+    if sent > now + timedelta(minutes=5):
+        raise HTTPException(422, 'Confira a data e a hora do aparelho.')
+    sent = min(sent, now)
+    expires = sent + timedelta(hours=24)
+    if expires <= now:
+        raise HTTPException(410, 'Mensagem expirada.')
+    return sent, expires
+
+
+async def purge_expired_family_messages(pool) -> int:
+    """D47: remove definitivamente tudo o que completou 24h (mensagens e tombstones).
+
+    A regra dura de retenção é `expires_at <= now()` — o tombstone de uma exclusão
+    também vive no máximo até o expires_at da própria mensagem, de modo que nenhum
+    resíduo ultrapassa a janela de 24h. Retorna a quantidade de linhas removidas.
+    """
+    if pool is None:
+        return 0
+    async with pool.acquire() as conn:
+        result = await conn.execute('DELETE FROM family_messages WHERE expires_at <= now()')
+    try:
+        return int(result.split()[-1])
+    except (ValueError, IndexError):
+        return 0
 
 
 def install_family_routes(app, get_pool, binding_model, message_model):
@@ -103,23 +159,67 @@ def install_family_routes(app, get_pool, binding_model, message_model):
     @app.post('/api/sync/family-message')
     async def message(m: message_model, uid: str = Depends(firebase_uid)):
         require_owner(uid, m.senderId)
-        message_id = uuid.UUID(m.id) if m.id else uuid.uuid4()
+        try:
+            message_id = uuid.UUID(m.id) if m.id else uuid.uuid4()
+        except ValueError:
+            raise HTTPException(422, 'Mensagem inválida.')
+        sent, expires = message_lifetime(m.sentAt)
         async with pool().acquire() as conn:
             await require_family_access(conn, uid, m.patientId)
+            # D47: TTL de 24h por mensagem — nenhuma conversa é armazenada além disso
             row = await conn.fetchrow('''INSERT INTO family_messages
-                (id, patient_id, sender_id, sender_name, message_text, icon_type, is_read, sent_at)
-                VALUES($1,$2,$3,$4,$5,$6,false,now()) ON CONFLICT DO NOTHING RETURNING id''',
-                message_id, m.patientId, uid, m.senderName, m.messageText, m.iconType)
+                (id, patient_id, sender_id, sender_name, message_text, icon_type, is_read, sent_at, expires_at)
+                VALUES($1,$2,$3,$4,$5,$6,false,$7,$8) ON CONFLICT DO NOTHING RETURNING id''',
+                message_id, m.patientId, uid, m.senderName, m.messageText, m.iconType, sent, expires)
             if row is None and not await conn.fetchval('SELECT EXISTS(SELECT 1 FROM family_messages WHERE id=$1 AND sender_id=$2 AND patient_id=$3)', message_id, uid, m.patientId):
                 raise HTTPException(409, 'Mensagem indisponível.')
         return {'status': 'success', 'id': str(message_id)}
 
     @app.get('/api/family/messages/{patient_id}')
-    async def messages(patient_id: str, limit: int = 50, uid: str = Depends(firebase_uid)):
+    async def messages(patient_id: str, limit: int = 50, offset: int = 0, uid: str = Depends(firebase_uid)):
         async with pool().acquire() as conn:
             await require_family_access(conn, uid, patient_id)
-            rows = await conn.fetch('SELECT * FROM family_messages WHERE patient_id=$1 ORDER BY sent_at DESC LIMIT $2', patient_id, max(1, min(limit, 200)))
-            return [dict(row, id=str(row['id']), sent_at=row['sent_at'].isoformat()) for row in rows]
+            # D47: defesa em profundidade — a API nunca devolve mensagem expirada,
+            # mesmo que a purga agendada ainda não tenha rodado. Tombstones seguem
+            # na resposta para que o outro aparelho aplique a exclusão localmente.
+            rows = await conn.fetch('''SELECT * FROM family_messages
+                WHERE patient_id=$1 AND expires_at > now()
+                ORDER BY sent_at DESC, id DESC LIMIT $2 OFFSET $3''', patient_id, max(1, min(limit, 200)), max(0, offset))
+            return [serialize_message(row) for row in rows]
+
+    @app.post('/api/family/message/delete')
+    async def delete_message(p: DeleteFamilyMessage, uid: str = Depends(firebase_uid)):
+        """D47 (LGPD Art. 18, VI): o remetente apaga a própria mensagem.
+
+        Tombstone imediato (`deleted_at`): o outro aparelho aplica a exclusão no
+        próximo sync, e a purga remove o resíduo junto com a expiração natural.
+        """
+        try:
+            message_id = uuid.UUID(p.id)
+        except (ValueError, AttributeError):
+            raise HTTPException(422, 'Mensagem inválida.')
+        async with pool().acquire() as conn, conn.transaction():
+            row = await conn.fetchrow('SELECT id, patient_id, sender_id FROM family_messages WHERE id=$1 FOR UPDATE', message_id)
+            if not row:
+                if not p.patientId or not p.sentAt:
+                    return {'status': 'success', 'id': str(message_id)}
+                await require_family_access(conn, uid, p.patientId)
+                try:
+                    sent, expires = message_lifetime(p.sentAt)
+                except HTTPException as error:
+                    if error.status_code == 410:
+                        return {'status': 'success', 'id': str(message_id)}
+                    raise
+                # Reserve the ID before an ambiguous/in-flight upload can recreate content.
+                await conn.execute("""INSERT INTO family_messages
+                    (id,patient_id,sender_id,sender_name,message_text,icon_type,is_read,sent_at,expires_at,deleted_at)
+                    VALUES($1,$2,$3,'','','LOVE',false,$4,$5,now()) ON CONFLICT DO NOTHING""",
+                    message_id, p.patientId, uid, sent, expires)
+                row = await conn.fetchrow('SELECT id, patient_id, sender_id FROM family_messages WHERE id=$1 FOR UPDATE', message_id)
+            if row['sender_id'] != uid:
+                raise HTTPException(403, 'Só quem enviou pode apagar a mensagem.')
+            await conn.execute("UPDATE family_messages SET deleted_at=COALESCE(deleted_at,now()), message_text='', sender_name='', icon_type='LOVE' WHERE id=$1", message_id)
+        return {'status': 'success', 'id': str(message_id)}
 
     # --- CONSULTAS MÉDICAS ---
 

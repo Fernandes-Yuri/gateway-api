@@ -22,7 +22,7 @@ from api_identity import firebase_uid, require_owner, require_family_access
 from assistant_preferences import SCHEMA as PREFERENCE_SCHEMA, install_preference_routes, process_preferences
 from piper_service import PiperService
 from conversation_policy import build_conversation_system
-from family_api import install_family_routes
+from family_api import install_family_routes, purge_expired_family_messages
 from caregiver_alerts import install_caregiver_alert_routes
 from vip_api import install_vip_routes
 import requests
@@ -507,6 +507,18 @@ async def startup():
         # Inicializa cache assíncrono de áudios engatilhados
         asyncio.create_task(init_fast_lane_audio_cache())
 
+        # Pass the coroutine directly: a sync lambda runs in an executor without an event loop.
+        if db_pool and HAS_SCHEDULER:
+            await purge_expired_family_messages(db_pool)
+            global retention_scheduler
+            retention_scheduler = AsyncIOScheduler()
+            retention_scheduler.add_job(
+                purge_expired_family_messages, 'interval', seconds=30,
+                args=[db_pool], id="purge_family_messages_24h",
+                replace_existing=True, max_instances=1, coalesce=True,
+            )
+            retention_scheduler.start()
+
 async def scheduled_proactive_job(periodo: str):
     """Dispara rotinas pró-ativas periódicas de saúde e acolhimento."""
     print(f"[Scheduler] Executando rotina pró-ativa agendada: {periodo}")
@@ -525,6 +537,8 @@ async def scheduled_proactive_job(periodo: str):
 @app.on_event("shutdown")
 async def shutdown():
     global db_pool
+    if globals().get("retention_scheduler"):
+        retention_scheduler.shutdown(wait=False)
     if db_pool:
         await db_pool.close()
 
@@ -3235,10 +3249,16 @@ async def get_latest_app_release():
 async def download_app_apk(token: Optional[str] = None):
     """Endpoint de download do APK oficial da Release."""
     candidates = [
-        "/home/yurifjs/projetos/braga-gateway/releases/latest.apk",
-        "/home/yurifjs/projetos/braga-gateway/releases/BragaSaude.apk",
+        os.path.join(RELEASES_DIR, "BragaSaude.apk"),
+        os.path.join(RELEASES_DIR, "latest.apk"),
+        "/home/ec2-user/braga-gateway/releases/BragaSaude.apk",
+        "/home/ec2-user/braga-gateway/releases/latest.apk",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "releases", "BragaSaude.apk"),
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "releases", "latest.apk"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "releases", "BragaSaude.apk"),
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "releases", "latest.apk"),
+        "/home/yurifjs/projetos/braga-gateway/releases/BragaSaude.apk",
+        "/home/yurifjs/projetos/braga-gateway/releases/latest.apk",
     ]
     for apk_path in candidates:
         if os.path.exists(apk_path) and os.path.getsize(apk_path) > 0:
@@ -3247,7 +3267,11 @@ async def download_app_apk(token: Optional[str] = None):
                 media_type="application/vnd.android.package-archive",
                 filename="BragaSaude.apk"
             )
-    return RedirectResponse(url="https://github.com/Fernandes-Yuri/bragasaude-releases/releases/download/v1.0.0/app-release.apk", status_code=302)
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "APK de release em preparação. Tente novamente em alguns instantes."}
+    )
+
 
 
 @app.get("/api/app/version")

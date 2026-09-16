@@ -1,0 +1,40 @@
+#!/bin/bash
+set -e
+
+APP_DIR="/home/ec2-user/braga-gateway"
+cd "$APP_DIR"
+
+echo "=== [1/4] Sincronizando scripts do servidor ==="
+if [ -d "scripts/server" ] && [ -d "app" ]; then
+    rsync -av --exclude '__pycache__' --exclude '*.pyc' scripts/server/ app/
+fi
+
+echo "=== [2/4] Verificando dependencias Python ==="
+source venv/bin/activate
+if [ -f "requirements.txt" ]; then
+    pip install -r requirements.txt --quiet
+elif [ -f "app/requirements.txt" ]; then
+    pip install -r app/requirements.txt --quiet
+fi
+
+echo "=== [3/4] Executando Migrations do Banco de Dados (RDS) ==="
+if [ -f "migrate.py" ]; then
+    python3 migrate.py
+fi
+
+echo "=== [4/4] Reiniciando Braga Gateway ==="
+sudo systemctl restart braga-gateway.service
+sleep 2
+
+# Verificacao de integridade
+HEALTH=$(curl -s http://127.0.0.1:8080/health || echo "{}")
+if echo "$HEALTH" | grep -q '"status":"online"'; then
+    echo "================================================="
+    echo "DEPLOY CONCLUIDO COM SUCESSO: Gateway esta ONLINE!"
+    echo "================================================="
+else
+    echo "[ERRO] Health check falhou apos reinicio:"
+    echo "$HEALTH"
+    sudo systemctl status braga-gateway.service --no-pager
+    exit 1
+fi

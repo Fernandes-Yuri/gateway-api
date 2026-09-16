@@ -16,16 +16,9 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd /home/ec2-user/braga-gateway
-
-            # Pull latest code
-            git fetch origin
+            git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Fernandes-Yuri/gateway-api.git
+            git fetch origin master
             git reset --hard origin/master
+            git remote set-url origin git@github.com:Fernandes-Yuri/gateway-api.git
+            bash deploy.sh
 
-            # Activate venv and install dependencies
-            source venv/bin/activate
-            pip install -r app/requirements.txt 2>/dev/null || echo "No requirements.txt, skipping"
-
-            # Restart the service
-            sudo systemctl restart braga-gateway.service
-            sleep 2
-            sudo systemctl status braga-gateway.service --no-pager

@@ -88,12 +88,26 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(401, self.client.get('/api/family/bindings/victim').status_code)
         self.assertEqual(401, self.client.get('/api/family/messages/victim').status_code)
         self.assertEqual(401, self.client.post('/api/family/accept', json=dict(code='ABCD1234', caregiverName='Ana', caregiverRelation='Filha')).status_code)
+        # D47: exclusão e envio de mensagens também exigem autenticação
+        self.assertEqual(401, self.client.post('/api/family/message/delete', json=dict(id=str(uuid.uuid4()))).status_code)
+        self.assertEqual(401, self.client.post('/api/sync/family-message', json=dict(
+            id=None, patientId='patient', senderId='sender', senderName='Ana',
+            messageText='Oi', iconType='LOVE', isRead=False,
+            sentAt='2026-09-16T12:00:00Z')).status_code)
 
     def test_wrong_owner_rejected_and_outage_never_reports_success(self):
         self.app.dependency_overrides[firebase_uid] = lambda: 'caregiver'
         self.assertEqual(403, self.client.get('/api/family/bindings/victim').status_code)
         self.assertEqual(503, self.client.get('/api/family/bindings/caregiver').status_code)
         self.assertEqual(503, self.client.post('/api/family/accept', json=dict(code='ABCD1234', caregiverName='Ana', caregiverRelation='Filha')).status_code)
+
+    def test_message_delete_fail_closed_and_validates_id(self):
+        """D47: exclusão nunca finge sucesso sem banco e rejeita id malformado antes do pool."""
+        self.app.dependency_overrides[firebase_uid] = lambda: 'sender'
+        # Banco indisponível: 503 (fail-closed, nunca 200 falso)
+        self.assertEqual(503, self.client.post('/api/family/message/delete', json=dict(id=str(uuid.uuid4()))).status_code)
+        # id malformado: 422 sem tocar no banco
+        self.assertEqual(422, self.client.post('/api/family/message/delete', json=dict(id='nao-e-uuid')).status_code)
 
 
 if __name__ == '__main__':
