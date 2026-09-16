@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 from security_defense import (
     StrictRateLimiter,
     is_prompt_injection,
@@ -68,8 +68,35 @@ async def test_rate_limiter_24h_ip_block():
     assert caught_403
     print("[PASS] test_rate_limiter_24h_ip_block")
 
+async def test_security_incident_alert_whatsapp():
+    from unittest.mock import patch, AsyncMock
+    from whatsapp_service import send_security_incident_alert_whatsapp
+
+    with patch("whatsapp_service.send_whatsapp_text", new_callable=AsyncMock) as mock_send:
+        mock_send.return_value = {"success": True, "status_code": 200}
+
+        # Test alert with custom phone
+        res = await send_security_incident_alert_whatsapp(
+            ip="203.0.113.42",
+            reason="3x Rate limit em /api/auth/login",
+            violations=3,
+            to_number="5511988887777"
+        )
+        assert res["success"] is True
+        mock_send.assert_called_once()
+        args, _ = mock_send.call_args
+        target_phone, message_text = args
+        assert target_phone == "5511988887777"
+        assert "203.0.113.42" in message_text
+        assert "3x Rate limit em /api/auth/login" in message_text
+        assert "86.400 segundos" in message_text
+        assert "ALERTA DE SEGURANÇA" in message_text
+
+    print("[PASS] test_security_incident_alert_whatsapp")
+
 if __name__ == "__main__":
     asyncio.run(test_prompt_injection_detection())
     asyncio.run(test_zero_trust_sanitization())
     asyncio.run(test_rate_limiter_24h_ip_block())
+    asyncio.run(test_security_incident_alert_whatsapp())
     print("\n>>> ALL SECURITY DEFENSE TESTS PASSED SUCCESSFULLY! <<<")

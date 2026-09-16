@@ -273,6 +273,31 @@ async def send_security_code_whatsapp(
     return await send_whatsapp_text(to_number, msg)
 
 
+async def send_security_incident_alert_whatsapp(
+    ip: str,
+    reason: str,
+    violations: int,
+    to_number: Optional[str] = None
+) -> Dict[str, Any]:
+    """Dispara notificação de bloqueio de 24h para o administrador via WhatsApp."""
+    target_phone = to_number or os.getenv("SECURITY_ALERT_PHONE") or os.getenv("ADMIN_PHONE") or "5511967808252"
+    if not target_phone:
+        print("[SECURITY ALERT WHATSAPP] Nenhum telefone de alerta configurado.")
+        return {"success": False, "detail": "Nenhum telefone configurado"}
+
+    msg = (
+        f"🚨 *ALERTA DE SEGURANÇA — BRAGA SAÚDE*\n\n"
+        f"🛡️ *Ação:* Bloqueio total de IP por 24 horas\n"
+        f"🌐 *Endereço IP:* `{ip}`\n"
+        f"⚠️ *Violações acumuladas:* {violations} infrações em 24h\n"
+        f"📋 *Motivo:* {reason}\n"
+        f"⏱️ *Duração:* 86.400 segundos (24h)\n\n"
+        f"🔒 _O tráfego deste IP foi neutralizado pela Gateway na camada de middleware._"
+    )
+    print(f"[SECURITY ALERT WHATSAPP] Disparando alerta para o administrador ({target_phone})...")
+    return await send_whatsapp_text(target_phone, msg)
+
+
 async def download_whatsapp_media(media_id: str) -> Optional[bytes]:
     """Obtém a URL temporária da mídia na Meta e faz o download dos bytes (ex: áudio OGG Opus)."""
     media_meta_url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{media_id}"

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Braga Saude - Security Defense System
 Implementa Zero-Trust, Deteccao de Prompt Injection, Sanitizacao de Entrada,
 e StrictRateLimiter com Bloqueio de IP por 24 horas (apos 3 violacoes).
@@ -204,6 +204,16 @@ class StrictRateLimiter:
                             )
                     except Exception as err:
                         print(f"[SECURITY FIREWALL] Falha ao persistir bloqueio no banco: {err}")
+
+                # Dispara alerta em background para o WhatsApp do Administrador
+                try:
+                    from whatsapp_service import send_security_incident_alert_whatsapp
+                    asyncio.create_task(
+                        send_security_incident_alert_whatsapp(ip, reason, count)
+                    )
+                except Exception as alert_err:
+                    print(f"[SECURITY FIREWALL] Falha ao agendar alerta de WhatsApp: {alert_err}")
+
                 return True
         return False
 
