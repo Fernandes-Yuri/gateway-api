@@ -1,10 +1,11 @@
 """Authenticated family invitations. The row lock makes acceptance atomic."""
 import uuid
 from datetime import datetime, timedelta, timezone
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel
 from api_identity import firebase_uid, require_owner, require_family_access
 from family_contract import validate_acceptance
+from security_defense import get_client_ip, sanitize_zero_trust_text
 
 
 class AcceptInvitation(BaseModel):
@@ -91,7 +92,7 @@ async def purge_expired_family_messages(pool) -> int:
         return 0
 
 
-def install_family_routes(app, get_pool, binding_model, message_model):
+def install_family_routes(app, get_pool, binding_model, message_model, rate_limiter=None):
     def pool():
         value = get_pool()
         if value is None:
@@ -99,7 +100,10 @@ def install_family_routes(app, get_pool, binding_model, message_model):
         return value
 
     @app.post('/api/sync/family-binding')
-    async def sync_binding(b: binding_model, uid: str = Depends(firebase_uid)):
+    async def sync_binding(b: binding_model, request: Request, uid: str = Depends(firebase_uid)):
+        client_ip = get_client_ip(request)
+        if rate_limiter:
+            await rate_limiter.check("family_binding_ip", client_ip, limit=10, window_seconds=60, ip=client_ip, pool=pool())
         async with pool().acquire() as conn, conn.transaction():
             if b.status == 'REVOKED':
                 row = await conn.fetchrow('SELECT * FROM family_bindings WHERE id=$1 FOR UPDATE', uuid.UUID(b.id))
@@ -117,11 +121,14 @@ def install_family_routes(app, get_pool, binding_model, message_model):
                 raise HTTPException(409, 'Conclua e sincronize seu perfil antes de criar um convite.')
             binding_id = uuid.UUID(b.id) if b.id else uuid.uuid4()
             now = datetime.now(timezone.utc)
+            # Sanitização Zero-Trust
+            caregiver_name = sanitize_zero_trust_text(b.caregiverName, max_length=100, field_name="caregiverName", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
+            caregiver_relation = sanitize_zero_trust_text(b.caregiverRelation, max_length=50, field_name="caregiverRelation", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
             row = await conn.fetchrow('''INSERT INTO family_bindings
                 (id, patient_id, caregiver_name, caregiver_relation, connection_code, status, created_at, expires_at)
                 VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7)
-                ON CONFLICT DO NOTHING RETURNING *''', binding_id, uid, b.caregiverName,
-                b.caregiverRelation, code, now, now + timedelta(days=7))
+                ON CONFLICT DO NOTHING RETURNING *''', binding_id, uid, caregiver_name,
+                caregiver_relation, code, now, now + timedelta(days=7))
             if row is None:
                 row = await conn.fetchrow('SELECT * FROM family_bindings WHERE id=$1', binding_id)
                 if not row or row['patient_id'] != uid or row['connection_code'] != code or row['status'] != 'PENDING':
@@ -129,8 +136,13 @@ def install_family_routes(app, get_pool, binding_model, message_model):
             return {'status': 'success', 'id': str(row['id'])}
 
     @app.post('/api/family/accept')
-    async def accept_invitation(p: AcceptInvitation, uid: str = Depends(firebase_uid)):
-        if not p.caregiverName.strip() or not p.caregiverRelation.strip():
+    async def accept_invitation(p: AcceptInvitation, request: Request, uid: str = Depends(firebase_uid)):
+        client_ip = get_client_ip(request)
+        if rate_limiter:
+            await rate_limiter.check("family_accept_ip", client_ip, limit=5, window_seconds=60, ip=client_ip, pool=pool())
+        caregiver_name = sanitize_zero_trust_text(p.caregiverName, max_length=100, field_name="caregiverName", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
+        caregiver_relation = sanitize_zero_trust_text(p.caregiverRelation, max_length=50, field_name="caregiverRelation", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
+        if not caregiver_name.strip() or not caregiver_relation.strip():
             raise HTTPException(422, 'Informe nome e relação com o familiar.')
         async with pool().acquire() as conn, conn.transaction():
             row = await conn.fetchrow('SELECT * FROM family_bindings WHERE connection_code=$1 FOR UPDATE', p.code.strip().upper())
@@ -142,10 +154,10 @@ def install_family_routes(app, get_pool, binding_model, message_model):
                 raise HTTPException(409, str(error)) from error
             # Auth account exists before profile enrollment. Create only the FK stub;
             # completing enrollment remains a separate profile operation.
-            await conn.execute('INSERT INTO profiles(id, full_name) VALUES($1,$2) ON CONFLICT DO NOTHING', uid, p.caregiverName.strip())
+            await conn.execute('INSERT INTO profiles(id, full_name) VALUES($1,$2) ON CONFLICT DO NOTHING', uid, caregiver_name)
             updated = await conn.fetchrow("""UPDATE family_bindings SET caregiver_id=$2,
                 caregiver_name=$3, caregiver_relation=$4, status='ACTIVE' WHERE id=$1 RETURNING *""",
-                row['id'], uid, p.caregiverName.strip(), p.caregiverRelation.strip())
+                row['id'], uid, caregiver_name, caregiver_relation)
             return serialize_binding(updated)
 
     @app.get('/api/family/bindings/{user_id}')
@@ -157,20 +169,28 @@ def install_family_routes(app, get_pool, binding_model, message_model):
             return [serialize_binding(row) for row in rows]
 
     @app.post('/api/sync/family-message')
-    async def message(m: message_model, uid: str = Depends(firebase_uid)):
+    async def message(m: message_model, request: Request, uid: str = Depends(firebase_uid)):
         require_owner(uid, m.senderId)
+        client_ip = get_client_ip(request)
+        if rate_limiter:
+            await rate_limiter.check("family_message_ip", client_ip, limit=30, window_seconds=60, ip=client_ip, pool=pool())
         try:
             message_id = uuid.UUID(m.id) if m.id else uuid.uuid4()
         except ValueError:
             raise HTTPException(422, 'Mensagem inválida.')
         sent, expires = message_lifetime(m.sentAt)
+
+        # Zero-Trust sanitization e protecao contra prompt injection
+        clean_text = sanitize_zero_trust_text(m.messageText, max_length=500, field_name="messageText", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
+        clean_sender = sanitize_zero_trust_text(m.senderName, max_length=100, field_name="senderName", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
+
         async with pool().acquire() as conn:
             await require_family_access(conn, uid, m.patientId)
             # D47: TTL de 24h por mensagem — nenhuma conversa é armazenada além disso
             row = await conn.fetchrow('''INSERT INTO family_messages
                 (id, patient_id, sender_id, sender_name, message_text, icon_type, is_read, sent_at, expires_at)
                 VALUES($1,$2,$3,$4,$5,$6,false,$7,$8) ON CONFLICT DO NOTHING RETURNING id''',
-                message_id, m.patientId, uid, m.senderName, m.messageText, m.iconType, sent, expires)
+                message_id, m.patientId, uid, clean_sender, clean_text, m.iconType, sent, expires)
             if row is None and not await conn.fetchval('SELECT EXISTS(SELECT 1 FROM family_messages WHERE id=$1 AND sender_id=$2 AND patient_id=$3)', message_id, uid, m.patientId):
                 raise HTTPException(409, 'Mensagem indisponível.')
         return {'status': 'success', 'id': str(message_id)}

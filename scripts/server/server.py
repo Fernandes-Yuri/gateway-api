@@ -25,6 +25,13 @@ from conversation_policy import build_conversation_system
 from family_api import install_family_routes, purge_expired_family_messages
 from caregiver_alerts import install_caregiver_alert_routes
 from vip_api import install_vip_routes
+from security_defense import (
+    StrictRateLimiter,
+    get_client_ip,
+    is_prompt_injection,
+    sanitize_zero_trust_text,
+    INJECTION_PATTERNS,
+)
 import requests
 import httpx
 
@@ -156,45 +163,32 @@ install_preference_routes(app, lambda: db_pool)
 WHATSAPP_EVENT_LOG: List[Dict[str, Any]] = []
 
 
-class InMemoryRateLimiter:
-    """Limitador de janela deslizante para o processo FastAPI atual.
+rate_limiter = StrictRateLimiter()
 
-    Ele é propositalmente aplicado antes do PostgreSQL. Em uma implantação com
-    múltiplas réplicas, substitua-o por Redis para compartilhar os contadores.
+@app.middleware("http")
+async def security_firewall_middleware(request: Request, call_next):
+    """Firewall de seguranca Zero-Trust no nivel da Gateway.
+    Bloqueia sumariamente por 24h qualquer IP que tenha acumulado 3 violacoes.
     """
-
-    def __init__(self) -> None:
-        self._hits: Dict[str, Deque[float]] = {}
-        self._lock = asyncio.Lock()
-
-    async def check(self, scope: str, key: str, limit: int, window_seconds: int) -> None:
-        now = time.monotonic()
-        bucket_key = f"{scope}:{key}"
-        async with self._lock:
-            hits = self._hits.setdefault(bucket_key, deque())
-            cutoff = now - window_seconds
-            while hits and hits[0] <= cutoff:
-                hits.popleft()
-            if len(hits) >= limit:
-                retry_after = max(1, int(window_seconds - (now - hits[0])) + 1)
-                raise HTTPException(
-                    status_code=429,
-                    detail="Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.",
-                    headers={"Retry-After": str(retry_after)},
-                )
-            hits.append(now)
-
-
-rate_limiter = InMemoryRateLimiter()
-
-
-def get_client_ip(request: Request) -> str:
-    """Obtém o IP, confiando em X-Forwarded-For somente com proxy confiável."""
-    if os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true":
-        forwarded_for = request.headers.get("x-forwarded-for", "")
-        if forwarded_for:
-            return forwarded_for.split(",", 1)[0].strip()
-    return request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
+    blocked, remaining = rate_limiter.is_ip_blocked(client_ip)
+    if blocked:
+        # Permite healthcheck do orquestrador
+        if request.url.path in ("/health", "/"):
+            return await call_next(request)
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "IP_BLOCKED_24H",
+                "detail": "Acesso bloqueado por 24 horas para este endereco IP devido a excesso de tentativas e violacoes de seguranca.",
+                "retry_after_seconds": remaining,
+            },
+            headers={
+                "Retry-After": str(remaining),
+                "X-RateLimit-Blocked": "true",
+            },
+        )
+    return await call_next(request)
 
 # =============================================================
 # MODELOS PYDANTIC
@@ -499,11 +493,27 @@ async def startup():
                     CREATE INDEX IF NOT EXISTS idx_agent_actions_user ON agent_actions(user_id, created_at DESC);
                     """)
                     print("[PostgreSQL] Tabela agent_actions inicializada com sucesso!")
+                    await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS security_blocked_ips (
+                        ip VARCHAR(45) PRIMARY KEY,
+                        reason TEXT NOT NULL,
+                        violations INT NOT NULL DEFAULT 1,
+                        blocked_until TIMESTAMPTZ NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_security_blocked_ips_until ON security_blocked_ips(blocked_until);
+                    """)
+                    print("[PostgreSQL] Tabela security_blocked_ips inicializada com sucesso!")
                 break
             except Exception as e:
                 print(f"[PostgreSQL Error] Tentativa {attempt}/5 falhou ao conectar ao banco: {e}")
                 if attempt < 5:
                     await asyncio.sleep(3)
+
+        if db_pool:
+            await rate_limiter.load_blocked_ips_from_db(db_pool)
+
         # Inicializa cache assíncrono de áudios engatilhados
         asyncio.create_task(init_fast_lane_audio_cache())
 
@@ -516,6 +526,17 @@ async def startup():
                 purge_expired_family_messages, 'interval', seconds=30,
                 args=[db_pool], id="purge_family_messages_24h",
                 replace_existing=True, max_instances=1, coalesce=True,
+            )
+            async def purge_expired_blocked_ips():
+                if db_pool:
+                    try:
+                        async with db_pool.acquire() as conn:
+                            await conn.execute("DELETE FROM security_blocked_ips WHERE blocked_until <= NOW();")
+                    except Exception as err:
+                        print(f"[SECURITY FIREWALL] Falha ao limpar IPs expirados: {err}")
+            retention_scheduler.add_job(
+                purge_expired_blocked_ips, 'interval', minutes=5,
+                id="purge_security_blocked_ips", replace_existing=True, max_instances=1,
             )
             retention_scheduler.start()
 
@@ -583,10 +604,21 @@ def dispatch_push(token: str, title: str, body: str, data: Dict[str, str] = None
 # =============================================================
 
 @app.post("/api/sync/profile")
-async def sync_profile(p: ProfileSyncDto, uid: str = Depends(firebase_uid)):
+async def sync_profile(p: ProfileSyncDto, request: Request, uid: str = Depends(firebase_uid)):
     require_owner(uid, p.id)
+    client_ip = get_client_ip(request)
+    await rate_limiter.check("sync_profile_ip", client_ip, limit=15, window_seconds=60, ip=client_ip, pool=db_pool)
     if not db_pool:
         raise HTTPException(503, "Banco indisponível")
+
+    # Zero-Trust sanitization
+    if p.name:
+        p.name = sanitize_zero_trust_text(p.name, max_length=100, field_name="name", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
+    if p.phone:
+        p.phone = sanitize_zero_trust_text(p.phone, max_length=30, field_name="phone", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
+    if p.emergencyContactPhone:
+        p.emergencyContactPhone = sanitize_zero_trust_text(p.emergencyContactPhone, max_length=30, field_name="emergencyContactPhone", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
+
     try:
         query, values = profile_upsert(p)
     except ValueError as error:
@@ -834,20 +866,26 @@ async def sync_post_reaction(r: PostReactionSyncDto):
         await conn.execute(query, r.postId, r.userId, r.reactionType or "apoio", c_at)
     return {"status": "success"}
 
-install_family_routes(app, lambda: db_pool, FamilyBindingSyncDto, FamilyMessageSyncDto)
+install_family_routes(app, lambda: db_pool, FamilyBindingSyncDto, FamilyMessageSyncDto, rate_limiter=rate_limiter)
 install_caregiver_alert_routes(app, lambda: db_pool, load_devices, dispatch_push)
 
 @app.post("/api/sync/feedback")
-async def sync_feedback(f: FeedbackSyncDto):
+async def sync_feedback(f: FeedbackSyncDto, request: Request):
     if not db_pool:
         return {"status": "offline_mode"}
+    client_ip = get_client_ip(request)
+    await rate_limiter.check("sync_feedback_ip", client_ip, limit=10, window_seconds=60, ip=client_ip, pool=db_pool)
+    
+    clean_title = sanitize_zero_trust_text(f.title, max_length=200, field_name="title", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
+    clean_message = sanitize_zero_trust_text(f.message, max_length=1000, field_name="message", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
+
     query = """
     INSERT INTO feedbacks (user_id, user_email, user_name, category, title, message, input_method, app_version, device_info, created_at)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
     RETURNING id;
     """
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(query, f.userId, f.userEmail, f.userName, f.category, f.title, f.message, f.inputMethod, f.appVersion, f.deviceInfo)
+        row = await conn.fetchrow(query, f.userId, f.userEmail, f.userName, f.category, clean_title, clean_message, f.inputMethod, f.appVersion, f.deviceInfo)
     return {"status": "success", "id": str(row["id"])}
 
 # =============================================================
@@ -2882,8 +2920,9 @@ async def send_auth_otp(request: Request, req: OtpSendRequest, background_tasks:
         raise HTTPException(status_code=400, detail="Canal inválido. Utilize 'EMAIL' ou 'WHATSAPP'.")
 
     # Impede custos e acesso ao banco antes de gerar/enviar um novo OTP.
-    await rate_limiter.check("otp_send_identifier", identifier, limit=3, window_seconds=15 * 60)
-    await rate_limiter.check("otp_send_ip", get_client_ip(request), limit=10, window_seconds=15 * 60)
+    client_ip = get_client_ip(request)
+    await rate_limiter.check("otp_send_identifier", identifier, limit=3, window_seconds=15 * 60, ip=client_ip, pool=db_pool)
+    await rate_limiter.check("otp_send_ip", client_ip, limit=3, window_seconds=15 * 60, ip=client_ip, pool=db_pool)
 
     if channel == "EMAIL" and (not HAS_EMAIL or not is_email_configured()):
         raise HTTPException(
@@ -2965,8 +3004,9 @@ async def verify_auth_otp(request: Request, req: OtpVerifyRequest):
         raise HTTPException(status_code=400, detail="Identificador não informado")
 
     # Bloqueia rajadas de tentativa antes de consultar ou atualizar o PostgreSQL.
-    await rate_limiter.check("otp_verify_identifier", identifier, limit=5, window_seconds=60)
-    await rate_limiter.check("otp_verify_ip", get_client_ip(request), limit=5, window_seconds=60)
+    client_ip = get_client_ip(request)
+    await rate_limiter.check("otp_verify_identifier", identifier, limit=5, window_seconds=5 * 60, ip=client_ip, pool=db_pool)
+    await rate_limiter.check("otp_verify_ip", client_ip, limit=5, window_seconds=5 * 60, ip=client_ip, pool=db_pool)
 
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -3030,13 +3070,16 @@ async def verify_auth_otp(request: Request, req: OtpVerifyRequest):
             }
 
 @app.post("/api/auth/password/reset")
-async def reset_password(req: PasswordResetRequest):
+async def reset_password(req: PasswordResetRequest, request: Request):
     """
     Efetua a troca da senha do usuário após comprovação do resetToken obtido via OTP.
     Atualiza no Firebase Auth (se ativo) ou na persistência de contas.
     """
     if not db_pool:
         raise HTTPException(status_code=503, detail="Banco de dados não disponível")
+
+    client_ip = get_client_ip(request)
+    await rate_limiter.check("password_reset_ip", client_ip, limit=3, window_seconds=15 * 60, ip=client_ip, pool=db_pool)
 
     identifier = req.identifier.strip().lower()
     reset_token = req.resetToken.strip()
@@ -3107,7 +3150,8 @@ async def check_account_status(request: Request, req: CheckAccountRequest):
     if not identifier:
         raise HTTPException(status_code=400, detail="Identificador não informado")
 
-    await rate_limiter.check("check_account_ip", get_client_ip(request), limit=5, window_seconds=60)
+    client_ip = get_client_ip(request)
+    await rate_limiter.check("check_account_ip", client_ip, limit=5, window_seconds=5 * 60, ip=client_ip, pool=db_pool)
 
     profile_exists = False
     profile_id = None
