@@ -1,0 +1,51 @@
+C:\Users\banana\AppData\Local\Programs\Python\Python311\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+....Executing <Task finished name='Task-8' coro=<FlowTests.test_confirmation_receives_server_id_for_matching_question() done, defined at C:\bragasaude\scripts\server\test_assistant_preferences.py:64> result=None created at C:\Users\banana\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py:100> took 1.921 seconds
+.Executing <Task finished name='Task-13' coro=<FlowTests.test_confirmation_requires_matching_conversation() done, defined at C:\bragasaude\scripts\server\test_assistant_preferences.py:58> result=None created at C:\Users\banana\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py:100> took 1.625 seconds
+.Executing <Task finished name='Task-18' coro=<FlowTests.test_list_reads_actual_storage_without_writes() done, defined at C:\bragasaude\scripts\server\test_assistant_preferences.py:48> result=None created at C:\Users\banana\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py:100> took 1.469 seconds
+..Executing <Task finished name='Task-28' coro=<FlowTests.test_unrelated_message_never_writes() done, defined at C:\bragasaude\scripts\server\test_assistant_preferences.py:53> result=None created at C:\Users\banana\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py:100> took 1.657 seconds
+.Executing <Task finished name='Task-33' coro=<FlowTests.test_write_failure_never_acknowledges_success() done, defined at C:\bragasaude\scripts\server\test_assistant_preferences.py:70> result=None created at C:\Users\banana\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py:100> took 2.250 seconds
+..........................F..C:\bragasaude\scripts\server\server.py:448: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("startup")
+C:\Users\banana\AppData\Local\Programs\Python\Python311\Lib\site-packages\fastapi\applications.py:4681: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  return self.router.on_event(event_type)  # ty: ignore[deprecated]
+C:\bragasaude\scripts\server\server.py:526: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("shutdown")
+.F....................................................................................
+======================================================================
+FAIL: test_history_is_sent_without_client_system_prompt (test_ws_orb.OrbTests.test_history_is_sent_without_client_system_prompt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\bragasaude\scripts\server\test_ws_orb.py", line 167, in test_history_is_sent_without_client_system_prompt
+    self.assertEqual(self.payloads[-1]['messages'][0]['content'], SPEAK_SYSTEM)
+AssertionError: 'Voc�[2447 chars]dido.\nRel�gio de refer�ncia do servidor: 2026[682 chars]ico.' != 'Voc�[2447 chars]dido.'
+Diff is 4188 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_stream_order_and_trusted_prompt (test_ws_orb.OrbTests.test_stream_order_and_trusted_prompt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\bragasaude\scripts\server\test_ws_orb.py", line 197, in test_stream_order_and_trusted_prompt
+    self.assertEqual(self.payloads[1]['messages'][0]['content'], _SPEAK)
+AssertionError: 'Voc�[2447 chars]dido.\nRel�gio de refer�ncia do servidor: 2026[682 chars]ico.' != 'Voc�[2447 chars]dido.'
+Diff is 4188 characters long. Set self.maxDiff to None to see it.
+
+----------------------------------------------------------------------
+Ran 124 tests in 12.127s
+
+FAILED (failures=2)
