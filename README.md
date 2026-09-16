@@ -150,8 +150,3 @@ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/med
 cd scripts/server
 python -m pytest test_*.py -q
 ```
-
-## 📚 Documentação Relacionada
-
-- `FASE_A_INVENTARIO_MODULARIZACAO.md` — Inventário completo de rotas e dependências
-- `41_GUIA_MIGRACAO_AWS_CONCLUIDA.md` — Guia de deploy na AWS
