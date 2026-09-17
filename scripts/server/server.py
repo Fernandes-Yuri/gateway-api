@@ -612,11 +612,13 @@ async def sync_profile(p: ProfileSyncDto, request: Request, uid: str = Depends(f
         raise HTTPException(503, "Banco indisponível")
 
     # Zero-Trust sanitization
-    if p.name:
-        p.name = sanitize_zero_trust_text(p.name, max_length=100, field_name="name", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
-    if p.phone:
+    if getattr(p, "fullName", None):
+        p.fullName = sanitize_zero_trust_text(p.fullName, max_length=100, field_name="fullName", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
+    if getattr(p, "emergencyContactName", None):
+        p.emergencyContactName = sanitize_zero_trust_text(p.emergencyContactName, max_length=100, field_name="emergencyContactName", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
+    if getattr(p, "phone", None):
         p.phone = sanitize_zero_trust_text(p.phone, max_length=30, field_name="phone", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
-    if p.emergencyContactPhone:
+    if getattr(p, "emergencyContactPhone", None):
         p.emergencyContactPhone = sanitize_zero_trust_text(p.emergencyContactPhone, max_length=30, field_name="emergencyContactPhone", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
 
     try:
