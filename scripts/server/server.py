@@ -1259,7 +1259,7 @@ def health():
     }
 
 @app.get("/dataset/stats")
-def dataset_stats():
+def dataset_stats(uid: str = Depends(firebase_uid)):
     """Retorna estatísticas detalhadas do dataset de treinamento para Fine-Tuning."""
     if not os.path.exists(DATASET_PATH):
         return {
@@ -1298,7 +1298,7 @@ def dataset_stats():
         return {"total_conversas": total, "caminho": DATASET_PATH, "error": str(e)}
 
 @app.get("/dataset/sample")
-def dataset_sample(limit: int = 5):
+def dataset_sample(limit: int = Query(5, ge=1, le=50), uid: str = Depends(firebase_uid)):
     """Retorna as amostras mais recentes do dataset higienizadas por LGPD para auditoria."""
     if not os.path.exists(DATASET_PATH):
         return {"samples": []}
@@ -1903,6 +1903,10 @@ _REST_SYMPTOM: Dict[str, tuple] = {}
 
 @app.post("/v1/chat/completions")
 async def chat_completions(req: ChatCompletionRequest, request: Request):
+    # Auth obrigatoria: antes, sem userId e sem header Authorization, o LLM
+    # processava anonimamente (abuso de custo, sem rate limit real).
+    if not req.userId and not request.headers.get("authorization"):
+        raise HTTPException(status_code=401, detail="Autenticação necessária.")
     authenticated_uid = None
     if req.userId:
         authenticated_uid = await firebase_uid(request)
@@ -2102,8 +2106,10 @@ async def synthesize_with_piper(text: str, voice_name: str, output_path: str) ->
 async def synthesize_voice(
     req: Optional[VoiceRequest] = None,
     text: Optional[str] = None,
-    voice: Optional[str] = "faber"
+    voice: Optional[str] = "faber",
+    uid: str = Depends(firebase_uid),
 ):
+    # TTS anonimo com texto ilimitado = exaustao de CPU/disco (DoS).
     input_text = (req.text if req else text) or ""
     input_voice = (req.voice if req else voice) or "faber"
     lower_voice = input_voice.lower()
@@ -2117,6 +2123,9 @@ async def synthesize_voice(
     clean_text = clean_text_for_tts(input_text)
     if not clean_text:
         raise HTTPException(status_code=400, detail="Texto vazio ou inválido para síntese vocal")
+    # Limite de tamanho por sintese.
+    if len(clean_text) > 3000:
+        raise HTTPException(status_code=413, detail="Texto excede o limite de 3000 caracteres.")
 
     hash_key = hashlib.md5(f"{chosen_voice}_{clean_text}".encode("utf-8")).hexdigest()
     audio_path = os.path.join(AUDIO_CACHE_DIR, f"{hash_key}.wav")
@@ -3192,15 +3201,32 @@ async def reset_password(req: PasswordResetRequest, request: Request):
     }
 
 @app.post("/api/auth/welcome-email")
-async def send_user_welcome_email(req: WelcomeEmailRequest, background_tasks: BackgroundTasks):
+async def send_user_welcome_email(
+    req: WelcomeEmailRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+):
     """
     Dispara e-mail de boas-vindas acolhedor com a marca Braga Saúde.
+
+    O destino e o nome vindo do cliente sao ignorados: sem isso, qualquer um
+    enviava spam ilimitado para enderecos arbitrarios.
     """
-    email = req.email.strip().lower()
-    name = req.name.strip() if req.name else ""
-    if not email or "@" not in email:
-        raise HTTPException(status_code=400, detail="E-mail inválido")
-    
+    # UID autenticado obrigatorio; destinatario derivado do proprio token.
+    uid = await firebase_uid(request)
+    email = ""
+    name = ""
+    if HAS_EMAIL and HAS_FCM and firebase_admin._apps:
+        try:
+            from firebase_admin import auth as fb_auth
+            fb_user = fb_auth.get_user(uid)
+            email = (fb_user.email or "").strip().lower()
+            name = (fb_user.display_name or "").strip()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Não foi possível obter o perfil autenticado.")
+    if not email:
+        raise HTTPException(status_code=400, detail="Conta autenticada não possui e-mail.")
+
     if HAS_EMAIL:
         background_tasks.add_task(send_welcome_email, email, name)
         return {"status": "welcome_email_queued", "email": email}
