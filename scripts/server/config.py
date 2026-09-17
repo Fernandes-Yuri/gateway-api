@@ -102,3 +102,11 @@ SERVICE_ACCOUNT_PATH = os.getenv(
 PUBLIC_API_BASE_URL = os.getenv(
     "PUBLIC_API_BASE_URL", "https://mashing-spousal-prescribe.ngrok-free.dev"
 ).rstrip("/")
+
+# ------------------------------------------------------------------
+# Google reCAPTCHA (validacao server-side do token emitido pelo front).
+# RECAPTCHA_SECRET vem exclusivamente de variavel de ambiente.
+# Se nao definida, a verificacao e desativada com aviso (nunca aprovada).
+# ------------------------------------------------------------------
+RECAPTCHA_SECRET = os.getenv("RECAPTCHA_SECRET")
+RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"

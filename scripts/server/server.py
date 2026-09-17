@@ -55,6 +55,16 @@ try:
 except ImportError:
     HAS_EMAIL = False
 
+# Validacao server-side do Google reCAPTCHA (zero-trust no auth)
+try:
+    from recaptcha_verify import verify_recaptcha
+    HAS_RECAPTCHA = True
+except ImportError:
+    HAS_RECAPTCHA = False
+
+    def verify_recaptcha(*args, **kwargs):  # type: ignore
+        return {"valid": False, "reason": "module_unavailable"}
+
 # Suporte defensivo a WhatsApp Business Cloud API
 try:
     from whatsapp_service import (
@@ -258,6 +268,7 @@ class WelcomeEmailRequest(BaseModel):
 
 class CheckAccountRequest(BaseModel):
     identifier: str
+    recaptchaToken: Optional[str] = None
 
 # Modelos de Sincronização PostgreSQL
 class ProfileSyncDto(BaseModel):
@@ -3128,6 +3139,19 @@ async def check_account_status(request: Request, req: CheckAccountRequest):
 
     client_ip = get_client_ip(request)
     await rate_limiter.check("check_account_ip", client_ip, limit=5, window_seconds=5 * 60, ip=client_ip, pool=db_pool)
+
+    # Validacao server-side do Google reCAPTCHA (zero-trust): o token gerado
+    # no front so e confiavel apos o Google confirma-lo aqui. Sem isso, a
+    # verificacao do cliente é burlavel.
+    captcha = verify_recaptcha(req.recaptchaToken, expected_action="login", remote_ip=client_ip)
+    if not captcha["valid"]:
+        if captcha["reason"] == "disabled":
+            # Secret nao configurado: nao derruba o fluxo em dev, mas registra.
+            print("[reCAPTCHA] Secret ausente — verificacao pulada (RECAPTCHA_SECRET).")
+        elif captcha["reason"] in ("missing_token", "rejected", "low_score", "action_mismatch"):
+            raise HTTPException(status_code=403, detail="Verificação de segurança falhou. Tente novamente.")
+        # verify_unavailable: o Google esta fora; nao aprova, mas nao trava o usuario legitimo.
+        print(f"[reCAPTCHA] Indisponível ({captcha['reason']}) — solicitacao sem verificacao.")
 
     profile_exists = False
     profile_id = None
