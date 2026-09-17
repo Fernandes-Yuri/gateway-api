@@ -835,8 +835,10 @@ async def get_daily_metrics(
     user_id: str,
     days: int = Query(30, ge=1, le=365, description="Número de dias/registros a retornar"),
     offset: int = Query(0, ge=0, description="Deslocamento para paginação"),
-    before_date: Optional[str] = Query(None, description="Cursor de data (YYYY-MM-DD) para carregar histórico anterior")
+    before_date: Optional[str] = Query(None, description="Cursor de data (YYYY-MM-DD) para carregar histórico anterior"),
+    uid: str = Depends(firebase_uid),
 ):
+    require_owner(uid, user_id)
     if not db_pool:
         return []
     async with db_pool.acquire() as conn:
@@ -863,7 +865,8 @@ async def get_daily_metrics(
         return result
 
 @app.post("/api/sync/social-post")
-async def sync_social_post(p: SocialPostSyncDto):
+async def sync_social_post(p: SocialPostSyncDto, uid: str = Depends(firebase_uid)):
+    require_owner(uid, p.userId)
     if not db_pool:
         return {"status": "offline_mode"}
     query = """
@@ -948,7 +951,8 @@ async def sync_feedback(f: FeedbackSyncDto, request: Request):
 # =============================================================
 
 @app.post("/api/sync/exam")
-async def sync_exam(e: ExamSyncDto):
+async def sync_exam(e: ExamSyncDto, uid: str = Depends(firebase_uid)):
+    require_owner(uid, e.userId)
     if not db_pool:
         return {"status": "offline_mode"}
     query = """
@@ -980,7 +984,8 @@ async def sync_exam(e: ExamSyncDto):
     return {"status": "success", "id": str(row["id"])}
 
 @app.post("/api/sync/exam-item")
-async def sync_exam_item(item: ExamItemSyncDto):
+async def sync_exam_item(item: ExamItemSyncDto, uid: str = Depends(firebase_uid)):
+    require_owner(uid, item.userId)
     if not db_pool:
         return {"status": "offline_mode"}
     query = """
@@ -1133,7 +1138,8 @@ async def sync_medication_log(l: MedicationLogSyncDto, uid: str = Depends(fireba
     return {"status": "success", "id": str(row["id"]) if row else log_id, "medicationContract": 2}
 
 @app.get("/api/medications/{user_id}")
-async def get_medications(user_id: str):
+async def get_medications(user_id: str, uid: str = Depends(firebase_uid)):
+    require_owner(uid, user_id)
     if not db_pool:
         return []
     query = "SELECT * FROM medications WHERE user_id = $1 ORDER BY created_at DESC;"
@@ -1151,7 +1157,8 @@ async def get_medications(user_id: str):
         return result
 
 @app.post("/api/sync/league-membership")
-async def sync_league_membership(m: LeagueMembershipSyncDto):
+async def sync_league_membership(m: LeagueMembershipSyncDto, uid: str = Depends(firebase_uid)):
+    require_owner(uid, m.userId)
     if not db_pool:
         return {"status": "offline_mode"}
     query = """
@@ -1175,7 +1182,8 @@ async def sync_league_membership(m: LeagueMembershipSyncDto):
     return {"status": "success", "id": str(row["id"])}
 
 @app.post("/api/sync/audit-log")
-async def sync_audit_log(a: AuditLogSyncDto):
+async def sync_audit_log(a: AuditLogSyncDto, uid: str = Depends(firebase_uid)):
+    require_owner(uid, a.userId)
     if not db_pool:
         return {"status": "offline_mode"}
     query = """
@@ -1324,15 +1332,18 @@ def register_device(req: DeviceRegistrationRequest, uid: str = Depends(firebase_
     return {"status": "success", "registeredUsers": len(devices)}
 
 @app.get("/api/devices")
-def list_devices():
+def list_devices(uid: str = Depends(firebase_uid)):
+    # Tokens FCM equivalem a credenciais de push. Antes eram devolvidos a
+    # qualquer pessoa anonima.
     devices = load_devices()
-    return {"total": len(devices), "devices": list(devices.values())}
+    own = devices.get(uid)
+    return {"total": 1 if own else 0, "devices": [own] if own else []}
 
 @app.post("/api/notify/alert")
-def send_alert(req: AlertNotificationRequest):
+def send_alert(req: AlertNotificationRequest, uid: str = Depends(firebase_uid)):
     devices = load_devices()
     sent_count = 0
-    for uid, dev in devices.items():
+    for dev_uid, dev in devices.items():
         if req.targetRole == "ALL" or dev.get("role") == req.targetRole:
             success = dispatch_push(
                 token=dev["token"],
@@ -1340,7 +1351,7 @@ def send_alert(req: AlertNotificationRequest):
                 body=req.message,
                 data={
                     "type": req.type,
-                    "sourceUserId": req.sourceUserId,
+                    "sourceUserId": uid,
                     "metricValue": req.metricValue or ""
                 }
             )
@@ -1349,16 +1360,17 @@ def send_alert(req: AlertNotificationRequest):
     return {"status": "dispatched", "recipients": sent_count}
 
 @app.post("/api/emergency/trigger")
-def trigger_emergency(req: EmergencyTriggerRequest):
+def trigger_emergency(req: EmergencyTriggerRequest, uid: str = Depends(firebase_uid)):
+    require_owner(uid, req.userId)
     devices = load_devices()
     sent_count = 0
-    for uid, dev in devices.items():
-        if dev.get("role") == "CAREGIVER" or uid != req.userId:
+    for dev_uid, dev in devices.items():
+        if dev.get("role") == "CAREGIVER" or dev_uid != uid:
             dispatch_push(
                 token=dev["token"],
                 title="ALERTA DE EMERGÊNCIA FAMILIAR",
                 body=f"{req.userName} acionou socorro: {req.details}",
-                data={"type": "EMERGENCY", "userId": req.userId, "details": req.details}
+                data={"type": "EMERGENCY", "userId": uid, "details": req.details}
             )
             sent_count += 1
     return {"status": "emergency_broadcasted", "notified": sent_count}
@@ -2131,7 +2143,7 @@ def whatsapp_status():
     }
 
 @app.post("/api/whatsapp/send")
-async def send_whatsapp_direct(req: WhatsAppSendRequest):
+async def send_whatsapp_direct(req: WhatsAppSendRequest, uid: str = Depends(firebase_uid)):
     if not HAS_WHATSAPP:
         raise HTTPException(status_code=503, detail="Módulo WhatsApp não disponível no servidor")
     if req.templateName:
@@ -2937,8 +2949,12 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
         )
 
 @app.get("/api/whatsapp/events")
-def whatsapp_events(limit: int = 10):
-    """Retorna os últimos eventos brutos recebidos pelo webhook do WhatsApp para diagnóstico."""
+def whatsapp_events(limit: int = Query(10, ge=1, le=50), uid: str = Depends(firebase_uid)):
+    """Retorna os últimos eventos brutos recebidos pelo webhook do WhatsApp para diagnóstico.
+
+    Payloads conteem telefones e corpos de mensagens (PII): acesso restrito
+    a usuario autenticado.
+    """
     return {
         "total_eventos_recebidos": len(WHATSAPP_EVENT_LOG),
         "eventos": list(reversed(WHATSAPP_EVENT_LOG[-limit:]))

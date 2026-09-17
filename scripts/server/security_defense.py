@@ -87,23 +87,31 @@ def sanitize_zero_trust_text(
 # DETECCAO DE IP REAL DO CLIENTE
 # =============================================================
 def get_client_ip(request: Request) -> str:
-    """Obtem o endereco IP real do cliente inspecionando proxies confiaveis."""
-    # Prioridade 1: Cloudflare Connecting IP
+    """Obtem o endereco IP real do cliente inspecionando proxies confiaveis.
+
+    Apenas o Cloudflare Connecting IP e confiavel, pois o deploy roda atrás
+    do Cloudflare Tunnel. Os demais headers (x-real-ip, x-forwarded-for) sao
+    forjaveis pelo cliente: se forem lidos cegamente, um atacante zera todos
+    os limites de rate limit enviando um header diferente a cada requisicao.
+    """
+    # Prioridade 1: Cloudflare Connecting IP (unico confiavel neste deploy)
     cf_ip = request.headers.get("cf-connecting-ip")
-    if cf_ip:
+    if cf_ip and _is_valid_ip(cf_ip.strip()):
         return cf_ip.strip()
-    # Prioridade 2: X-Real-IP
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
-    # Prioridade 3: X-Forwarded-For
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    # Prioridade 4: request.client
+    # Prioridade 2: IP da conexao direta (ultimo hop confiavel)
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
+
+
+def _is_valid_ip(value: str) -> bool:
+    """Validacao minima de formato para evitar header-IPs absurdos."""
+    import ipaddress
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
 
 # =============================================================
 # STRICT RATE LIMITER COM BLOQUEIO DE 24 HORAS
