@@ -65,6 +65,16 @@ except ImportError:
     def verify_recaptcha(*args, **kwargs):  # type: ignore
         return {"valid": False, "reason": "module_unavailable"}
 
+# Verificacao de assinatura HMAC do webhook da Meta (zero-trust no webhook)
+try:
+    from webhook_security import verify_meta_signature
+    HAS_WEBHOOK_SECURITY = True
+except ImportError:
+    HAS_WEBHOOK_SECURITY = False
+
+    def verify_meta_signature(*args, **kwargs):  # type: ignore
+        return False
+
 # Suporte defensivo a WhatsApp Business Cloud API
 try:
     from whatsapp_service import (
@@ -660,9 +670,39 @@ async def get_profile(user_id: str, uid: str = Depends(firebase_uid)):
         return d
 
 @app.post("/api/sync/vitals")
-async def sync_vital_sign(v: VitalSignSyncDto, background_tasks: BackgroundTasks):
+async def sync_vital_sign(
+    v: VitalSignSyncDto,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    uid: str = Depends(firebase_uid),
+):
+    # Zero-trust: ninguem grava sinais vitais de outro usuario. Sem isso,
+    # qualquer pessoa injeta leituras falsas e dispara alertas clinicos
+    # reais aos cuidadores da vitima.
+    require_owner(uid, v.userId)
     if not db_pool:
         return {"status": "offline_mode", "id": v.id or "local"}
+
+    # Validacao de faixa clinica: valores absurdos (ex.: 99999 mmHg) eram
+    # aceitos e geravam alertas sem sentido.
+    def _range(val, lo, hi, nome):
+        if val is None:
+            return
+        if not isinstance(val, (int, float)) or isinstance(val, bool):
+            raise HTTPException(422, f"{nome} deve ser um número.")
+        if not (lo <= val <= hi):
+            raise HTTPException(422, f"{nome} fora da faixa aceitável ({lo}-{hi}).")
+
+    _range(v.systolicPressure, 40, 300, "Pressão sistólica")
+    _range(v.diastolicPressure, 20, 200, "Pressão diastólica")
+    _range(v.heartRate, 20, 250, "Frequência cardíaca")
+    _range(v.oxygenSaturation, 30, 100, "Saturação")
+    _range(v.glucoseLevel, 10, 1000, "Glicemia")
+
+    client_ip = get_client_ip(request)
+    if rate_limiter:
+        await rate_limiter.check("sync_vitals_ip", client_ip, limit=30, window_seconds=60, ip=client_ip, pool=db_pool)
+
     query = """
     INSERT INTO vital_signs (user_id, systolic_pressure, diastolic_pressure, heart_rate, oxygen_saturation, glucose_level, glucose_type, hydration_ml, measured_at)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -676,7 +716,7 @@ async def sync_vital_sign(v: VitalSignSyncDto, background_tasks: BackgroundTasks
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
-                query, v.userId, v.systolicPressure, v.diastolicPressure,
+                query, uid, v.systolicPressure, v.diastolicPressure,
                 v.heartRate, v.oxygenSaturation, v.glucoseLevel, v.glucoseType, v.hydrationMl, m_at
             )
             inserted_id = str(row["id"])
@@ -982,19 +1022,31 @@ async def sync_exam_item(item: ExamItemSyncDto):
 async def upload_exam_file(
     user_id: str,
     request: Request,
-    filename: Optional[str] = Query(None)
+    filename: Optional[str] = Query(None),
+    uid: str = Depends(firebase_uid),
 ):
     """
     Recebe o arquivo PDF do exame diretamente no armazenamento seguro do Homelab.
     Elimina 100% qualquer dependência de Firebase Cloud Storage e mantém os dados privados.
     """
+    # Zero-trust: upload anonimo permitia gravar arquivos no storage de
+    # qualquer usuario (hosting de arquivos maliciosos + exaustao de disco).
+    require_owner(uid, user_id)
     safe_user_id = re.sub(r'[^a-zA-Z0-9_-]', '', user_id)
     if not safe_user_id:
         raise HTTPException(status_code=400, detail="ID de usuário inválido")
 
+    client_ip = get_client_ip(request)
+    if rate_limiter:
+        await rate_limiter.check("upload_exam_ip", client_ip, limit=10, window_seconds=60, ip=client_ip, pool=db_pool)
+
     body = await request.body()
     if not body:
         raise HTTPException(status_code=400, detail="Arquivo vazio")
+
+    # Limite de tamanho: 20 MB por laudo.
+    if len(body) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Arquivo excede o limite de 20 MB.")
 
     user_dir = os.path.join(STORAGE_EXAMS_DIR, safe_user_id)
     os.makedirs(user_dir, exist_ok=True)
@@ -2701,8 +2753,17 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
 @app.post("/api/whatsapp/webhook")
 async def receive_whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     """Endpoint receptor de eventos e mensagens da Meta Cloud API."""
+    # Zero-trust: sem a assinatura HMAC do App Secret, qualquer um forja
+    # webhooks e se passa por qualquer remetente (confirmacoes de registros
+    # de saude inclusas). payload bruto e necessario para o HMAC.
+    raw_body = await request.body()
+    signature = request.headers.get("x-hub-signature-256") or request.headers.get("X-Hub-Signature-256")
+    if not verify_meta_signature(signature, raw_body):
+        print("[WhatsApp Webhook] Assinatura invalida ou ausente — requisicao rejeitada.")
+        return JSONResponse({"status": "unauthorized"}, status_code=401)
+
     try:
-        body = await request.json()
+        body = json.loads(raw_body.decode("utf-8"))
         WHATSAPP_EVENT_LOG.append({
             "timestamp": datetime.utcnow().isoformat(),
             "payload": body
@@ -2917,8 +2978,9 @@ async def send_auth_otp(request: Request, req: OtpSendRequest, background_tasks:
             detail="Serviço de e-mail não configurado. Configure o Gmail SMTP no servidor.",
         )
 
-    # Gera código aleatório de 6 dígitos
-    code = f"{random.randint(100000, 999999)}"
+    # Gera código aleatorio de 6 digitos. secrets (CSPRNG) e obrigatorio:
+    # random.randint usa um PRNG nao criptografico e o codigo e previsivel.
+    code = f"{secrets.randbelow(900000) + 100000}"
     expires_at = datetime.utcnow() + timedelta(minutes=15)
 
     # Para e-mail, confirma que o Gmail aceitou a mensagem antes de registrar o

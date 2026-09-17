@@ -344,7 +344,14 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
     # 7.5 GET /api/files/exams/{user_id}/{filename} — Servir Laudos Binários
     # -------------------------------------------------------------
     @app.get("/api/files/exams/{user_id}/{filename}")
-    async def get_exam_file_content(user_id: str, filename: str):
+    async def get_exam_file_content(
+        user_id: str,
+        filename: str,
+        uid: str = Depends(firebase_uid),
+    ):
+        # Zero-trust: laudos sao PHI (dados de saude). Antes, quem soubesse
+        # user_id + nome do arquivo baixava o exame de qualquer pessoa.
+        require_owner(uid, user_id)
         safe_user_id = re.sub(r"[^a-zA-Z0-9_-]", "", user_id)
         safe_filename = os.path.basename(filename)
         file_path = os.path.join(STORAGE_EXAMS_DIR, safe_user_id, safe_filename)
