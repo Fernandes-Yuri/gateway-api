@@ -141,10 +141,15 @@ app = FastAPI(title="Braga Saúde Gateway, TTS, Sync & Notification Hub", versio
 
 # Origens permitidas via env (separadas por vírgula). "CORS *" com credenciais
 # é inseguro e inválido perante a spec; a lista precisa ser explícita.
+# A PWA cuidador e servida em braga-saude.web.app E bragasaude.online/app/
+# (README do site-pwa) -- os dois precisam estar aqui, senao o navegador
+# bloqueia todas as chamadas e o app para de funcionar.
 ALLOWED_ORIGINS = [
     o.strip() for o in os.getenv(
         "ALLOWED_ORIGINS",
-        "https://braga-saude.web.app,https://braga-saude.firebaseapp.com,http://localhost:5173,http://127.0.0.1:5173",
+        "https://bragasaude.online,https://www.bragasaude.online,"
+        "https://braga-saude.web.app,https://braga-saude.firebaseapp.com,"
+        "http://localhost:5173,http://127.0.0.1:5173",
     ).split(",") if o.strip()
 ]
 
