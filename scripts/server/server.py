@@ -25,6 +25,7 @@ from conversation_policy import build_conversation_system
 from family_api import install_family_routes, purge_expired_family_messages
 from caregiver_alerts import install_caregiver_alert_routes
 from vip_api import install_vip_routes
+from exams_api import install_exam_routes
 from security_defense import (
     StrictRateLimiter,
     get_client_ip,
@@ -870,6 +871,7 @@ async def sync_post_reaction(r: PostReactionSyncDto):
 
 install_family_routes(app, lambda: db_pool, FamilyBindingSyncDto, FamilyMessageSyncDto, rate_limiter=rate_limiter)
 install_caregiver_alert_routes(app, lambda: db_pool, load_devices, dispatch_push)
+install_exam_routes(app, lambda: db_pool, rate_limiter=rate_limiter)
 
 @app.post("/api/sync/feedback")
 async def sync_feedback(f: FeedbackSyncDto, request: Request):
@@ -959,25 +961,7 @@ async def sync_exam_item(item: ExamItemSyncDto):
         )
     return {"status": "success", "id": str(row["id"])}
 
-@app.get("/api/exams/{user_id}")
-async def get_exams(user_id: str):
-    if not db_pool:
-        return []
-    query = """
-    SELECT * FROM exams WHERE user_id = $1 ORDER BY exam_date DESC;
-    """
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch(query, user_id)
-        result = []
-        for r in rows:
-            d = dict(r)
-            d["id"] = str(d["id"])
-            if d.get("exam_date"):
-                d["exam_date"] = d["exam_date"].isoformat()
-            if d.get("created_at"):
-                d["created_at"] = d["created_at"].isoformat()
-            result.append(d)
-        return result
+# D49: Rotas de consulta e manipulação de exames migradas para exams_api.py
 
 # =============================================================
 # ARMAZENAMENTO PRIVADO DE LAUDOS E EXAMES (HOMELAB STORAGE)
@@ -1022,17 +1006,7 @@ async def upload_exam_file(
         "sizeBytes": len(body)
     }
 
-@app.get("/api/files/exams/{user_id}/{filename}")
-async def get_exam_file(user_id: str, filename: str):
-    """Serve laudos médicos em PDF diretamente do armazenamento seguro do Homelab."""
-    safe_user_id = re.sub(r'[^a-zA-Z0-9_-]', '', user_id)
-    safe_filename = os.path.basename(filename)
-    file_path = os.path.join(STORAGE_EXAMS_DIR, safe_user_id, safe_filename)
-
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Arquivo de laudo não encontrado")
-
-    return FileResponse(file_path, media_type="application/pdf", filename=safe_filename)
+# Servir laudos de exames migrado para exams_api.py com suporte a PDF e Imagens
 
 @app.post("/api/sync/medication")
 async def sync_medication(m: MedicationSyncDto, uid: str = Depends(firebase_uid)):
