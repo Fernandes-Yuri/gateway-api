@@ -139,9 +139,18 @@ SEM_WA = asyncio.Semaphore(3)
 
 app = FastAPI(title="Braga Saúde Gateway, TTS, Sync & Notification Hub", version="5.0")
 
+# Origens permitidas via env (separadas por vírgula). "CORS *" com credenciais
+# é inseguro e inválido perante a spec; a lista precisa ser explícita.
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "https://braga-saude.web.app,https://braga-saude.firebaseapp.com,http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",") if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1295,7 +1304,8 @@ def dataset_stats(uid: str = Depends(firebase_uid)):
             "por_categoria": by_category
         }
     except Exception as e:
-        return {"total_conversas": total, "caminho": DATASET_PATH, "error": str(e)}
+        print(f"[Dataset Stats Error] {type(e).__name__}: {e}")
+        return {"total_conversas": total, "caminho": DATASET_PATH, "error": "Erro ao processar estatísticas do dataset."}
 
 @app.get("/dataset/sample")
 def dataset_sample(limit: int = Query(5, ge=1, le=50), uid: str = Depends(firebase_uid)):
@@ -1313,7 +1323,8 @@ def dataset_sample(limit: int = Query(5, ge=1, le=50), uid: str = Depends(fireba
                     except Exception:
                         pass
     except Exception as e:
-        return {"error": str(e)}
+        print(f"[Dataset Sample Error] {type(e).__name__}: {e}")
+        return {"error": "Erro ao ler amostras do dataset."}
     return {"total_amostras": len(samples), "amostras": samples}
 
 @app.post("/api/device/register")
@@ -1480,6 +1491,11 @@ PHONE_REGEX = re.compile(r"(\+?55\s?)?(\(?0?\d{2}\)?\s?)?(9?\d{4}[-\s]?\d{4})")
 CPF_REGEX = re.compile(r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b")
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 CEP_REGEX = re.compile(r"\b\d{5}-?\d{3}\b")
+# Codigos de verificacao (OTP) de 5 a 8 digitos soltos: se caírem no dataset
+# de fine-tuning, o modelo pode aprender a repeti-los (vazamento de credencial
+# temporaria). Valores de saude (pressao, glicemia, peso) tem 2-3 digitos e
+# não sao afetados.
+OTP_REGEX = re.compile(r"(?<![\d])(\d{5,8})(?![\d])")
 
 def sanitize_pii(text: str, user_name: Optional[str] = None) -> str:
     """
@@ -1496,6 +1512,9 @@ def sanitize_pii(text: str, user_name: Optional[str] = None) -> str:
     sanitized = EMAIL_REGEX.sub("[EMAIL]", sanitized)
     sanitized = CEP_REGEX.sub("[CEP]", sanitized)
     sanitized = PHONE_REGEX.sub("[TELEFONE]", sanitized)
+    # Por ultimo: codigos OTP de 5-8 digitos que tenham sobrevivido às
+    # regras acima (CEP/CPF ja viraram tokens e não sao mais digitos).
+    sanitized = OTP_REGEX.sub("[CODIGO]", sanitized)
     return sanitized
 
 # =============================================================
@@ -2093,7 +2112,10 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log interno completo; o cliente so recebe mensagem generica para
+        # nao vazar internals (strings de conexao, caminhos, stack).
+        print(f"[Internal Error] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor. Tente novamente.")
 
 async def synthesize_with_piper(text: str, voice_name: str, output_path: str) -> bool:
     """Compatibility entry point; synthesis lifecycle belongs to the Piper adapter."""
@@ -3169,6 +3191,7 @@ async def reset_password(req: PasswordResetRequest, request: Request):
                 SELECT id, created_at, expires_at
                 FROM auth_verification_codes
                 WHERE identifier = $1 AND reset_token = $2 AND purpose = 'PASSWORD_RESET'
+                  AND expires_at > NOW() AND reset_token IS NOT NULL
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -3176,7 +3199,7 @@ async def reset_password(req: PasswordResetRequest, request: Request):
             )
 
             if not row:
-                raise HTTPException(status_code=403, detail="Token de redefinição inválido ou não autorizado.")
+                raise HTTPException(status_code=403, detail="Token de redefinição inválido, expirado ou não autorizado.")
 
             # Invalida o token após o uso
             await conn.execute("UPDATE auth_verification_codes SET reset_token = NULL WHERE id = $1", row["id"])
