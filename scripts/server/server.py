@@ -19,6 +19,7 @@ from profile_contract import profile_upsert
 from orb_router import route_chat, detect_all, recall, remember, resolve_followup, whatsapp_next, dedupe_fala, symptom_repeat, SYMPTOM_KINDS, ESCALATION_SUFFIX
 from trace_llm import trace_llm
 from api_identity import firebase_uid, require_owner, require_family_access
+from voice_scheduling import quer_agendar, agendar_por_voz
 from assistant_preferences import SCHEMA as PREFERENCE_SCHEMA, install_preference_routes, process_preferences
 from piper_service import PiperService
 from conversation_policy import build_conversation_system
@@ -1981,6 +1982,29 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
             }
 
         # Camada 0 (Fase 2): roteador determinístico antes de qualquer LLM.
+        # D50: no escopo CUIDADOR, a intencao de agendar consulta e tratada
+        # ANTES do roteador — grava na agenda do paciente (vinculo validado).
+        if req.acting_as == "caregiver" and req.patient_id and quer_agendar(user_prompt) and db_pool:
+            try:
+                async with db_pool.acquire() as _conn:
+                    envelope = await agendar_por_voz(_conn, authenticated_uid, req.patient_id, user_prompt)
+            except Exception as exc:
+                trace_llm('chat-rest', 'scheduler_error', tid, error=str(exc))
+                envelope = {"fala": "Não consegui agendar agora. Tente novamente em instantes.",
+                            "acao": "AGENDAR_FALHA", "parametros": {}}
+            trace_llm('chat-rest', 'scheduler_hit', tid, action=envelope.get("acao"),
+                      fala=envelope.get("fala"))
+            return {
+                "id": "chatcmpl-scheduler",
+                "object": "chat.completion",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant",
+                                "content": json.dumps(envelope, ensure_ascii=False)},
+                    "finish_reason": "stop",
+                }],
+            }
+
         routed = route_chat(user_prompt)
         preferences = {}
         # D48: no escopo cuidador, a memoria e preferencias sao indexadas por

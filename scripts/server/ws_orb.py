@@ -45,6 +45,9 @@ class OrbRequest(BaseModel):
     userId: str | None = None
     temperature: float = Field(default=0.65, ge=0, le=2)
     max_tokens: int = Field(default=350, ge=1, le=1024)
+    # D50: escopo cuidador — o Android manda para agendar consulta por voz
+    acting_as: str | None = None
+    patient_id: str | None = None
 
 
 from contextlib import asynccontextmanager
@@ -132,6 +135,46 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
         # Camada 0 (Fase 2): roteador determinístico antes de qualquer LLM.
         # Saudação, valor de saúde, tópico clínico e fofoca cotidiana
         # nunca chegam ao modelo — resposta instantânea por template.
+        # D50: no escopo CUIDADOR, a intencao de agendar consulta e tratada
+        # ANTES do roteador — grava na agenda do paciente (vinculo validado).
+        if getattr(req, 'acting_as', None) == 'caregiver' and getattr(req, 'patient_id', None):
+            from voice_scheduling import quer_agendar as _quer_agendar
+            if _quer_agendar(prompt):
+                from orb_llm import compose_envelope
+                try:
+                    from server import db_pool as _pool
+                except Exception:
+                    _pool = None
+                if _pool is not None:
+                    try:
+                        async with _pool.acquire() as _conn:
+                            from voice_scheduling import agendar_por_voz as _agendar
+                            envelope = await _agendar(_conn, uid, req.patient_id, prompt)
+                    except Exception as exc:  # fail-closed: nunca finge sucesso
+                        logging.warning('Agendamento por voz falhou: %s', exc)
+                        envelope = compose_envelope(
+                            'Não consegui agendar agora. Tente novamente em instantes.',
+                            'AGENDAR_FALHA', {})
+                    _envelope_json = json.dumps(envelope, ensure_ascii=False)
+                    await send(dict(type='content', id=req.id, delta=_envelope_json))
+                    await send(dict(type='content', id=req.id, delta=''))
+                    try:
+                        await asyncio.to_thread(log_sample, user_prompt=prompt,
+                                                assistant_reply=_envelope_json,
+                                                source='app_chat_scheduler',
+                                                system_prompt='voice_scheduling',
+                                                action=envelope.get('acao', 'AGENDAR_FALHA'),
+                                                action_params=envelope.get('parametros', {}))
+                    except Exception:
+                        logging.warning('ORB dataset logging unavailable')
+                    metrics = dict(time_to_first_chunk_ms=round((time.monotonic() - started) * 1000),
+                                   total_generation_ms=round((time.monotonic() - started) * 1000),
+                                   chunks=1, tokens=None, router=True)
+                    await send(dict(type='done', id=req.id, fullContent=_envelope_json,
+                                    action=envelope.get('acao', 'AGENDAR_FALHA'),
+                                    parameters=envelope.get('parametros', {}), metrics=metrics))
+                    _TID_BY_REQ.pop(req.id, None)
+                    return
         from orb_router import route_chat as _route_chat
         routed = _route_chat(prompt) if enable_router else None
         preferences = {}
