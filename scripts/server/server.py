@@ -238,6 +238,11 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.1
     max_tokens: Optional[int] = 220
     userId: Optional[str] = None
+    # Escopo de papel (D48): distingue o MODO CUIDADOR do autocuidado.
+    # A mesma pessoa pode ser paciente no Android e cuidadora no PWA; o escopo
+    # separa o contexto (e a memoria) dos dois papeis — ver doc PWA secao 6.5.
+    acting_as: Optional[str] = None
+    patient_id: Optional[str] = None
 
 class VoiceRequest(BaseModel):
     text: str
@@ -1937,6 +1942,15 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
         require_owner(authenticated_uid, req.userId)
     elif request.headers.get('authorization'):
         authenticated_uid = await firebase_uid(request)
+
+    # Escopo de papel (D48): se veio acting_as=caregiver, valida o vinculo
+    # familiar no banco ANTES de processar. Sem isso, qualquer conta poderia
+    # perguntar sobre qualquer paciente.
+    if req.acting_as == "caregiver" and req.patient_id and authenticated_uid:
+        if db_pool:
+            async with db_pool.acquire() as conn:
+                await require_family_access(conn, authenticated_uid, req.patient_id)
+
     try:
         user_prompt = ""
         for m in req.messages:
@@ -1969,21 +1983,27 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
         # Camada 0 (Fase 2): roteador determinístico antes de qualquer LLM.
         routed = route_chat(user_prompt)
         preferences = {}
-        if authenticated_uid and (routed is None or routed.get('acao') == 'CONVERSA'):
-            memory_reply, preferences = await assistant_memory(authenticated_uid, user_prompt, req.messages)
+        # D48: no escopo cuidador, a memoria e preferencias sao indexadas por
+        # uid+patient_id — nunca so uid — para nao misturar os dois papeis
+        # da mesma pessoa (paciente no Android, cuidadora no PWA).
+        scope_key = authenticated_uid
+        if req.acting_as == "caregiver" and req.patient_id:
+            scope_key = f"{authenticated_uid}@caregiver:{req.patient_id}"
+        if scope_key and (routed is None or routed.get('acao') == 'CONVERSA'):
+            memory_reply, preferences = await assistant_memory(scope_key, user_prompt, req.messages)
             if memory_reply:
                 return {'id': 'chatcmpl-memory', 'object': 'chat.completion', 'choices': [{
                     'index': 0, 'finish_reason': 'stop', 'message': {'role': 'assistant',
                     'content': json.dumps({'fala': memory_reply, 'acao': 'CONVERSA', 'parametros': {}}, ensure_ascii=False)}}]}
         if routed is not None:
             _rest_kind = detect_all(user_prompt).get("kind")
-            if req.userId and _rest_kind == "nutrition":
-                remember(_REST_MEMORY, req.userId, "nutrition")
-            if req.userId and _rest_kind in SYMPTOM_KINDS:
-                if symptom_repeat(_REST_SYMPTOM, req.userId, _rest_kind) >= 2:
+            if scope_key and _rest_kind == "nutrition":
+                remember(_REST_MEMORY, scope_key, "nutrition")
+            if scope_key and _rest_kind in SYMPTOM_KINDS:
+                if symptom_repeat(_REST_SYMPTOM, scope_key, _rest_kind) >= 2:
                     routed["fala"] += ESCALATION_SUFFIX
-            if routed["acao"] == "CONVERSA" and req.userId:
-                routed["fala"] = dedupe_fala(_REST_LASTFALA, req.userId, routed["fala"])
+            if routed["acao"] == "CONVERSA" and scope_key:
+                routed["fala"] = dedupe_fala(_REST_LASTFALA, scope_key, routed["fala"])
             trace_llm('chat-rest', 'router_hit', tid, action=routed["acao"], fala=routed["fala"])
             content = json.dumps(routed, ensure_ascii=False)
             await asyncio.to_thread(log_fine_tuning_sample,
