@@ -580,6 +580,23 @@ async def startup():
                 purge_expired_blocked_ips, 'interval', minutes=5,
                 id="purge_security_blocked_ips", replace_existing=True, max_instances=1,
             )
+            # D52: retencao de releases de APK (~36MB cada). Mantem so os 3
+            # mais recentes; protege o release ativo e o arquivo servido.
+            async def purge_old_release_apks():
+                try:
+                    from release_retention import purge_old_releases
+                    res = await purge_old_releases(db_pool, RELEASES_DIR, keep=3)
+                    if res["apagados"]:
+                        print(f"[RETENTION] {len(res['apagados'])} APK(s) antigo(s) removido(s): {res['apagados']}")
+                except Exception as err:
+                    print(f"[RETENTION] Falha na limpeza de releases: {err}")
+            retention_scheduler.add_job(
+                purge_old_release_apks, 'interval', hours=6,
+                id="purge_old_release_apks", replace_existing=True, max_instances=1,
+                coalesce=True,
+            )
+            # Limpeza imediata na inicializacao (nao espera 6h para a 1a passada)
+            await purge_old_release_apks()
             retention_scheduler.start()
 
 async def scheduled_proactive_job(periodo: str):
