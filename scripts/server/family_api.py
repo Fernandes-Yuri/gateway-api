@@ -316,3 +316,28 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             updated = await conn.fetchrow("""UPDATE consultations SET status='CANCELLED' WHERE id=$1 RETURNING *""",
                 row['id'])
             return {'status': 'success', 'id': str(row['id']), 'status': row['status']}
+
+    # --- D51: confirmacao por BOTAO do rascunho de agendamento por voz ---
+
+    class ConfirmVoiceDraft(BaseModel):
+        patientId: str
+        draftId: str
+
+    @app.post('/api/consultation/confirm-voice-draft')
+    async def confirm_voice_draft(c: ConfirmVoiceDraft, uid: str = Depends(firebase_uid)):
+        """Confirma (manualmente, por botao) o rascunho de agendamento por voz.
+
+        O draft e validado contra o par cuidador/paciente — um draftId
+        forjado ou de outra conta nao agenda nada.
+        """
+        from voice_scheduling import confirmar_rascunho_por_id
+        async with pool().acquire() as conn, conn.transaction():
+            envelope = await confirmar_rascunho_por_id(conn, uid, c.patientId, c.draftId)
+            if envelope.get('acao') != 'CONSULTA_AGENDADA':
+                raise HTTPException(409, envelope.get('fala', 'Agendamento expirado.'))
+            return {
+                'status': 'success',
+                'consultationId': envelope['parametros']['id'],
+                'title': envelope['parametros']['title'],
+                'scheduledDate': envelope['parametros']['scheduledDate'],
+            }

@@ -1,19 +1,27 @@
-"""Agendamento de consulta por voz no MODO CUIDADOR (D50).
+"""Agendamento de consulta por voz no MODO CUIDADOR (D50/D51).
 
 O cuidador fala com o assistente: "Agenda uma consulta com o cardiologista
-quinta-feira às 14h". Este modulo:
+quinta-feira às 14h". O fluxo e RASCUNHO + CONFIRMACAO (D51):
 
-  1. detecta a intencao de agendar (deterministico, regex);
-  2. extrai tipo de consulta, data e hora da fala;
-  3. grava na tabela consultations (user_id = paciente, caregiver_id = o
-     cuidador autenticado, status = ACCEPTED — o cuidador ja confirmou).
+  1. deteta a intencao de agendar e extrai tipo/data/hora (regex, sem LLM);
+  2. guarda um RASCUNHO em memoria (nao grava na agenda ainda);
+  3. pergunta "Confirma?"; o usuario confirma por VOZ ("eu confirmo") ou
+     tocando no botao Confirmar na tela;
+  4. aceita correcao por voz ("na verdade e sexta as 15h");
+  5. so na confirmacao grava na tabela consultations.
 
-Nao usa LLM: datas/horas por voz sao estruturadas e regex evita alucinacao de
-agenda. Se nao conseguir extrair a data, o assistente pede esclarecimento em
-vez de gravar nada (fail-closed).
+Rascunhos expiram em 5 minutos (DRAFT_TTL_S). Nada e gravado antes da
+confirmacao — um erro de reconhecimento de voz nunca vira consulta marcada.
 """
 import re
+import uuid
+import time
 from datetime import datetime, timedelta, timezone
+from typing import Dict, Optional, Tuple
+
+# Estado de rascunho: scope_key -> (draft, expiry_ts)
+_PENDING_SCHEDULES: Dict[str, Tuple[dict, float]] = {}
+_DRAFT_TTL_S = 300  # 5 minutos — dialogo de voz e curto
 
 # Dias da semana -> weekday() do Python (segunda=0 ... sexta=4, sabado=5,
 # domingo=6).
@@ -88,6 +96,80 @@ def quer_agendar(texto: str) -> bool:
     if not texto:
         return False
     return bool(_PADRAO_AGENDAR.search(_sem_acento(texto)))
+
+
+# --- D51: intents de confirmacao / correcao / cancelamento por voz ---
+
+_PADRAO_CONFIRMAR = re.compile(
+    r"\b(confirmo|confirmar|pode confirmar|esta confirmado|pode agendar|"
+    r"agendar|pode marcar|eu confirmo|sim confirmo|confirmado)\b",
+    re.IGNORECASE,
+)
+
+_PADRAO_CORRIGIR = re.compile(
+    r"\b(na verdade|errado|errada|nao e|incorreto|muda|mudar|trocar|"
+    r"outro dia|outra hora|refazer|ajustar)\b",
+    re.IGNORECASE,
+)
+
+_PADRAO_CANCELAR = re.compile(
+    r"\b(cancela|cancelar|esquece|deixa|nao quero|abortar|desistir)\b",
+    re.IGNORECASE,
+)
+
+
+def quer_confirmar(texto: str) -> bool:
+    """True se o usuario esta confirmando o rascunho por voz."""
+    if not texto:
+        return False
+    baixa = _sem_acento(texto)
+    # "nao confirmo" e correcao/cancelamento, nao confirmacao
+    if re.search(r"\bnao\s+(confirmo|quero confirmar)\b", baixa):
+        return False
+    if _PADRAO_CORRIGIR.search(baixa) or _PADRAO_CANCELAR.search(baixa):
+        return False
+    return bool(_PADRAO_CONFIRMAR.search(baixa))
+
+
+def quer_corrigir(texto: str) -> bool:
+    """True se o usuario quer corrigir o rascunho."""
+    if not texto:
+        return False
+    return bool(_PADRAO_CORRIGIR.search(_sem_acento(texto)))
+
+
+def quer_cancelar(texto: str) -> bool:
+    """True se o usuario quer abandonar o rascunho."""
+    if not texto:
+        return False
+    return bool(_PADRAO_CANCELAR.search(_sem_acento(texto)))
+
+
+def _chave_rascunho(uid_cuidador: str, patient_id: str) -> str:
+    return f"{uid_cuidador}:{patient_id}"
+
+
+def obter_rascunho(uid_cuidador: str, patient_id: str) -> Optional[dict]:
+    """Retorna o rascunho ativo (nao expirado) ou None."""
+    chave = _chave_rascunho(uid_cuidador, patient_id)
+    alvo = _PENDING_SCHEDULES.get(chave)
+    if not alvo:
+        return None
+    draft, expira = alvo
+    if time.time() > expira:
+        _PENDING_SCHEDULES.pop(chave, None)
+        return None
+    return draft
+
+
+def descartar_rascunho(uid_cuidador: str, patient_id: str) -> None:
+    _PENDING_SCHEDULES.pop(_chave_rascunho(uid_cuidador, patient_id), None)
+
+
+def _guardar_rascunho(uid_cuidador: str, patient_id: str, draft: dict) -> None:
+    _PENDING_SCHEDULES[_chave_rascunho(uid_cuidador, patient_id)] = (
+        dict(draft), time.time() + _DRAFT_TTL_S,
+    )
 
 
 def extrair_especialidade(texto: str) -> str:
@@ -205,21 +287,61 @@ def extrair_data_hora(texto: str, agora: datetime | None = None) -> tuple:
 
 async def agendar_por_voz(conn, uid_cuidador: str, patient_id: str,
                           texto_falado: str, caregiver_name: str = "") -> dict:
-    """Grava a consulta e retorna o envelope {fala, acao, parametros}.
+    """Ponto de entrada do dialogo de agendamento (D51: rascunho + confirmacao).
 
-    Fail-closed: retorna acao AGENDAR_FALHA sem gravar nada se a data/hora
-    nao puder ser extraida com seguranca.
+    Nunca grava direto: cria um rascunho e pede confirmacao. O usuario
+    confirma por voz ("eu confirmo") ou pelo botao na tela
+    (confirmar_rascunho_por_id). Aceita correcao por voz.
     """
     from api_identity import require_family_access
     await require_family_access(conn, uid_cuidador, patient_id)
 
+    baixa = _sem_acento(texto_falado)
+
+    # 1. Cancelamento explicito — descarta qualquer rascunho
+    if quer_cancelar(texto_falado):
+        descartar_rascunho(uid_cuidador, patient_id)
+        return {"fala": "Agendamento cancelado. Nada foi marcado.",
+                "acao": "AGENDAR_CANCELADO", "parametros": {}}
+
+    # 2. Confirmacao por voz — grava o rascunho existente
+    if quer_confirmar(texto_falado):
+        return await _confirmar_rascunho(conn, uid_cuidador, patient_id,
+                                         caregiver_name)
+
+    # 3. Correcao do rascunho — refaz com os dados novos
+    rascunho = obter_rascunho(uid_cuidador, patient_id)
+    if rascunho and quer_corrigir(texto_falado):
+        return await _montar_rascunho(conn, uid_cuidador, patient_id,
+                                      texto_falado, caregiver_name,
+                                      base=rascunho)
+
+    # 4. Nova intencao de agendar
     if not quer_agendar(texto_falado):
+        descartar_rascunho(uid_cuidador, patient_id)
         return {"fala": "Não entendi um agendamento. Pode repetir, por exemplo: "
                         "“Agenda uma consulta com o cardiologista quinta às 14h”?",
                 "acao": "AGENDAR_FALHA", "parametros": {}}
 
+    return await _montar_rascunho(conn, uid_cuidador, patient_id,
+                                  texto_falado, caregiver_name)
+
+
+async def _montar_rascunho(conn, uid_cuidador, patient_id, texto_falado,
+                           caregiver_name, base=None):
+    """Extrai dados, guarda o rascunho (sem gravar) e pede confirmacao."""
     titulo = extrair_especialidade(texto_falado)
-    quando, quando_str = extrair_data_hora(texto_falado)
+    quando, _ = extrair_data_hora(texto_falado)
+
+    # Correcao: dados ausidos na nova fala vem do rascunho anterior
+    if base:
+        if titulo == "Consulta médica":
+            titulo = base.get("title", titulo)
+        if quando is None:
+            try:
+                quando = datetime.fromisoformat(base["scheduledDate"])
+            except Exception:
+                quando = None
 
     if quando is None:
         return {"fala": f"Para agendar a consulta com {titulo.lower()}, preciso da data e "
@@ -230,7 +352,43 @@ async def agendar_por_voz(conn, uid_cuidador: str, patient_id: str,
         return {"fala": "Essa data já passou. Quer agendar para outra data?",
                 "acao": "AGENDAR_FALHA", "parametros": {}}
 
-    import uuid
+    draft = {
+        "id": str(uuid.uuid4()),
+        "title": titulo,
+        "scheduledDate": quando.isoformat(),
+        "caregiver_name": caregiver_name or "Cuidador",
+    }
+    _guardar_rascunho(uid_cuidador, patient_id, draft)
+
+    data_pt = quando.strftime("%d/%m/%Y às %Hh%M")
+    return {
+        "fala": f"Preenchi aqui para você: {titulo}, no dia {data_pt}. "
+                "Deseja confirmar? Basta tocar em Confirmar na tela ou me dizer "
+                "“eu confirmo”. Se algo estiver errado, pode me corrigir.",
+        "acao": "AGENDAR_RASCUNHO",
+        "parametros": dict(draft),
+    }
+
+
+async def _confirmar_rascunho(conn, uid_cuidador, patient_id, caregiver_name=""):
+    """Grava o rascunho na agenda apos confirmacao (voz ou botao)."""
+    draft = obter_rascunho(uid_cuidador, patient_id)
+    if not draft:
+        return {"fala": "Não tenho nenhum agendamento pendente para confirmar. "
+                        "Pode pedir, por exemplo: “Agenda uma consulta com o "
+                        "cardiologista quinta às 14h”?",
+                "acao": "AGENDAR_FALHA", "parametros": {}}
+
+    from api_identity import require_family_access
+    await require_family_access(conn, uid_cuidador, patient_id)
+
+    try:
+        quando = datetime.fromisoformat(draft["scheduledDate"])
+    except Exception:
+        descartar_rascunho(uid_cuidador, patient_id)
+        return {"fala": "Não consegui ler a data do agendamento. Vamos tentar de novo?",
+                "acao": "AGENDAR_FALHA", "parametros": {}}
+
     consulta_id = uuid.uuid4()
     row = await conn.fetchrow(
         """INSERT INTO consultations
@@ -238,13 +396,15 @@ async def agendar_por_voz(conn, uid_cuidador: str, patient_id: str,
             caregiver_id, caregiver_name)
            VALUES ($1, $2, $3, $4, 'ACCEPTED', now(), $5, $6)
            RETURNING id, title, scheduled_date""",
-        consulta_id, patient_id, titulo, quando, uid_cuidador,
-        caregiver_name or "Cuidador")
+        consulta_id, patient_id, draft["title"], quando, uid_cuidador,
+        draft.get("caregiver_name") or caregiver_name or "Cuidador")
 
-    data_pt = quando.strftime("%d/%m/%Y às %Hh%M")
+    descartar_rascunho(uid_cuidador, patient_id)
+
+    data_pt = row["scheduled_date"].strftime("%d/%m/%Y às %Hh%M")
     return {
-        "fala": f"Consulta com {titulo} agendada para {data_pt}. Já está na agenda "
-                "do aplicativo e o paciente será notificado.",
+        "fala": f"Confirmado! Consulta com {row['title']} no dia {data_pt}. "
+                "Já está na agenda do aplicativo.",
         "acao": "CONSULTA_AGENDADA",
         "parametros": {
             "id": str(row["id"]),
@@ -252,3 +412,17 @@ async def agendar_por_voz(conn, uid_cuidador: str, patient_id: str,
             "scheduledDate": row["scheduled_date"].isoformat(),
         },
     }
+
+
+async def confirmar_rascunho_por_id(conn, uid_cuidador: str, patient_id: str,
+                                     draft_id: str, caregiver_name: str = "") -> dict:
+    """Confirmacao via BOTAO na tela (chamada REST, nao por voz).
+
+    Valida que o draft existe e pertence ao par cuidador/paciente — um
+    identificador forjado nao agenda nada (fail-closed).
+    """
+    draft = obter_rascunho(uid_cuidador, patient_id)
+    if not draft or draft.get("id") != draft_id:
+        return {"fala": "Esse agendamento expirou ou não é seu. Vamos refazer?",
+                "acao": "AGENDAR_FALHA", "parametros": {}}
+    return await _confirmar_rascunho(conn, uid_cuidador, patient_id, caregiver_name)
