@@ -17,6 +17,32 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from profile_contract import profile_upsert
 from orb_router import route_chat, detect_all, recall, remember, resolve_followup, whatsapp_next, dedupe_fala, symptom_repeat, SYMPTOM_KINDS, ESCALATION_SUFFIX
+
+# Vínculo de WhatsApp por TOTP (arquitetura temporária, até a Meta liberar template).
+try:
+    from wa_link_totp import generate_totp_secret, current_totp_code
+    from wa_link_service import handle_link_attempt
+    from wa_gate_service import gate_unregistered, sender_has_linked_account
+    HAS_WA_LINK = True
+    HAS_WA_GATE = True
+except ImportError:
+    HAS_WA_LINK = False
+    HAS_WA_GATE = False
+
+    def generate_totp_secret(*args, **kwargs):  # type: ignore
+        return None
+
+    def current_totp_code(*args, **kwargs):  # type: ignore
+        return None
+
+    async def handle_link_attempt(*args, **kwargs):  # type: ignore
+        return False
+
+    async def gate_unregistered(*args, **kwargs):  # type: ignore
+        return False
+
+    async def sender_has_linked_account(*args, **kwargs):  # type: ignore
+        return None
 from trace_llm import trace_llm
 from api_identity import firebase_uid, require_owner, require_family_access
 from voice_scheduling import quer_agendar, agendar_por_voz
@@ -327,6 +353,8 @@ class ProfileSyncDto(BaseModel):
     phone: Optional[str] = None
     consentAcceptedAt: Optional[str] = None
     notificationsEnabled: Optional[bool] = True
+    # Segredo TOTP (base32) do vínculo de WhatsApp; o app pode gerar localmente.
+    totpSecret: Optional[str] = None
     locationEnabled: Optional[bool] = True
     currentXp: Optional[int] = 0
     totalXp: Optional[int] = 0
@@ -684,9 +712,26 @@ async def sync_profile(p: ProfileSyncDto, request: Request, uid: str = Depends(f
         query, values = profile_upsert(p)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+
+    # Segredo TOTP do vínculo de WhatsApp. O app pode gerar localmente (caso em que
+    # ele já conhece o segredo e calcula o código no clique sem chamar o servidor);
+    # senão o gateway gera e devolve para o app persistir. Nunca regenera o de uma
+    # conta existente: isso invalidaria o segredo guardado no aparelho.
+    totp_secret = getattr(p, "totpSecret", None)
+    if HAS_WA_LINK and not totp_secret:
+        totp_secret = generate_totp_secret()
+
     async with db_pool.acquire() as conn:
         await conn.execute(query, *values)
-    return {"status": "success", "id": p.id}
+        if HAS_WA_LINK and totp_secret:
+            try:
+                await conn.execute(
+                    "UPDATE profiles SET totp_secret = $2 WHERE id = $1 AND totp_secret IS NULL",
+                    p.id, totp_secret,
+                )
+            except Exception as _totp_err:
+                print(f"[TOTP Secret] Falha ao gravar segredo para {p.id}: {_totp_err}")
+    return {"status": "success", "id": p.id, "totpSecret": totp_secret}
 
 @app.get("/api/profile/{user_id}")
 async def get_profile(user_id: str, uid: str = Depends(firebase_uid)):
@@ -2578,19 +2623,28 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         continue
 
                     # 2. Identificação do Usuário no PostgreSQL
+                    # Primária: whatsapp_phone (vínculo verificado por TOTP, new).
+                    # Fallback (transição): busca legada por sufixo de 8 dígitos,
+                    # mantida até as contas existentes migrarem para o vínculo novo.
                     user_id = None
                     user_name = None
                     user_role = None
                     if db_pool:
                         try:
+                            _wa_digits = "".join(filter(str.isdigit, sender_phone or ""))
                             async with db_pool.acquire() as conn:
-                                # Busca pelos últimos 8 dígitos para cobrir variações de formatação DDI/DDD
-                                clean_digits = "".join(filter(str.isdigit, sender_phone))
-                                last_8 = clean_digits[-8:] if len(clean_digits) >= 8 else clean_digits
                                 p_row = await conn.fetchrow(
-                                    "SELECT id, full_name, user_role FROM profiles WHERE regexp_replace(phone, '\\D', '', 'g') LIKE '%' || $1 || '%' LIMIT 1",
-                                    last_8
+                                    "SELECT id, full_name, user_role FROM profiles "
+                                    "WHERE regexp_replace(whatsapp_phone, '\\D', '', 'g') = $1",
+                                    _wa_digits
                                 )
+                                if not p_row:
+                                    clean_digits = "".join(filter(str.isdigit, sender_phone))
+                                    last_8 = clean_digits[-8:] if len(clean_digits) >= 8 else clean_digits
+                                    p_row = await conn.fetchrow(
+                                        "SELECT id, full_name, user_role FROM profiles WHERE regexp_replace(phone, '\\D', '', 'g') LIKE '%' || $1 || '%' LIMIT 1",
+                                        last_8
+                                    )
                                 if not p_row:
                                     p_row = await conn.fetchrow(
                                         "SELECT id, full_name, user_role FROM profiles WHERE regexp_replace(emergency_contact_phone, '\\D', '', 'g') LIKE '%' || $1 || '%' LIMIT 1",
@@ -2603,42 +2657,40 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         except Exception as db_err:
                             print(f"[WhatsApp DB Lookup Error] {db_err}")
 
-                    # 2.5. Plano B OTP (sem template): pedido explícito de código com
-                    # pendência válida — responde em texto dentro da janela aberta.
-                    if db_pool and is_otp_request(user_text):
+                    # 2.5. VÍNCULO TOTP (arquitetura temporária, sem template).
+                    # Roda ANTES do portão de conta: é assim que um número sem conta
+                    # conquista a dele. Se consumir, já respondeu e paramos por aqui.
+                    if HAS_WA_LINK:
                         try:
-                            _digits = "".join(filter(str.isdigit, sender_phone or ""))
-                            async with db_pool.acquire() as conn:
-                                _rows = await conn.fetch(
-                                    """SELECT identifier, code FROM auth_verification_codes
-                                       WHERE purpose IN ('PHONE_LINKING', 'REGISTRATION')
-                                         AND is_used = FALSE AND expires_at > NOW()
-                                       ORDER BY created_at DESC LIMIT 20"""
-                                )
-                            _pend = next((r for r in _rows if phones_match(r["identifier"], _digits)), None)
-                            if _pend is not None:
-                                await send_whatsapp_text(
-                                    sender_phone,
-                                    f"🔐 *Seu código Braga Saúde:* *{_pend['code']}*\n\n"
-                                    f"Válido por 15 minutos. Digite no aplicativo para concluir."
-                                )
-                                try:
-                                    log_fine_tuning_sample(
-                                        user_prompt=user_text,
-                                        assistant_reply=f"Código OTP entregue: {_pend['code']}",
-                                        source="whatsapp_otp",
-                                        system_prompt="Entrega de código OTP (plano B, sem LLM)",
-                                        user_name=user_name,
-                                        action="OTP_DELIVERY",
-                                        action_params={}
-                                    )
-                                except Exception:
-                                    pass
+                            _consumed = await handle_link_attempt(
+                                sender_phone=sender_phone,
+                                text=user_text,
+                                db_pool=db_pool,
+                                send_text=send_whatsapp_text,
+                            )
+                            if _consumed:
                                 continue
-                        except Exception as _otp_err:
-                            print(f"[WhatsApp OTP Error] {_otp_err}")
+                        except Exception as _link_err:
+                            print(f"[WhatsApp Link Error] {_link_err}")
 
-                    # 2.6. Fast-Lane de Resposta Rápida com Áudios Engatilhados
+                    # 2.6. PORTÃO DE CONTA VINCULADA: sem conta -> institucional,
+                    # MAS a triagem de emergência (SAMU) permanece ativa antes dele.
+                    # Ordem: vinculo -> emergência -> portão -> fluxo normal.
+                    if HAS_WA_GATE:
+                        try:
+                            _blocked = await gate_unregistered(
+                                user_text=user_text,
+                                user_id=user_id,
+                                send_text=send_whatsapp_text,
+                                sender_phone=sender_phone,
+                            )
+                            if _blocked:
+                                continue
+                        except Exception as _gate_err:
+                            print(f"[WhatsApp Gate Error] {_gate_err}")
+
+                    # 2.7. Fast-Lane de Resposta Rápida com Áudios Engatilhados
+                    # (somente após portão de conta: anônimo já respondeu antes)
                     fast_intent = match_fast_lane_intent(user_text)
                     if fast_intent:
                         cached = FAST_LANE_CACHE.get(fast_intent)
