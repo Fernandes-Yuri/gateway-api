@@ -682,11 +682,12 @@ def save_devices(data: Dict[str, Any]):
     except Exception:
         pass
 
-def dispatch_push(token: str, title: str, body: str, data: Dict[str, str] = None) -> bool:
+def dispatch_push(token: str, title: str, body: str, data: Dict[str, str] = None,
+                  include_notification: bool = True) -> bool:
     if HAS_FCM:
         try:
             message = messaging.Message(
-                notification=messaging.Notification(title=title, body=body),
+                notification=messaging.Notification(title=title, body=body) if include_notification else None,
                 data=data or {},
                 token=token
             )
@@ -696,8 +697,11 @@ def dispatch_push(token: str, title: str, body: str, data: Dict[str, str] = None
             print(f"[FCM Error] {e}")
             return False
     else:
-        print(f"[FCM Mock] Push para {token[:10]}...: {title} - {body}")
-        return True
+        # doc 10 §1B.2: o mock NÃO devolve mais True — sucesso fingido mascarava
+        # push nunca enviado e fazia os endpoints reportarem enviados que não
+        # aconteceram. Registra a intenção e devolve False.
+        print(f"[FCM Mock — NÃO ENVIADO] Push para {token[:10]}...: {title} - {body}")
+        return False
 
 # =============================================================
 # ROTAS REST DE SINCRONIZAÇÃO POSTGRESQL
@@ -1018,7 +1022,8 @@ async def sync_post_reaction(r: PostReactionSyncDto):
         await conn.execute(query, r.postId, r.userId, r.reactionType or "apoio", c_at)
     return {"status": "success"}
 
-install_family_routes(app, lambda: db_pool, FamilyBindingSyncDto, FamilyMessageSyncDto, rate_limiter=rate_limiter)
+install_family_routes(app, lambda: db_pool, FamilyBindingSyncDto, FamilyMessageSyncDto,
+                      rate_limiter=rate_limiter, load_devices=load_devices, dispatch_push=dispatch_push)
 install_caregiver_alert_routes(app, lambda: db_pool, load_devices, dispatch_push)
 install_exam_routes(app, lambda: db_pool, rate_limiter=rate_limiter)
 
@@ -3623,15 +3628,25 @@ async def get_latest_app_version():
 
 
 class BroadcastUpdateRequest(BaseModel):
-    version_name: Optional[str] = "1.1.1"
-    version_code: Optional[int] = 3
+    # doc 10 §1B.1: versão é OBRIGATÓRIA — antes havia defaults chumbados em
+    # 1.1.1/build 3 e uma chamada sem parâmetros avisaria a versão errada.
+    version_name: str
+    version_code: int
     title: Optional[str] = "Nova Atualização do Braga Saúde Disponível!"
     message: Optional[str] = "Atualizamos o Braga Saúde com melhorias no copiloto de voz e maior estabilidade. Toque para atualizar!"
     download_url: Optional[str] = "https://bragasaude.online/api/app/download"
 
 @app.post("/api/app/notify-update")
-async def broadcast_app_update(req: BroadcastUpdateRequest):
-    """Dispara notificação push de atualização para todos os dispositivos registrados."""
+async def broadcast_app_update(req: BroadcastUpdateRequest, request: Request):
+    """Dispara notificação push de atualização para todos os dispositivos registrados.
+
+    Segurança (doc 10 §1B.3): broadcast é operação administrativa. Aceita chamadas
+    locais (o pipeline de release da EC2 chama por 127.0.0.1, sem token) ou, da
+    internet, um token Firebase válido — nunca broadcast anônimo.
+    """
+    is_local = request.client is not None and request.client.host in ("127.0.0.1", "::1", "localhost")
+    if not is_local:
+        await firebase_uid(request)
     devices = load_devices()
     sent_count = 0
     errors = []
@@ -3644,8 +3659,14 @@ async def broadcast_app_update(req: BroadcastUpdateRequest):
             token=token,
             title=req.title,
             body=req.message,
+            # doc 10 §1B.4: data-only faz o onMessageReceived ser invocado mesmo em
+            # background, garantindo que o toque abra o download (payload de
+            # notificação na bandeja abriria só a tela principal).
+            include_notification=False,
             data={
                 "type": "APP_UPDATE",
+                "title": req.title,
+                "message": req.message,
                 "download_url": req.download_url,
                 "version_name": str(req.version_name),
                 "version_code": str(req.version_code)

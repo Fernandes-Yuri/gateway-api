@@ -1,4 +1,5 @@
 """Authenticated family invitations. The row lock makes acceptance atomic."""
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from fastapi import Depends, HTTPException, Request
@@ -92,7 +93,8 @@ async def purge_expired_family_messages(pool) -> int:
         return 0
 
 
-def install_family_routes(app, get_pool, binding_model, message_model, rate_limiter=None):
+def install_family_routes(app, get_pool, binding_model, message_model, rate_limiter=None,
+                          load_devices=None, dispatch_push=None):
     def pool():
         value = get_pool()
         if value is None:
@@ -193,6 +195,45 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                 message_id, m.patientId, uid, clean_sender, clean_text, m.iconType, sent, expires)
             if row is None and not await conn.fetchval('SELECT EXISTS(SELECT 1 FROM family_messages WHERE id=$1 AND sender_id=$2 AND patient_id=$3)', message_id, uid, m.patientId):
                 raise HTTPException(409, 'Mensagem indisponível.')
+
+            # Plano de notificações (doc 10 §1A): só resolve destinatário quando a
+            # linha foi efetivamente criada — retentativa idempotente de sync não
+            # re-notifica.
+            notify_recipients: list[str] = []
+            if row is not None:
+                if uid == m.patientId:
+                    # Quem escreveu é o próprio paciente: avisa os cuidadores ativos.
+                    care_rows = await conn.fetch(
+                        "SELECT caregiver_id FROM family_bindings WHERE patient_id=$1 AND status='ACTIVE'",
+                        m.patientId)
+                    notify_recipients = [r['caregiver_id'] for r in care_rows if r['caregiver_id']]
+                else:
+                    # Cuidador escreveu: avisa o aparelho do paciente.
+                    notify_recipients = [m.patientId]
+
+        # Push fora da transação: falha de FCM nunca pode quebrar o envio da mensagem.
+        if row is not None and dispatch_push and load_devices and notify_recipients:
+            devices = load_devices()
+            for recipient_uid in notify_recipients:
+                token = (devices.get(recipient_uid) or {}).get('token')
+                if not token:
+                    continue
+                try:
+                    await asyncio.to_thread(
+                        dispatch_push,
+                        token=token,
+                        title=f'Mensagem de {clean_sender}',
+                        body=clean_text[:200],
+                        data={
+                            'type': 'FAMILY_MESSAGE',
+                            'messageId': str(message_id),
+                            'senderId': uid,
+                            'patientId': m.patientId,
+                        },
+                    )
+                except Exception as push_err:
+                    print(f'[FamilyMessage] Falha no push para {recipient_uid}: {push_err}')
+
         return {'status': 'success', 'id': str(message_id)}
 
     @app.get('/api/family/messages/{patient_id}')
