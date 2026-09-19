@@ -14,8 +14,8 @@ VOICES = {
 
 class PiperService:
     def __init__(self, binary, models_dir, *, concurrency=1, timeout=15, spawn=None):
-        self.binary = str(binary)
-        self.models_dir = Path(models_dir)
+        self.binary = str(binary) if binary is not None else ""
+        self.models_dir = Path(models_dir) if models_dir else Path()
         self.timeout = timeout
         self._slots = asyncio.Semaphore(concurrency)
         self._spawn = spawn or asyncio.create_subprocess_exec

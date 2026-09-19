@@ -78,30 +78,47 @@ GROQ_API_KEY_CHAT = os.getenv("GROQ_API_KEY_CHAT") or GROQ_API_KEY
 GROQ_API_KEY_WHATSAPP = os.getenv("GROQ_API_KEY_WHATSAPP") or GROQ_API_KEY
 
 # ------------------------------------------------------------------
-# Piper TTS (subprocesso local). No homelab os defaults abaixo funcionam;
-# na EC2, definir PIPER_BIN/PIPER_MODELS_DIR para os caminhos instalados
-# no deploy. Espelha server.py linhas 103-104.
+# Piper TTS (subprocesso local). SEM defaults hardcoded do homelab:
+# PIPER_BIN/PIPER_MODELS_DIR devem vir do .env do ambiente (na EC2 apontam
+# para /home/ec2-user/piper/...). Se ausentes, o aviso no startup explica
+# em vez de falhar silenciosamente apontando para um caminho inexistente.
 # ------------------------------------------------------------------
-PIPER_BIN = os.getenv("PIPER_BIN", "/home/yurifjs/piper/piper/piper")
-PIPER_MODELS_DIR = os.getenv("PIPER_MODELS_DIR", "/home/yurifjs/piper/models")
+PIPER_BIN = os.getenv("PIPER_BIN")
+PIPER_MODELS_DIR = os.getenv("PIPER_MODELS_DIR")
 
 # ------------------------------------------------------------------
-# Firebase / FCM. A serviceAccountKey fica em arquivo; o path é por
-# ambiente (na EC2, definir FIREBASE_SERVICE_ACCOUNT_PATH para o local
-# instalado). Espelha server.py linha 82.
+# Firebase / FCM. A serviceAccountKey fica em arquivo; o path vem do env
+# (na EC2, FIREBASE_SERVICE_ACCOUNT_PATH aponta para o local instalado).
+# Sem default do homelab pela mesma razao acima.
 # ------------------------------------------------------------------
-SERVICE_ACCOUNT_PATH = os.getenv(
-    "FIREBASE_SERVICE_ACCOUNT_PATH",
-    "/home/yurifjs/projetos/braga-gateway/serviceAccountKey.json",
-)
+SERVICE_ACCOUNT_PATH = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
 
 # ------------------------------------------------------------------
-# Exposição pública. PUBLIC_API_BASE_URL default legado (ngrok) — na
-# EC2, definir para a URL pública do túnel Cloudflare. Espelha linha 105.
+# Exposicao publica. PUBLIC_API_BASE_URL deve vir do env (na EC2, a URL
+# publica do tunel Cloudflare). O default legado do ngrok foi removido --
+# era um endereco morto que so confundia ao portar a infra.
 # ------------------------------------------------------------------
-PUBLIC_API_BASE_URL = os.getenv(
-    "PUBLIC_API_BASE_URL", "https://mashing-spousal-prescribe.ngrok-free.dev"
-).rstrip("/")
+PUBLIC_API_BASE_URL = (os.getenv("PUBLIC_API_BASE_URL") or "").rstrip("/")
+
+# ------------------------------------------------------------------
+# Avisos de configuracao obrigatoria ausente. Falha alto e visivel no
+# startup para que um ambiente mal configurado seja detectado na hora,
+# em vez de virar um bug silencioso em runtime.
+# ------------------------------------------------------------------
+_REQUIRED_ENV_HINTS = [
+    ("PIPER_BIN", PIPER_BIN, "binario do Piper TTS"),
+    ("PIPER_MODELS_DIR", PIPER_MODELS_DIR, "diretorio de modelos do Piper"),
+    ("FIREBASE_SERVICE_ACCOUNT_PATH", SERVICE_ACCOUNT_PATH, "serviceAccountKey do Firebase"),
+    ("PUBLIC_API_BASE_URL", PUBLIC_API_BASE_URL, "URL publica da API"),
+    ("DATABASE_URL", DATABASE_URL, "string de conexao do PostgreSQL"),
+]
+for _name, _value, _desc in _REQUIRED_ENV_HINTS:
+    if not _value:
+        print(
+            f"[config] AVISO: {_name} nao definido no ambiente ({_desc}). "
+            f"Defina no .env antes de subir o servico."
+        )
+del _name, _value, _desc, _REQUIRED_ENV_HINTS
 
 # ------------------------------------------------------------------
 # Google reCAPTCHA (validacao server-side do token emitido pelo front).

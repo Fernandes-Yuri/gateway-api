@@ -9,8 +9,8 @@ from piper_service import PiperService
 
 
 async def main():
-    service = PiperService(os.getenv('PIPER_BIN', '/home/yurifjs/piper/piper/piper'),
-                           os.getenv('PIPER_MODELS_DIR', '/home/yurifjs/piper/models'))
+    service = PiperService(os.getenv('PIPER_BIN'),
+                           os.getenv('PIPER_MODELS_DIR'))
     with tempfile.TemporaryDirectory(prefix='braga-piper-check-') as directory:
         output = Path(directory) / 'test.wav'
         start = time.monotonic()

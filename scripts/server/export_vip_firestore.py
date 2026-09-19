@@ -51,7 +51,7 @@ if __name__ == '__main__':
     from firebase_admin import credentials, firestore
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--credentials', default=os.getenv('FIREBASE_SERVICE_ACCOUNT_PATH', '/home/yurifjs/projetos/braga-gateway/serviceAccountKey.json'))
+    parser.add_argument('--credentials', default=os.getenv('FIREBASE_SERVICE_ACCOUNT_PATH'))
     args = parser.parse_args()
     firebase_admin.initialize_app(credentials.Certificate(args.credentials))
     counts = write_export(firestore.client().collection('vip-signups').stream(), args.output)

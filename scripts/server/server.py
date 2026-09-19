@@ -159,7 +159,7 @@ except ImportError:
 try:
     import firebase_admin
     from firebase_admin import credentials, messaging
-    if os.path.exists(SERVICE_ACCOUNT_PATH):
+    if SERVICE_ACCOUNT_PATH and os.path.exists(SERVICE_ACCOUNT_PATH):
         if not firebase_admin._apps:
             cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
             firebase_admin.initialize_app(cred)
@@ -170,6 +170,9 @@ except Exception:
     HAS_FCM = False
 
 # GROQ/PIPER/PUBLIC_API_BASE_URL vindos de `config` (Fase B, passo 1).
+# PIPER_BIN/PIPER_MODELS_DIR podem ser None se o .env nao os definir; o
+# PiperService entende isso e a sintese simplesmente falha com aviso
+# (config.py ja avisou no startup).
 PIPER_SERVICE = PiperService(PIPER_BIN, PIPER_MODELS_DIR)
 GROQ_SEMAPHORE = asyncio.Semaphore(5)
 # Concorrência por canal (isolamento: um canal lento não mata os outros).
@@ -2643,7 +2646,7 @@ async def init_fast_lane_audio_cache():
     """Pré-sintetiza os áudios engatilhados e pré-carrega em memória e na Meta."""
     print("[Fast-Lane Audio] Inicializando cache de áudios rápidos...")
     for intent_key, data in FAST_LANE_AUDIO_INTENTS.items():
-        audio_path = os.path.join(AUDIO_CACHE_DIR, f"fastlane_{intent_key}.mp3")
+        audio_path = os.path.join(AUDIO_CACHE_DIR, f"fastlane_{intent_key}.wav")
         file_bytes = None
         if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
             try:
@@ -2670,6 +2673,10 @@ async def init_fast_lane_audio_cache():
             if HAS_WHATSAPP:
                 try:
                     m_id = await upload_whatsapp_media(file_bytes, mime_type="audio/mpeg", filename=f"fastlane_{intent_key}.mp3")
+                    # NOTE: os bytes sao WAV (Piper gera RIFF/WAVE). A extensao
+                    # .mp3 no nome enviado a Meta e intencional por enquanto:
+                    # audio/wav nao esta na lista oficial de tipos suportados
+                    # para upload. Ver doc 06 (divida rebaixada a parcial).
                     if m_id:
                         FAST_LANE_CACHE[intent_key]["media_id"] = m_id
                         print(f"[Fast-Lane Audio] Meta media_id pronto para {intent_key}: {m_id}")
