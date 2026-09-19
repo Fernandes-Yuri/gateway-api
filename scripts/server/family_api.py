@@ -2,10 +2,11 @@
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel
 from api_identity import firebase_uid, require_owner, require_family_access
-from family_contract import validate_acceptance
+from family_contract import validate_acceptance, validate_consultation_acceptance
 from security_defense import get_client_ip, sanitize_zero_trust_text
 
 
@@ -28,6 +29,11 @@ class CreateConsultation(BaseModel):
 
 class AcceptConsultation(BaseModel):
     consultationId: str
+    # doc 10 §2.2: antes esses campos eram lidos com hasattr() em um BaseModel
+    # stricto — Pydantic descarta extras, então o nome do cuidador nunca era
+    # persistido. Agora são parte do contrato.
+    caregiverName: Optional[str] = None
+    caregiverRelation: Optional[str] = None
 
 
 class RejectConsultation(BaseModel):
@@ -284,24 +290,66 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
 
     # --- CONSULTAS MÉDICAS ---
 
+    async def _notify_consultation(row, uid, event_type, title, body):
+        """Push de consulta (doc 10 §2.2). Best-effort: falha nunca quebra a operação.
+
+        Regra de destinatário: o paciente (user_id) é notificado quando um cuidador
+        age; os cuidadores ativos são notificados quando o paciente age.
+        """
+        if not dispatch_push or not load_devices:
+            return
+        if row['user_id'] == uid:
+            async with pool().acquire() as conn:
+                care_rows = await conn.fetch(
+                    "SELECT caregiver_id FROM family_bindings WHERE patient_id=$1 AND status='ACTIVE'",
+                    row['user_id'])
+            recipients = [r['caregiver_id'] for r in care_rows if r['caregiver_id']]
+        else:
+            recipients = [row['user_id']]
+        if not recipients:
+            return
+        devices = load_devices()
+        for recipient_uid in recipients:
+            token = (devices.get(recipient_uid) or {}).get('token')
+            if not token:
+                continue
+            try:
+                await asyncio.to_thread(
+                    dispatch_push,
+                    token=token,
+                    title=title,
+                    body=body,
+                    data={
+                        'type': event_type,
+                        'consultationId': str(row['id']),
+                        'patientId': row['user_id'],
+                        'title': title,
+                        'message': body,
+                    },
+                )
+            except Exception as push_err:
+                print(f'[Consultation] Falha no push para {recipient_uid}: {push_err}')
+
     @app.post('/api/consultation/create')
     async def create_consultation(c: CreateConsultation, uid: str = Depends(firebase_uid)):
         """Usuário agenda uma consulta para si mesmo."""
         async with pool().acquire() as conn, conn.transaction():
             now = datetime.now(timezone.utc)
-            import re
-            # Parse the scheduled date
             try:
                 scheduled = datetime.fromisoformat(c.scheduledDate.replace('Z', '+00:00'))
             except ValueError:
                 raise HTTPException(422, 'Data/hora inválida.')
-            
+
             consultation_id = uuid.uuid4()
             row = await conn.fetchrow('''INSERT INTO consultations
                 (id, user_id, title, scheduled_date, status, created_at)
                 VALUES ($1,$2,$3,$4,'SUGGESTED',$5) RETURNING *''',
                 consultation_id, uid, c.title, scheduled, now)
-            return {'status': 'success', 'id': str(row['id']), 'title': row['title'], 'scheduledDate': row['scheduled_date'].isoformat(), 'status': row['status']}
+        # Avisa os cuidadores ativos de que uma consulta foi sugerida.
+        await _notify_consultation(row, uid, 'CONSULTATION_CREATED',
+            'Nova consulta sugerida',
+            f'Foi sugerida a consulta "{row["title"]}". Toque para acompanhar.')
+        return {'status': 'success', 'id': str(row['id']), 'title': row['title'], 'scheduledDate': row['scheduled_date'].isoformat(), 'status': row['status']}
 
     @app.post('/api/consultation/accept')
     async def accept_consultation(p: AcceptConsultation, uid: str = Depends(firebase_uid)):
@@ -314,11 +362,16 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                 validate_consultation_acceptance(row, uid)
             except ValueError as error:
                 raise HTTPException(409, str(error)) from error
-            
+
+            caregiver_name = p.caregiverName or ''
+            caregiver_relation = p.caregiverRelation or ''
             updated = await conn.fetchrow("""UPDATE consultations SET status='ACCEPTED',
                 caregiver_id=$2, caregiver_name=$3, caregiver_relation=$4 WHERE id=$1 RETURNING *""",
-                row['id'], uid, p.caregiverName if hasattr(p, 'caregiverName') else '', p.caregiverRelation if hasattr(p, 'caregiverRelation') else '')
-            return {'status': 'success', 'id': str(row['id']), 'status': row['status']}
+                row['id'], uid, caregiver_name, caregiver_relation)
+        await _notify_consultation(updated, uid, 'CONSULTATION_ACCEPTED',
+            'Consulta aceita',
+            f'{caregiver_name or "Seu familiar"} aceitou a consulta "{updated["title"]}".')
+        return {'status': 'success', 'id': str(updated['id']), 'status': updated['status']}
 
     @app.post('/api/consultation/reject')
     async def reject_consultation(p: RejectConsultation, uid: str = Depends(firebase_uid)):
@@ -331,10 +384,13 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                 validate_consultation_acceptance(row, uid)
             except ValueError as error:
                 raise HTTPException(409, str(error)) from error
-            
+
             updated = await conn.fetchrow("""UPDATE consultations SET status='REJECTED' WHERE id=$1 RETURNING *""",
                 row['id'])
-            return {'status': 'success', 'id': str(row['id']), 'status': row['status']}
+        await _notify_consultation(updated, uid, 'CONSULTATION_REJECTED',
+            'Consulta recusada',
+            f'Foi recusada a consulta "{updated["title"]}".')
+        return {'status': 'success', 'id': str(updated['id']), 'status': updated['status']}
 
     @app.post('/api/consultation/complete')
     async def complete_consultation(c: AcceptConsultation, uid: str = Depends(firebase_uid)):
@@ -345,7 +401,10 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                 raise HTTPException(404, 'Consulta não encontrada.')
             updated = await conn.fetchrow("""UPDATE consultations SET status='COMPLETED' WHERE id=$1 RETURNING *""",
                 row['id'])
-            return {'status': 'success', 'id': str(row['id']), 'status': row['status']}
+        await _notify_consultation(updated, uid, 'CONSULTATION_COMPLETED',
+            'Consulta concluída',
+            f'A consulta "{updated["title"]}" foi marcada como concluída.')
+        return {'status': 'success', 'id': str(updated['id']), 'status': updated['status']}
 
     @app.post('/api/consultation/cancel')
     async def cancel_consultation(c: AcceptConsultation, uid: str = Depends(firebase_uid)):
@@ -356,7 +415,10 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                 raise HTTPException(404, 'Consulta não encontrada.')
             updated = await conn.fetchrow("""UPDATE consultations SET status='CANCELLED' WHERE id=$1 RETURNING *""",
                 row['id'])
-            return {'status': 'success', 'id': str(row['id']), 'status': row['status']}
+        await _notify_consultation(updated, uid, 'CONSULTATION_CANCELLED',
+            'Consulta cancelada',
+            f'A consulta "{updated["title"]}" foi cancelada.')
+        return {'status': 'success', 'id': str(updated['id']), 'status': updated['status']}
 
     # --- D51: confirmacao por BOTAO do rascunho de agendamento por voz ---
 
