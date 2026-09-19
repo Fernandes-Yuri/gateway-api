@@ -703,6 +703,76 @@ def dispatch_push(token: str, title: str, body: str, data: Dict[str, str] = None
         print(f"[FCM Mock — NÃO ENVIADO] Push para {token[:10]}...: {title} - {body}")
         return False
 
+
+async def dispatch_clinical_alert(
+    pool,
+    source_user_id: str,
+    systolic: Optional[float] = None,
+    diastolic: Optional[float] = None,
+    glucose: Optional[float] = None,
+    glucose_type: Optional[str] = None,
+    background_tasks: Optional[BackgroundTasks] = None,
+):
+    """Gatilho Clínico Automático para Cuidadores (doc 10 §3.2).
+
+    Extraido de sync_vital_sign para que qualquer canal de entrada (app, bot do
+    WhatsApp, voz) aplique a MESMA regra: leitura crítica avisa o cuidador por
+    push FCM e WhatsApp. Best-effort: falha de notificação nunca quebra quem gravou.
+
+    Retorna True quando havia condição crítica (mesmo que a notificação falhe).
+    """
+    is_critical_pressure = systolic is not None and systolic >= 140
+    is_critical_glucose = glucose is not None and (glucose < 70 or glucose > 200)
+    if not (is_critical_pressure or is_critical_glucose):
+        return False
+
+    if is_critical_pressure:
+        val_str = f"{systolic:g}/{diastolic:g} mmHg" if diastolic is not None else f"{systolic:g} mmHg"
+        alert_type = "Pressão Arterial Elevada"
+        msg_body = f"Seu familiar registrou pressão de {val_str}."
+    else:
+        val_str = f"{glucose:g} mg/dL ({glucose_type or 'Glicose'})"
+        alert_type = "Glicemia Fora da Faixa"
+        msg_body = f"Seu familiar registrou glicemia de {val_str}."
+
+    # 1. Notificação Push (FCM) para aparelhos de cuidador, exceto o próprio.
+    try:
+        devices = load_devices()
+        for uid, dev in devices.items():
+            if dev.get("role") == "CAREGIVER" and uid != source_user_id:
+                dispatch_push(
+                    dev["token"],
+                    "Alerta Clínico Braga Saúde",
+                    msg_body,
+                    {"type": "ALERT_CRITICAL", "sourceUserId": source_user_id},
+                )
+    except Exception as e:
+        print(f"[Clinical Alert] Falha no push: {e}")
+
+    # 2. Alerta via WhatsApp para o contato de emergência/cuidador.
+    if HAS_WHATSAPP:
+        try:
+            async with pool.acquire() as conn:
+                p_row = await conn.fetchrow(
+                    "SELECT full_name, emergency_contact_phone, emergency_contact_name FROM profiles WHERE id = $1",
+                    source_user_id,
+                )
+            if p_row and p_row.get("emergency_contact_phone"):
+                p_name = p_row.get("full_name") or "Familiar"
+                target_phone = p_row.get("emergency_contact_phone")
+                if background_tasks is not None:
+                    background_tasks.add_task(
+                        send_clinical_alert_whatsapp, target_phone, p_name, alert_type, val_str
+                    )
+                else:
+                    asyncio.create_task(
+                        send_clinical_alert_whatsapp(target_phone, p_name, alert_type, val_str)
+                    )
+        except Exception as e:
+            print(f"[Clinical Alert] Falha no WhatsApp: {e}")
+
+    return True
+
 # =============================================================
 # ROTAS REST DE SINCRONIZAÇÃO POSTGRESQL
 # =============================================================
@@ -820,50 +890,17 @@ async def sync_vital_sign(
             )
             inserted_id = str(row["id"])
 
-            # Gatilho Clínico Automático para Cuidadores (Push FCM + WhatsApp)
-            is_critical_pressure = v.systolicPressure and v.systolicPressure >= 140
-            is_critical_glucose = v.glucoseLevel and (v.glucoseLevel < 70 or v.glucoseLevel > 200)
-
-            if is_critical_pressure or is_critical_glucose:
-                # 1. Notificação Push (FCM)
-                devices = load_devices()
-                for uid, dev in devices.items():
-                    if dev.get("role") == "CAREGIVER" and uid != v.userId:
-                        msg_body = (
-                            f"Seu familiar registrou pressão de {v.systolicPressure}/{v.diastolicPressure or '?'} mmHg."
-                            if is_critical_pressure else
-                            f"Seu familiar registrou glicemia de {v.glucoseLevel} mg/dL ({v.glucoseType or 'Glicose'})."
-                        )
-                        dispatch_push(
-                            dev["token"],
-                            "Alerta Clínico Braga Saúde",
-                            msg_body,
-                            {"type": "ALERT_CRITICAL", "sourceUserId": v.userId}
-                        )
-
-                # 2. Alerta via WhatsApp para o contato de emergência/cuidador
-                if HAS_WHATSAPP:
-                    try:
-                        p_row = await conn.fetchrow(
-                            "SELECT full_name, emergency_contact_phone, emergency_contact_name FROM profiles WHERE id = $1",
-                            v.userId
-                        )
-                        if p_row and p_row.get("emergency_contact_phone"):
-                            p_name = p_row.get("full_name") or "Familiar"
-                            target_phone = p_row.get("emergency_contact_phone")
-                            if is_critical_pressure:
-                                alert_type = "Pressão Arterial Elevada"
-                                val_str = f"{v.systolicPressure}/{v.diastolicPressure or '?'} mmHg"
-                            else:
-                                alert_type = "Glicemia Fora da Faixa"
-                                val_str = f"{v.glucoseLevel} mg/dL ({v.glucoseType or 'Glicose'})"
-
-                            background_tasks.add_task(
-                                send_clinical_alert_whatsapp,
-                                target_phone, p_name, alert_type, val_str
-                            )
-                    except Exception as ex:
-                        print(f"[WhatsApp Alert Error] {ex}")
+            # Gatilho clínico (doc 10 §3.2): extraído para dispatch_clinical_alert,
+            # compartilhado com a confirmação vinda do bot do WhatsApp.
+            await dispatch_clinical_alert(
+                db_pool,
+                v.userId,
+                systolic=v.systolicPressure,
+                diastolic=v.diastolicPressure,
+                glucose=v.glucoseLevel,
+                glucose_type=v.glucoseType,
+                background_tasks=background_tasks,
+            )
 
     return {"status": "success", "id": inserted_id}
 
@@ -1807,6 +1844,19 @@ async def confirm_pending_confirmation(
                     VALUES ($1, $2, $3, $4, $5, $6, 'whatsapp', TRUE, $7)
                 """, user_id, pending_id, confirmation_code, f"REGISTRAR_{metric_type}", 
                      json.dumps(original_values), json.dumps(values_to_save), was_edited)
+
+            # Paridade do gatilho clínico (doc 10 §3.2): uma leitura crítica
+            # confirmada pelo bot do WhatsApp deve alertar o cuidador EXATAMENTE
+            # como a mesma leitura vinda do app faria. Antes isso só existia em
+            # sync_vital_sign, e o canal do WhatsApp era silencioso.
+            await dispatch_clinical_alert(
+                db_pool,
+                user_id,
+                systolic=values_to_save.get("sistolica") if metric_type == "PRESSAO" else None,
+                diastolic=values_to_save.get("diastolica") if metric_type == "PRESSAO" else None,
+                glucose=values_to_save.get("glicemia") if metric_type == "GLICEMIA" else None,
+                glucose_type=values_to_save.get("tipo"),
+            )
             
             print(f"[Confirmation] Registro confirmado: {confirmation_code} - {metric_type}")
             return True
