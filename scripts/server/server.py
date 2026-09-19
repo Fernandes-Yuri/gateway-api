@@ -908,6 +908,24 @@ async def get_profile(user_id: str, uid: str = Depends(firebase_uid)):
         if not row:
             raise HTTPException(status_code=404, detail="Perfil não encontrado")
         d = dict(row)
+
+        # Migração tardia do segredo TOTP do vínculo de WhatsApp.
+        # Contas criadas antes da migration 009 (ou que nunca sincronizaram
+        # perfil depois dela) não têm totp_secret: o app não consegue montar o
+        # link de vínculo e o botão "Vincular meu WhatsApp" simplesmente não
+        # faz nada. Nesse momento — o login puxa o perfil — geramos e
+        # persistimos o segredo faltante. Não regenera quem já tem.
+        if HAS_WA_LINK and not d.get("totp_secret"):
+            try:
+                novo = generate_totp_secret()
+                await conn.execute(
+                    "UPDATE profiles SET totp_secret = $2 WHERE id = $1 AND totp_secret IS NULL",
+                    user_id, novo,
+                )
+                d["totp_secret"] = novo
+            except Exception as _totp_err:
+                print(f"[TOTP Secret] Falha ao gerar segredo faltante para {user_id}: {_totp_err}")
+
         if d.get("birth_date"):
             d["birth_date"] = d["birth_date"].isoformat()
         if d.get("created_at"):
