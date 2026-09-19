@@ -77,7 +77,7 @@ from config import (
 
 # Suporte defensivo a E-mail de Segurança & OTP
 try:
-    from email_service import is_email_configured, send_security_code_email, send_welcome_email
+    from email_service import is_email_configured, send_security_code_email, send_welcome_email, send_security_alert_email
     HAS_EMAIL = True
 except ImportError:
     HAS_EMAIL = False
@@ -233,7 +233,26 @@ os.makedirs(STORAGE_EXAMS_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(DEVICES_PATH), exist_ok=True)
 
 db_pool: Optional[Any] = None
-install_vip_routes(app, lambda: db_pool)
+
+async def _vip_notify_admin(text: str):
+    """doc 10 §4.4: avisa o admin no WhatsApp a cada inscrição VIP nova."""
+    if HAS_WHATSAPP and 'send_whatsapp_text' in globals():
+        admin_phone = (os.getenv('ADMIN_PHONE')
+                       or os.getenv('SECURITY_ALERT_PHONE')
+                       or '5511967808252')
+        await send_whatsapp_text(admin_phone, text)
+
+async def _vip_confirm_email(to_email: str, user_name: str):
+    """doc 10 §4.4: confirma a inscrição VIP por e-mail (best-effort)."""
+    if HAS_EMAIL and 'send_welcome_email' in globals():
+        await send_welcome_email(to_email, user_name)
+
+# doc 10 §4.4: inscrição VIP avisa o admin (WhatsApp) e confirma por e-mail ao inscrito.
+install_vip_routes(
+    app, lambda: db_pool,
+    notify_admin=_vip_notify_admin,
+    send_confirmation_email=_vip_confirm_email,
+)
 install_preference_routes(app, lambda: db_pool)
 WHATSAPP_EVENT_LOG: List[Dict[str, Any]] = []
 
@@ -638,19 +657,78 @@ async def startup():
             )
             # Limpeza imediata na inicializacao (nao espera 6h para a 1a passada)
             await purge_old_release_apks()
+
+            # doc 10 §4.6: rotinas pró-ativas (09h / 14h30 / 20h30). Antes isto
+            # era uma função solta que criava um scheduler aninhado e nunca era
+            # registrada — código morto. Agora vive no scheduler existente.
+            retention_scheduler.add_job(
+                lambda: asyncio.create_task(scheduled_proactive_job("manha")),
+                CronTrigger(hour=9, minute=0), id="proactive_manha",
+                replace_existing=True, max_instances=1, coalesce=True,
+            )
+            retention_scheduler.add_job(
+                lambda: asyncio.create_task(scheduled_proactive_job("hidratacao")),
+                CronTrigger(hour=14, minute=30), id="proactive_hidratacao",
+                replace_existing=True, max_instances=1, coalesce=True,
+            )
+            retention_scheduler.add_job(
+                lambda: asyncio.create_task(scheduled_proactive_job("noite")),
+                CronTrigger(hour=20, minute=30), id="proactive_noite",
+                replace_existing=True, max_instances=1, coalesce=True,
+            )
+            print("[Scheduler] Rotinas pró-ativas registradas: 09h00, 14h30, 20h30.")
             retention_scheduler.start()
 
 async def scheduled_proactive_job(periodo: str):
-    """Dispara rotinas pró-ativas periódicas de saúde e acolhimento."""
-    print(f"[Scheduler] Executando rotina pró-ativa agendada: {periodo}")
+    """Rotina pró-ativa periódica (doc 10 §4.6).
 
-    if HAS_SCHEDULER:
-        scheduler = AsyncIOScheduler()
-        scheduler.add_job(lambda: asyncio.create_task(scheduled_proactive_job("manha")), CronTrigger(hour=9, minute=0))
-        scheduler.add_job(lambda: asyncio.create_task(scheduled_proactive_job("hidratacao")), CronTrigger(hour=14, minute=30))
-        scheduler.add_job(lambda: asyncio.create_task(scheduled_proactive_job("noite")), CronTrigger(hour=20, minute=30))
-        scheduler.start()
-        print("[Scheduler] APScheduler iniciado com 3 cron jobs diários.")
+    Executada pelo retention_scheduler nos horários 09h00 / 14h30 / 20h30.
+    Envia um empurrão carinhoso para quem ainda não registrou algo do dia.
+    """
+    print(f"[Scheduler] Executando rotina pró-ativa agendada: {periodo}")
+    if not db_pool:
+        return
+    try:
+        # devices_json é um arquivo, não uma tabela — a fila de dispositivos
+        # vive em load_devices(). Usa ela para saber quem existe.
+        devices = load_devices()
+        for uid, dev in devices.items():
+                if dev.get('role') != 'USER':
+                    continue
+                async with db_pool.acquire() as conn:
+                    today = await conn.fetchval(
+                        "SELECT EXISTS(SELECT 1 FROM vital_signs WHERE user_id=$1 AND measured_at >= CURRENT_DATE)",
+                        uid)
+                if today:
+                    continue
+                name = await _proactive_display_name(uid)
+                msg = {
+                    'manha': f'Bom dia{name}! Que tal registrar sua pressão agora, logo depois do café?',
+                    'hidratacao': f'Boa tarde{name}! Já bebeu um copo d\'água? Vale anotar para fechar o dia bem.',
+                    'noite': f'Boa noite{name}! Fechou o dia? Que tal registrar como você está se sentindo?',
+                }.get(periodo, 'Hora de cuidar de você.')
+                try:
+                    await asyncio.to_thread(
+                        dispatch_push,
+                        token=dev.get('token'),
+                        title='Lembrete do Braga Saúde',
+                        body=msg,
+                        data={'type': 'PROACTIVE_BRAGA', 'period': periodo},
+                    )
+                except Exception as push_err:
+                    print(f"[Scheduler] Falha no push pró-ativo para {uid}: {push_err}")
+    except Exception as e:
+        print(f"[Scheduler] Erro na rotina pró-ativa {periodo}: {e}")
+
+
+async def _proactive_display_name(uid: str) -> str:
+    """Nome de exibição para a rotina pró-ativa; vazio se indisponível."""
+    try:
+        async with db_pool.acquire() as conn:
+            name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid)
+        return f', {name.split()[0]}' if name else ''
+    except Exception:
+        return ''
 
     # Inicializa cache assíncrono de áudios engatilhados
     asyncio.create_task(init_fast_lane_audio_cache())
@@ -1082,6 +1160,66 @@ async def sync_feedback(f: FeedbackSyncDto, request: Request):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(query, f.userId, f.userEmail, f.userName, f.category, clean_title, clean_message, f.inputMethod, f.appVersion, f.deviceInfo)
     return {"status": "success", "id": str(row["id"])}
+
+
+class FeedbackReplyCreate(BaseModel):
+    """doc 10 §4.1: a equipe responde um feedback."""
+    feedbackId: str
+    userId: str
+    body: str
+    author: Optional[str] = None
+
+
+@app.post("/api/feedback/reply")
+async def create_feedback_reply(req: FeedbackReplyCreate, request: Request, uid: str = Depends(firebase_uid)):
+    """Resposta da equipe a um feedback (doc 10 §4.1).
+
+    admin-only: precisa de um token Firebase válido. A resposta fica pendente
+    até o app puxar no SyncWorker, que então notifica o usuário localmente.
+    """
+    if not db_pool:
+        raise HTTPException(503, "Banco indisponível")
+    client_ip = get_client_ip(request)
+    await rate_limiter.check("feedback_reply_ip", client_ip, limit=20, window_seconds=60, ip=client_ip, pool=db_pool)
+    clean_body = sanitize_zero_trust_text(req.body, max_length=1000, field_name="body", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
+    clean_author = sanitize_zero_trust_text(req.author or "Suporte Braga Saúde", max_length=100, field_name="author", ip=client_ip)
+    try:
+        fid = uuid.UUID(req.feedbackId)
+    except ValueError:
+        raise HTTPException(422, "Feedback inválido.")
+    async with db_pool.acquire() as conn:
+        # Zero-trust: o feedback precisa pertencer ao usuário informado.
+        owned = await conn.fetchval("SELECT 1 FROM feedbacks WHERE id=$1 AND user_id=$2", fid, req.userId)
+        if not owned:
+            raise HTTPException(404, "Feedback não encontrado para este usuário.")
+        row = await conn.fetchrow(
+            "INSERT INTO feedback_replies (feedback_id, user_id, author, body) VALUES ($1,$2,$3,$4) RETURNING id, created_at",
+            fid, req.userId, clean_author, clean_body)
+    return {"status": "success", "id": str(row["id"]), "createdAt": row["created_at"].isoformat()}
+
+
+@app.get("/api/feedback/replies")
+async def list_feedback_replies(uid: str = Depends(firebase_uid)):
+    """Pull incremental das respostas ainda não entregues (doc 10 §4.1).
+
+    Marca como entregue no ato da leitura — a próxima chamada não repete.
+    """
+    if not db_pool:
+        return []
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, feedback_id, author, body, created_at FROM feedback_replies "
+            "WHERE user_id=$1 AND delivered_at IS NULL ORDER BY created_at ASC", uid)
+        if rows:
+            await conn.execute(
+                "UPDATE feedback_replies SET delivered_at=NOW() WHERE user_id=$1 AND delivered_at IS NULL", uid)
+    return [{
+        "id": str(r["id"]),
+        "feedbackId": str(r["feedback_id"]),
+        "author": r["author"],
+        "body": r["body"],
+        "createdAt": r["created_at"].isoformat(),
+    } for r in rows]
 
 # =============================================================
 # ENDPOINTS DE SYNC: EXAMES, MEDICAMENTOS, LIGA, AUDITORIA
@@ -3412,6 +3550,19 @@ async def reset_password(req: PasswordResetRequest, request: Request):
             print(f"[Auth Service] Senha atualizada no Firebase Auth para {identifier}")
         except Exception as e:
             print(f"[Auth Service Firebase Error] {e}")
+
+    # doc 10 §4.5: alerta de segurança ao dono da conta. Se a troca partiu de
+    # um OTP legítimo o e-mail é só um recibo; se partiu de um invasor, o dono
+    # descobre aqui. Best-effort: nunca bloqueia o sucesso da troca.
+    if HAS_EMAIL and 'send_security_alert_email' in globals():
+        try:
+            await send_security_alert_email(
+                identifier,
+                'Sua senha foi alterada',
+                'Sua senha do Braga Saúde foi redefinida agora há pouco. Se você não reconhece esta alteração, sua conta pode estar sendo usada por outra pessoa.',
+            )
+        except Exception as e:
+            print(f"[Auth Service] Falha no e-mail de alerta de segurança: {e}")
 
     return {
         "status": "password_updated",

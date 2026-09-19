@@ -166,7 +166,29 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             updated = await conn.fetchrow("""UPDATE family_bindings SET caregiver_id=$2,
                 caregiver_name=$3, caregiver_relation=$4, status='ACTIVE' WHERE id=$1 RETURNING *""",
                 row['id'], uid, caregiver_name, caregiver_relation)
-            return serialize_binding(updated)
+        # doc 10 §4.3: o paciente precisa saber que alguém aceitou o convite.
+        # Best-effort, fora da transação: falha de push não desfaz o vínculo.
+        if dispatch_push and load_devices and updated is not None:
+            patient_uid = updated['patient_id']
+            devices = load_devices()
+            token = (devices.get(patient_uid) or {}).get('token')
+            if token:
+                try:
+                    await asyncio.to_thread(
+                        dispatch_push,
+                        token=token,
+                        title='Familiar conectado',
+                        body=f'{caregiver_name} aceitou seu convite e agora acompanha sua saúde.',
+                        data={
+                            'type': 'FAMILY_BINDING_ACCEPTED',
+                            'bindingId': str(updated['id']),
+                            'caregiverName': caregiver_name,
+                            'patientId': patient_uid,
+                        },
+                    )
+                except Exception as push_err:
+                    print(f'[FamilyBinding] Falha no push de aceite para {patient_uid}: {push_err}')
+        return serialize_binding(updated)
 
     @app.get('/api/family/bindings/{user_id}')
     async def bindings(user_id: str, uid: str = Depends(firebase_uid)):

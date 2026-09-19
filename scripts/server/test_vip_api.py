@@ -26,12 +26,13 @@ class VipTests(unittest.TestCase):
         self.url = '/api/public/vip-signups'
 
     def test_parameterized_and_identical_response_for_duplicates(self):
-        self.pool.conn.execute.side_effect = ['INSERT 0 1', 'INSERT 0 0']
+        # fetchval com RETURNING (xmax = 0): True = linha nova, None = duplicada.
+        self.pool.conn.fetchval.side_effect = [True, None]
         first = self.client.post(self.url, json=self.body)
         duplicate = self.client.post(self.url, json=self.body)
         self.assertEqual(200, first.status_code)
         self.assertEqual(first.json(), duplicate.json())
-        sql, name, email = self.pool.conn.execute.call_args.args
+        sql, name, email = self.pool.conn.fetchval.call_args.args
         self.assertEqual("Ana O'Brien", name)
         self.assertEqual('ana@example.com', email)
         self.assertNotIn(name, sql)
@@ -51,7 +52,7 @@ class VipTests(unittest.TestCase):
         self.assertEqual(200, self.client.post(self.url, json=self.body, headers={'origin': 'https://braga-saude.web.app'}).status_code)
 
     def test_outage_not_success_or_leaked_database_error(self):
-        self.pool.conn.execute.side_effect = RuntimeError('private database details')
+        self.pool.conn.fetchval.side_effect = RuntimeError('private database details')
         res = self.client.post(self.url, json=self.body)
         self.assertEqual(503, res.status_code)
         self.assertNotIn('private database', res.text)
@@ -66,6 +67,34 @@ class VipTests(unittest.TestCase):
 
     def test_health_does_not_return_contact_data(self):
         self.assertEqual({'status':'ready', 'vip_contract':1}, self.client.get(self.url+'/health').json())
+
+
+class VipNotificationTests(unittest.TestCase):
+    """doc 10 §4.4: inscrição nova avisa o admin e confirma por e-mail."""
+
+    def setUp(self):
+        self.pool = Pool()
+        self.admin = AsyncMock()
+        self.email = AsyncMock()
+        self.app = FastAPI()
+        install_vip_routes(self.app, lambda: self.pool,
+                           notify_admin=self.admin, send_confirmation_email=self.email)
+        self.client = TestClient(self.app)
+        self.body = {'fullName': 'Ana', 'email': 'ana@example.com'}
+
+    def test_new_signup_notifies_admin_and_confirms_email(self):
+        self.pool.conn.fetchval.return_value = True
+        self.assertEqual(200, self.client.post('/api/public/vip-signups', json=self.body).status_code)
+        self.admin.assert_awaited_once()
+        self.assertIn('Ana', self.admin.call_args.args[0])
+        self.email.assert_awaited_once()
+        self.assertEqual(self.email.call_args.args, ('ana@example.com', 'Ana'))
+
+    def test_duplicate_signup_does_not_renotify(self):
+        self.pool.conn.fetchval.return_value = None  # já existia
+        self.assertEqual(200, self.client.post('/api/public/vip-signups', json=self.body).status_code)
+        self.admin.assert_not_awaited()
+        self.email.assert_not_awaited()
 
 
 if __name__ == '__main__': unittest.main()

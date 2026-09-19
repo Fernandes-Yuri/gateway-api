@@ -205,6 +205,57 @@ async def send_welcome_email(to_email: str, user_name: str = "") -> Dict[str, An
     return {"success": success, "channel": "EMAIL", "to": to_email, "purpose": "WELCOME"}
 
 
+async def send_security_alert_email(
+    to_email: str, title: str, detail: str, user_name: str = ""
+) -> Dict[str, Any]:
+    """Alerta de segurança ao próprio usuário (doc 10 §4.5).
+
+    Usado após uma troca de senha bem-sucedida: se não foi o dono da conta, ele
+    descobre pelo e-mail. Sem emojis no título (manual de UX).
+    """
+    subject = f"Aviso de segurança: {title} - Braga Saúde"
+    plain_text = f"Olá{', ' + user_name if user_name else ''}! {title}. {detail}"
+    html = _security_alert_html(title, detail, user_name)
+
+    success = await asyncio.to_thread(_send_gmail_sync, to_email, subject, html, plain_text)
+    return {"success": success, "channel": "EMAIL", "to": to_email, "purpose": "SECURITY_ALERT"}
+
+
+def _security_alert_html(title: str, detail: str, user_name: str) -> str:
+    """Template de alerta de segurança — mesmo visual da marca, sem emojis."""
+    display_name = user_name.split()[0] if user_name else "parceiro(a)"
+    return """<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aviso de segurança - Braga Saúde</title>
+</head>
+<body style="font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,sans-serif; background:#F8FAFC; margin:0; padding:24px;">
+  <div style="max-width:520px; margin:0 auto; background:#FFF; border-radius:16px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.08);">
+    <div style="background:linear-gradient(135deg,#0F766E 0%,#0d5c56 100%); padding:40px 24px; text-align:center; color:#FFF;">
+      <h1 style="margin:0; font-size:24px; font-weight:700;">Aviso de segurança</h1>
+      <p style="margin:8px 0 0 0; font-size:14px; opacity:0.9;">Olá, """ + display_name + """</p>
+    </div>
+    <div style="padding:32px 28px;">
+      <p style="font-size:16px; line-height:1.7; color:#334155; margin-bottom:16px;">
+        <strong>""" + title + """</strong>
+      </p>
+      <p style="font-size:15px; line-height:1.7; color:#475569; margin-bottom:24px;">
+        """ + detail + """
+      </p>
+      <div style="background:#FEF2F2; border-radius:8px; padding:14px 16px; font-size:14px; color:#7F1D1D; line-height:1.6; border-left:4px solid #DC2626;">
+        <strong>Não foi você?</strong> Entre em contato imediatamente com nosso suporte e altere sua senha novamente.
+      </div>
+    </div>
+    <div style="background:#F1F5F9; padding:20px; text-align:center; font-size:12px; color:#64748B; border-top:1px solid #E2E8F0;">
+      Esta é uma mensagem automática do Braga Saúde. Não responda a este e-mail.
+    </div>
+  </div>
+</body>
+</html>"""
+
+
 # ==================== INTERFACE LEGADA (compatibilidade com server.py) ====================
 
 async def send_security_code_email(to_email: str, code: str, purpose: str = "EMAIL_VERIFICATION") -> Dict[str, Any]:

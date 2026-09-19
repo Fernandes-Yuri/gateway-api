@@ -43,7 +43,7 @@ class VipRateLimit:
             self.hits.append((now, peer))
 
 
-def install_vip_routes(app, get_pool):
+def install_vip_routes(app, get_pool, notify_admin=None, send_confirmation_email=None):
     limiter = VipRateLimit()
     origins = set(os.getenv('VIP_ALLOWED_ORIGINS', 'https://braga-saude.web.app,https://braga-saude.firebaseapp.com').split(','))
     origins = {origin.strip().rstrip('/') for origin in origins if origin.strip()}
@@ -69,14 +69,36 @@ def install_vip_routes(app, get_pool):
         pool = get_pool()
         if pool is None:
             raise HTTPException(503, 'Cadastro temporariamente indisponível. Tente novamente.')
+        is_new = False
         try:
             async with pool.acquire() as conn:
                 # UNIQUE + ON CONFLICT is atomic, including simultaneous requests.
                 # Existing names are not overwritten; response never reveals membership.
-                await conn.execute('INSERT INTO vip_signups(full_name,email) VALUES($1,$2) ON CONFLICT(email) DO NOTHING', name, email)
+                tag = await conn.fetchval(
+                    'INSERT INTO vip_signups(full_name,email) VALUES($1,$2) '
+                    'ON CONFLICT(email) DO NOTHING RETURNING (xmax = 0) AS inserted',
+                    name, email)
+                is_new = bool(tag)
         except Exception as error:
             log.warning('VIP persistence failed (%s)', type(error).__name__)
             raise HTTPException(503, 'Cadastro temporariamente indisponível. Tente novamente.') from error
+
+        # doc 10 §4.4: avisa o admin por WhatsApp e confirma por e-mail — mas só
+        # numa inscrição NOVA. Repetição do mesmo e-mail não renotifica. Tudo
+        # best-effort: a inscrição já está persistida.
+        if is_new:
+            if notify_admin is not None:
+                try:
+                    await notify_admin(
+                        f'[Braga VIP] Nova inscrição: {name} <{email}>. '
+                        f'Entre em contato para o convite.')
+                except Exception as error:
+                    log.warning('VIP admin notify failed (%s)', type(error).__name__)
+            if send_confirmation_email is not None:
+                try:
+                    await send_confirmation_email(email, name)
+                except Exception as error:
+                    log.warning('VIP confirmation email failed (%s)', type(error).__name__)
         return SUCCESS
 
     @app.get('/api/public/vip-signups/health')
