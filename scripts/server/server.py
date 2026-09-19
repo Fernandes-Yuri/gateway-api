@@ -127,6 +127,19 @@ try:
 except ImportError:
     HAS_WHATSAPP = False
 
+# ---------------------------------------------------------------------------
+# PAUSA TEMPORARIA DO CANAL WHATSAPP PARA OTP (18/09/2026)
+# ---------------------------------------------------------------------------
+# A Meta nao aprova os templates de autenticacao e a conta business ainda nao
+# foi verificada, entao o codigo OTP por WhatsApp nunca chegava ao usuario.
+# O app agora usa SOMENTE e-mail para OTP. O canal WhatsApp foi pausado aqui
+# (nao removido): o codigo continua intacto para religar assim que a Meta
+# liberar o template.
+#
+# Para religar: basta colocar WHATSAPP_OTP_PAUSED = False.
+# ---------------------------------------------------------------------------
+WHATSAPP_OTP_PAUSED = True
+
 # Suporte defensivo a asyncpg para PostgreSQL
 try:
     import asyncpg
@@ -306,7 +319,7 @@ class WhatsAppSendRequest(BaseModel):
 class OtpSendRequest(BaseModel):
     identifier: str  # E-mail ou Telefone
     purpose: Optional[str] = "EMAIL_VERIFICATION"  # "EMAIL_VERIFICATION" ou "PASSWORD_RESET"
-    channel: Optional[str] = "EMAIL"  # "EMAIL" ou "WHATSAPP"
+    channel: Optional[str] = "EMAIL"  # "EMAIL" ou "WHATSAPP" (WHATSAPP pausado — ver WHATSAPP_OTP_PAUSED)
 
 class OtpVerifyRequest(BaseModel):
     identifier: str
@@ -2281,7 +2294,10 @@ def whatsapp_status():
         "status": "online" if HAS_WHATSAPP else "module_missing",
         "official_number": "+55 (11) 96780-8252",
         "phone_number_id": WHATSAPP_PHONE_NUMBER_ID if HAS_WHATSAPP else None,
-        "active": HAS_WHATSAPP
+        "active": HAS_WHATSAPP,
+        # OTP por WhatsApp esta pausado (Meta nao aprova template); o gateway
+        # so despacha OTP por e-mail ate a Meta liberar a conta business.
+        "otp_channel_paused": WHATSAPP_OTP_PAUSED
     }
 
 @app.post("/api/whatsapp/send")
@@ -3131,6 +3147,14 @@ async def send_auth_otp(request: Request, req: OtpSendRequest, background_tasks:
 
     if channel not in ("EMAIL", "WHATSAPP"):
         raise HTTPException(status_code=400, detail="Canal inválido. Utilize 'EMAIL' ou 'WHATSAPP'.")
+
+    # Canal WhatsApp pausado temporariamente (Meta nao aprova template de OTP).
+    # O codigo abaixo esta intacto e pode ser religado com WHATSAPP_OTP_PAUSED = False.
+    if channel == "WHATSAPP" and WHATSAPP_OTP_PAUSED:
+        raise HTTPException(
+            status_code=503,
+            detail="Canal WhatsApp temporariamente indisponível. Utilize o canal EMAIL."
+        )
 
     # Impede custos e acesso ao banco antes de gerar/enviar um novo OTP.
     client_ip = get_client_ip(request)
