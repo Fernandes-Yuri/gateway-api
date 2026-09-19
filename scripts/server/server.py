@@ -764,9 +764,26 @@ def dispatch_push(token: str, title: str, body: str, data: Dict[str, str] = None
                   include_notification: bool = True) -> bool:
     if HAS_FCM:
         try:
+            # Prioridade ALTA e canal explicito: sem isso o Android em repouso
+            # (Doze) nao acorda e a mensagem fica enfileirada silenciosamente.
+            # O canal family_alerts e o padrao declarado no AndroidManifest
+            # (com.google.firebase.messaging.default_notification_channel_id).
+            android_cfg = messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    channel_id="bragasaude_family_alerts",
+                    priority="high",
+                    sound="default",
+                    # Mantem o tipo no payload: com app fechado o SO desenha o
+                    # balao (onMessageReceived nao roda); com app aberto o
+                    # service le data["type"] e faz o deep link.
+                    click_action="OPEN_FAMILY_MESSAGES" if (data or {}).get("type") == "FAMILY_MESSAGE" else None,
+                ),
+            )
             message = messaging.Message(
                 notification=messaging.Notification(title=title, body=body) if include_notification else None,
                 data=data or {},
+                android=android_cfg,
                 token=token
             )
             messaging.send(message)
@@ -3878,10 +3895,14 @@ async def broadcast_app_update(req: BroadcastUpdateRequest, request: Request):
             token=token,
             title=req.title,
             body=req.message,
-            # doc 10 §1B.4: data-only faz o onMessageReceived ser invocado mesmo em
-            # background, garantindo que o toque abra o download (payload de
-            # notificação na bandeja abriria só a tela principal).
-            include_notification=False,
+            # HIBRIDO (correcao da Causa 3): data-only puro nao acorda um app em
+            # estado STOPPED (fechado pelo usuario) — o Android so entrega a
+            # mensagem de dados se o processo estiver vivo ou a prioridade for
+            # alta o suficiente, e em muitas fabricantes nem assim. Mandando
+            # TAMBEM a notificacao, o proprio Google Play Services desenha o
+            # balão com o link de download; o data continua la para o caso do
+            # app estar aberto (deep link pelo onMessageReceived).
+            include_notification=True,
             data={
                 "type": "APP_UPDATE",
                 "title": req.title,
