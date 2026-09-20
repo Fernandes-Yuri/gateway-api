@@ -8,7 +8,7 @@ import re
 import time
 import asyncio
 from collections import deque
-from typing import Dict, Deque, Optional, Tuple, Any
+from typing import Dict, Deque, Optional, Tuple
 from fastapi import HTTPException, Request
 
 # =============================================================

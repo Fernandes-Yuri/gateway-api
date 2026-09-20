@@ -7,12 +7,12 @@ import secrets
 import random
 import uuid
 import time
-from collections import deque
+# AUD-G(B): deque/Deque e RedirectResponse mortos — so o import, sem uso.
 from datetime import datetime, date, timedelta
-from typing import Deque, List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from profile_contract import profile_upsert

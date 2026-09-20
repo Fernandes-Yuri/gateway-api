@@ -10,7 +10,7 @@ gateway. Ele:
 Arquitetura temporaria, ate a Meta aprovar o template de autenticacao.
 """
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional, Tuple  # AUD-G(B): Dict morto
 
 from wa_link_totp import (
     TOTP_STEP_SECONDS,

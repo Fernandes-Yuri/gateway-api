@@ -13,7 +13,7 @@ Seguranca (fail-closed):
   * so age sobre arquivos .apk dentro de RELEASES_DIR.
 """
 import os
-from datetime import datetime, timezone
+from datetime import datetime  # AUD-G(B): timezone morto
 
 KEEP_RELEASES = 3
 

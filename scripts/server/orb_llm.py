@@ -11,7 +11,8 @@ então o cliente Android não muda.
 
 import json
 import re
-from braga_persona import PERSONA
+# AUD-G(B): PERSONA importado mas nunca referenciado — a persona real entra
+# via build_conversation_system (conversation_policy).
 from conversation_policy import APP_SYSTEM, build_conversation_system
 
 LABELS = ("CONVERSA", "CONSULTAR_METRICAS", "LEMBRETES", "EXAMES", "EMERGENCIA")

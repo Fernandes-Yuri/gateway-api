@@ -190,7 +190,8 @@ def run_offline():
 def run_live():
     import os
     import httpx
-    from orb_llm import (SPEAK_SYSTEM, build_classify_payload, build_speak_payload)
+    # AUD-G(B): SPEAK_SYSTEM removido do import — nao era usado neste bloco.
+    from orb_llm import (build_classify_payload, build_speak_payload)
     key = os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN")
     url = "https://api.groq.com/openai/v1/chat/completions"
     model = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
