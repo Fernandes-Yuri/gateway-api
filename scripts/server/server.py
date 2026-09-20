@@ -1748,15 +1748,14 @@ def trigger_emergency(req: EmergencyTriggerRequest, uid: str = Depends(firebase_
             sent_count += 1
     return {"status": "emergency_broadcasted", "notified": sent_count}
 
-# PADRÕES HEURÍSTICOS DE INJEÇÃO DE PROMPT
-INJECTION_PATTERNS = [
-    re.compile(r"(?i)(ignore|esqueça|desconsidere|ignora)\s+(todas\s+as\s+|tudo|os\s+|as\s+)?(instruções|regras|comandos|prompts|limites)"),
-    re.compile(r"(?i)(modo\s+desenvolvedor|developer\s+mode|dan\s+mode|jailbreak|root\s+access|system\s+override)"),
-    re.compile(r"(?i)(aja\s+como|haja\s+como|finja\s+ser|você\s+agora\s+é|act\s+as|pretend\s+to\s+be|roleplay\s+as)\s+(um\s+|uma\s+)?(médico|doutor|cardiologista|especialista|hacker|administrador)"),
-    re.compile(r"(?i)(qual\s+é\s+o\s+seu\s+prompt|mostre\s+o\s+seu\s+prompt|repita\s+as\s+instruções|system\s+prompt|reveal\s+your\s+prompt)"),
-    re.compile(r"(?i)(receite\s+um\s+remédio|qual\s+remédio\s+tomar|prescreva\s+|qual\s+dosagem\s+de\s+|me\s+dê\s+uma\s+receita)"),
-    re.compile(r"(?i)(cont[ea](r)?\s+(de\s+\d+\s+)?(at[ée]|a)\s+\d+|cont[ea](r)?\s+at[ée]\s+\d+|escreva\s+um\s+livro|escreva\s+um\s+poema\s+gigante|repita\s+isso\s+100|gere\s+um\s+texto\s+de\s+[0-9]+\s+linhas)")
-]
+# AUD-G27: REMOVIDA a cópia local de INJECTION_PATTERNS e is_prompt_injection.
+# Ela sombreava a importação de security_defense.py (linha 56-62) sendo uma
+# versão REGREDIDA — 6 padrões contra 7, sem o bloco de TOKENS ESPECIAIS de
+# modelo (<|im_start|>, <|im_end|>, [INST], <<SYS>>), sem as variantes em
+# inglês (forget/bypass/all) e sem a guarda de tipo. Resultado: as rotas que
+# mais usam essa checagem (chat WhatsApp, /v1/chat/completions, Orb) eram as
+# MENOS protegidas — a doc 03_PWA...:2.4 prometia bloqueio de <|im_start|>
+# que nunca acontecia por aqui. Agora só existe UMA definição, a completa.
 
 def get_friendly_safety_response(text: str) -> dict:
     t = text.lower()
@@ -1778,11 +1777,8 @@ def get_friendly_safety_response(text: str) -> dict:
         "parametros": {}
     }
 
-def is_prompt_injection(text: str) -> bool:
-    for pattern in INJECTION_PATTERNS:
-        if pattern.search(text):
-            return True
-    return False
+# AUD-G27: is_prompt_injection local REMOVIDO — usa o importado de
+# security_defense.py (7 padrões, com tokens especiais de modelo).
 
 from braga_persona import PERSONA
 
