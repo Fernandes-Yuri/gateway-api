@@ -18,6 +18,20 @@ import uuid
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple
+try:
+    from zoneinfo import ZoneInfo
+    _TZ_BRASIL = ZoneInfo("America/Sao_Paulo")
+except Exception:  # pragma: no cover - fallback sem zoneinfo (Windows antigo)
+    _TZ_BRASIL = timezone(timedelta(hours=-3))  # BRT fixo
+
+def agora_brasil() -> datetime:
+    """Hora atual no fuso brasileiro (BRT, America/Sao_Paulo).
+
+    AUD-G03: o público é 100% Brasil; o diálogo de voz ("quinta às 14h", "hoje")
+    precisa ser resolvido e gravado em hora local, não em UTC — senão toda
+    consulta fica 3h deslocada e "hoje"/"quinta" trocam de dia perto da meia-noite.
+    """
+    return datetime.now(_TZ_BRASIL)
 
 # Estado de rascunho: scope_key -> (draft, expiry_ts)
 _PENDING_SCHEDULES: Dict[str, Tuple[dict, float]] = {}
@@ -201,7 +215,7 @@ def extrair_data_hora(texto: str, agora: datetime | None = None) -> tuple:
     Ordem de tentativa: dia da semana > prazo relativo > dia do mes > hora so.
     """
     if agora is None:
-        agora = datetime.now(timezone.utc)
+        agora = agora_brasil()
 
     baixa = _sem_acento(texto)
 
@@ -268,7 +282,7 @@ def extrair_data_hora(texto: str, agora: datetime | None = None) -> tuple:
                     ano += 1
             try:
                 alvo = datetime(ano, mes_alvo, dia, hh if hh >= 0 else 9,
-                                mm if mm >= 0 else 0, tzinfo=timezone.utc)
+                                mm if mm >= 0 else 0, tzinfo=_TZ_BRASIL)
                 if hh >= 0:
                     return alvo, alvo.strftime("%d/%m %Hh%M")
                 return None, None
@@ -348,7 +362,7 @@ async def _montar_rascunho(conn, uid_cuidador, patient_id, texto_falado,
                         "da hora. Pode dizer, por exemplo: “quinta-feira às 14h”?",
                 "acao": "AGENDAR_FALHA", "parametros": {"titulo": titulo}}
 
-    if quando < datetime.now(timezone.utc):
+    if quando < agora_brasil():
         return {"fala": "Essa data já passou. Quer agendar para outra data?",
                 "acao": "AGENDAR_FALHA", "parametros": {}}
 

@@ -176,6 +176,7 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
                 is_cloud_stored = EXCLUDED.is_cloud_stored,
                 cloud_consent_accepted = EXCLUDED.cloud_consent_accepted,
                 status = 'confirmed'
+            WHERE exams.user_id = $2
             RETURNING id;
             """
             await conn.fetchrow(
@@ -277,6 +278,7 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
                 category = EXCLUDED.category,
                 exam_date = EXCLUDED.exam_date,
                 status = 'confirmed'
+            WHERE exams.user_id = $2
             RETURNING id;
             """
             await conn.fetchrow(exam_query, parsed_exam_id, uid, clean_title, clean_category, parsed_date, now)

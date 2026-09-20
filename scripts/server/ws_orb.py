@@ -124,6 +124,9 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
                      temperature=req.temperature, max_tokens=req.max_tokens)
         _TID_BY_REQ[req.id] = tid
         if any(injection_check(m.content) for m in req.messages if m.role == 'user'):
+            # AUD-G01-adjacente: limpa a chave de rastreio antes do early-return,
+            # senão o dict global _TID_BY_REQ cresce sem limite (DoS de RAM).
+            _TID_BY_REQ.pop(req.id, None)
             from server import get_friendly_safety_response
             user_msg = next((m.content for m in reversed(req.messages) if m.role == 'user'), "")
             friendly = get_friendly_safety_response(user_msg)

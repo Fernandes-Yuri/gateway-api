@@ -7,6 +7,7 @@ etapas habilitada, e guarde-a fora do repositório.
 
 import os
 import asyncio
+import html
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -105,7 +106,9 @@ def _reset_html(code: str) -> str:
 
 def _welcome_html(user_name: str) -> str:
     """Template de boas-vindas — verde esmeralda da marca."""
-    display_name = user_name.split()[0] if user_name else "parceiro(a)"
+    # AUD-G05: display_name vem do Firebase Auth (controlado pelo próprio usuário);
+    # escapar antes de concatenar no HTML (stored injection).
+    display_name = html.escape(user_name.split()[0]) if user_name else "parceiro(a)"
     return """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -223,7 +226,11 @@ async def send_security_alert_email(
 
 def _security_alert_html(title: str, detail: str, user_name: str) -> str:
     """Template de alerta de segurança — mesmo visual da marca, sem emojis."""
-    display_name = user_name.split()[0] if user_name else "parceiro(a)"
+    # AUD-G05: display_name vem do Firebase Auth; title/detail também são escapados
+    # (hoje são constantes do servidor, mas a defesa é por camadas).
+    display_name = html.escape(user_name.split()[0]) if user_name else "parceiro(a)"
+    title = html.escape(title)
+    detail = html.escape(detail)
     return """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>

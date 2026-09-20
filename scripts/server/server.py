@@ -954,6 +954,33 @@ async def get_profile(user_id: str, uid: str = Depends(firebase_uid)):
             d["updated_at"] = d["updated_at"].isoformat()
         return d
 
+@app.delete("/api/profile/{user_id}", status_code=status.HTTP_200_OK)
+async def delete_profile(user_id: str, uid: str = Depends(firebase_uid)):
+    """Direito ao Esquecimento — LGPD Art. 18.
+
+    AUD-AN16: o app chamava deleteProfileRemotely() que era um no-op retornando
+    true; o usuário excluía a conta e todo o PHI permanecia no RDS. Agora o app
+    chama este endpoint. Só o PRÓPRIO dono pode excluir (cuidador não pode
+    apagar a conta do paciente); ON DELETE CASCADE remove as 14 tabelas filhas.
+    """
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Banco local offline")
+    if uid != user_id:
+        raise HTTPException(status_code=403, detail="Apenas o próprio dono pode excluir a conta.")
+    try:
+        target = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ID de usuário inválido.")
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT id FROM profiles WHERE id = $1", target)
+        if not row:
+            raise HTTPException(status_code=404, detail="Perfil não encontrado.")
+        await conn.execute("DELETE FROM profiles WHERE id = $1", target)
+
+    print(f"[LGPD] Conta excluída (Direito ao Esquecimento): {user_id}")
+    return {"success": True, "deleted": True, "user_id": user_id}
+
 @app.post("/api/sync/vitals")
 async def sync_vital_sign(
     v: VitalSignSyncDto,
@@ -3883,13 +3910,18 @@ class BroadcastUpdateRequest(BaseModel):
 async def broadcast_app_update(req: BroadcastUpdateRequest, request: Request):
     """Dispara notificação push de atualização para todos os dispositivos registrados.
 
-    Segurança (doc 10 §1B.3): broadcast é operação administrativa. Aceita chamadas
-    locais (o pipeline de release da EC2 chama por 127.0.0.1, sem token) ou, da
-    internet, um token Firebase válido — nunca broadcast anônimo.
+    Segurança (doc 10 §1B.3): broadcast é operação administrativa. Exige um token
+    administrativo real (ADMIN_API_TOKEN do env), independentemente do peer — atrás
+    do túnel Cloudflare TODA requisição chega com client.host == "127.0.0.1", então
+    o critério "chamada local" nunca pode ser usado como autenticação (AUD-G01).
     """
-    is_local = request.client is not None and request.client.host in ("127.0.0.1", "::1", "localhost")
-    if not is_local:
-        await firebase_uid(request)
+    admin_token = os.getenv("ADMIN_API_TOKEN", "")
+    if not admin_token:
+        # Sem token admin configurado: recurso desativado em vez de aberto.
+        raise HTTPException(503, "Broadcast administrativo indisponível: ADMIN_API_TOKEN não configurado.")
+    supplied = request.headers.get("Authorization", "")
+    if supplied != f"Bearer {admin_token}":
+        raise HTTPException(401, "Não autorizado.")
     devices = load_devices()
     sent_count = 0
     errors = []
