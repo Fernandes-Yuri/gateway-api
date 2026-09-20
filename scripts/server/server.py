@@ -2935,6 +2935,16 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     # Primária: whatsapp_phone (vínculo verificado por TOTP, new).
                     # Fallback (transição): busca legada por sufixo de 8 dígitos,
                     # mantida até as contas existentes migrarem para o vínculo novo.
+                    #
+                    # AUD-G10: o fallback compara os ÚLTIMOS 8 dígitos contra
+                    # phone/emergency_contact_phone com LIKE '%sufixo%' — o que
+                    # casa QUALQUER aparição do sufixo em QUALQUER posição. Dois
+                    # números diferentes que coincidem nos 8 finais (ou até
+                    # contém o trecho) apontavam para o mesmo paciente, e um
+                    # estranho podia se passar por usuário cadastrado. Agora a
+                    # associação legada exige o número COMPLETO (mesma
+                    # quantidade de dígitos), e logswarn avisam que o caminho
+                    # ainda está em uso para que a migração seja concluída.
                     user_id = None
                     user_name = None
                     user_role = None
@@ -2947,18 +2957,26 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                     "WHERE regexp_replace(whatsapp_phone, '\\D', '', 'g') = $1",
                                     _wa_digits
                                 )
-                                if not p_row:
-                                    clean_digits = "".join(filter(str.isdigit, sender_phone))
-                                    last_8 = clean_digits[-8:] if len(clean_digits) >= 8 else clean_digits
+                                if not p_row and _wa_digits:
+                                    # AUD-G10: match EXATO do número completo
+                                    # (igualdade de dígitos), nunca substring.
                                     p_row = await conn.fetchrow(
-                                        "SELECT id, full_name, user_role FROM profiles WHERE regexp_replace(phone, '\\D', '', 'g') LIKE '%' || $1 || '%' LIMIT 1",
-                                        last_8
+                                        "SELECT id, full_name, user_role FROM profiles "
+                                        "WHERE regexp_replace(phone, '\\D', '', 'g') = $1",
+                                        _wa_digits
                                     )
-                                if not p_row:
-                                    p_row = await conn.fetchrow(
-                                        "SELECT id, full_name, user_role FROM profiles WHERE regexp_replace(emergency_contact_phone, '\\D', '', 'g') LIKE '%' || $1 || '%' LIMIT 1",
-                                        last_8
-                                    )
+                                    if not p_row:
+                                        p_row = await conn.fetchrow(
+                                            "SELECT id, full_name, user_role FROM profiles "
+                                            "WHERE regexp_replace(emergency_contact_phone, '\\D', '', 'g') = $1",
+                                            _wa_digits
+                                        )
+                                    if p_row:
+                                        print(
+                                            f"[AUD-G10] Conta {p_row['id']} acessada pelo fallback "
+                                            f"legado (phone completo) — número sem vínculo TOTP. "
+                                            f"Migrar para whatsapp_link."
+                                        )
                                 if p_row:
                                     user_id = p_row["id"]
                                     user_name = p_row["full_name"]
@@ -3284,19 +3302,23 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
             return
         
         # Buscar usuário pelo telefone
+        # AUD-G10: era LIKE '%' || $1 com os últimos 8 dígitos — correspondência
+        # parcial que podia caslar a conta errada. Agora exige o número completo.
         user_id = None
+        _cb_digits = "".join(filter(str.isdigit, sender_phone or ""))
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow("""
-                SELECT id FROM profiles 
-                WHERE regexp_replace(phone, '\\D', '', 'g') LIKE '%' || $1
+                SELECT id FROM profiles
+                WHERE regexp_replace(whatsapp_phone, '\\D', '', 'g') = $1
+                   OR regexp_replace(phone, '\\D', '', 'g') = $1
                 LIMIT 1
-            """, sender_phone[-8:])
+            """, _cb_digits)
             if not row:
                 row = await conn.fetchrow("""
-                    SELECT id FROM profiles 
-                    WHERE regexp_replace(emergency_contact_phone, '\\D', '', 'g') LIKE '%' || $1
+                    SELECT id FROM profiles
+                    WHERE regexp_replace(emergency_contact_phone, '\\D', '', 'g') = $1
                     LIMIT 1
-                """, sender_phone[-8:])
+                """, _cb_digits)
             if row:
                 user_id = row['id']
         

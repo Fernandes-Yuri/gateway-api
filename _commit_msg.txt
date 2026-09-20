@@ -1,0 +1,16 @@
+fix(audit-G): 3 ALTAS restantes da auditoria 20/09 (parte 3)
+
+AUD-G10 associacao de conta por sufixo de 8 digitos rebaixava o gate de
+  conta vinculada: buscas legadas usavam LIKE '%' || sufixo contra phone e
+  emergency_contact_phone — correspondencia PARCIAL que casava numeros
+  diferentes nos mesmos 8 finais (e em qualquer posicao). Um estranho podia
+  ser reconhecido como paciente cadastrado. Agora toda associacao legada
+  exige o numero COMPLETO (igualdade de digitos), e o caminho legado loga
+  avisando para migrar o vinculo TOTP. Corrigido em 2 pontos: webhook do
+  WhatsApp e callback de confirmacao de botao.
+
+AUD-G20 exam_cloud_consents.exam_id era UUID NOT NULL sem FK. A linha de
+  consentimento (que guarda IP e fingerprint — dado sensivel) ficava orfa
+  para sempre quando um exame era apagado; nem a exclusao em cascata do
+  perfil a alcancava. Nova migration 013 adiciona a FK com ON DELETE
+  CASCADE (apos limpar linhas orfas existentes).
