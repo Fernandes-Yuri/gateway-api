@@ -52,6 +52,29 @@ async def run_status():
     finally:
         await conn.close()
 
+def _psql_dsn_without_password() -> tuple[str, dict]:
+    """AUD-G(M): devolve (dsn sem senha, env com PGPASSWORD).
+
+    Antes a URL completa — incluindo a senha do RDS — era passada como
+    argumento do psql, expondo a credencial a qualquer usuario do host via
+    `ps aux` (ficou visivel no processo da pipeline de deploy).
+    """
+    import urllib.parse
+
+    env = dict(os.environ)
+    parsed = urllib.parse.urlparse(DATABASE_URL)
+    if parsed.password:
+        env["PGPASSWORD"] = urllib.parse.unquote(parsed.password)
+    # Reconstrói o DSN SEM a senha: scheme://user@host:port/path?params
+    netloc = parsed.hostname or ""
+    if parsed.port:
+        netloc += f":{parsed.port}"
+    if parsed.username:
+        netloc = f"{urllib.parse.quote(parsed.username, safe='')}@{netloc}"
+    dsn_safe = urllib.parse.urlunparse(parsed._replace(netloc=netloc))
+    return dsn_safe, env
+
+
 async def run_migrate():
     if not DATABASE_URL:
         print("[Error] DATABASE_URL nao configurada.")
@@ -79,8 +102,13 @@ async def run_migrate():
             import shutil, subprocess
             applied_successfully = False
             if shutil.which("psql"):
-                cmd = ["psql", DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-f", str(f)]
-                res = subprocess.run(cmd, capture_output=True, text=True)
+                # AUD-G(M): antes a senha do RDS vinha na linha de comando do
+                # psql (argv) — visivel para QUALQUER usuario do host em
+                # `ps aux` / `ps -ef`. Agora ela viaja so no ambiente (PGPASSWORD),
+                # e o DSN passado ao psql nao carrega credencial.
+                dsn_safe, psql_env = _psql_dsn_without_password()
+                cmd = ["psql", dsn_safe, "-v", "ON_ERROR_STOP=1", "-f", str(f)]
+                res = subprocess.run(cmd, capture_output=True, text=True, env=psql_env)
                 if res.returncode == 0:
                     await conn.execute(
                         "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING;",

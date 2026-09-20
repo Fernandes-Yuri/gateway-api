@@ -619,6 +619,17 @@ async def startup():
         if db_pool:
             await rate_limiter.load_blocked_ips_from_db(db_pool)
 
+            # AUD-G(M): expire_pending_confirmations() (migration 004:63-71)
+            # existia mas nunca era chamada. Confirmações vencidas ficavam
+            # status='pending' para sempre — índice parcial
+            # idx_pending_conf_expires e o relatório v_confirmation_report
+            # acumulavam lixo. Expira a cada boot do serviço.
+            try:
+                async with db_pool.acquire() as conn:
+                    await conn.execute("SELECT expire_pending_confirmations()")
+            except Exception as e:
+                print(f"[Startup] Aviso: função expire_pending_confirmations() indisponível: {e}")
+
         # Inicializa cache assíncrono de áudios engatilhados
         asyncio.create_task(init_fast_lane_audio_cache())
 
@@ -3296,6 +3307,17 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
         if not db_pool:
             print("[Callback Error] db_pool não disponível")
             return
+
+        # AUD-G(M): a função expire_pending_confirmations() existia no banco
+        # (migration 004:63-71) mas NINGUÉM a chamava — confirmações vencidas
+        # ficavam com status='pending' para sempre, poluindo o índice parcial
+        # idx_pending_conf_expires e o relatório v_confirmation_report.
+        # Expira aqui (cada callback é o momento natural de limpeza).
+        try:
+            async with db_pool.acquire() as _c:
+                await _c.execute("SELECT expire_pending_confirmations()")
+        except Exception as _e:
+            print(f"[Callback] Aviso: não expirou pendências vencidas: {_e}")
         
         # Buscar usuário pelo telefone
         # AUD-G10: era LIKE '%' || $1 com os últimos 8 dígitos — correspondência

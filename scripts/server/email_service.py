@@ -180,7 +180,11 @@ def _send_gmail_sync(to_email: str, subject: str, html_content: str, text_conten
 
 async def send_otp_email(to_email: str, code: str) -> Dict[str, Any]:
     """Envia e-mail de verificação de cadastro (OTP)."""
-    subject = f"Seu código de verificação: {code} - Braga Saúde"
+    # AUD-G(M): o OTP ia no ASSUNTO — clientes de e-mail mostram o assunto na
+    # tela de bloqueio, na notificação do app e na prévia da caixa; o código
+    # ficava legível sem abrir a mensagem (e assuntos são indexados/pesquisados).
+    # Agora o código só existe no CORPO.
+    subject = "Seu código de verificação - Braga Saúde"
     plain_text = f"Seu código de verificação do Braga Saúde é: {code}. Válido por 15 minutos."
     html = _otp_html(code)
 
@@ -190,7 +194,8 @@ async def send_otp_email(to_email: str, code: str) -> Dict[str, Any]:
 
 async def send_password_reset_email(to_email: str, code: str) -> Dict[str, Any]:
     """Envia e-mail de recuperação de senha (OTP)."""
-    subject = f"Recupere sua senha: {code} - Braga Saúde"
+    # AUD-G(M): idem — OTP fora do assunto, só no corpo.
+    subject = "Recupere sua senha - Braga Saúde"
     plain_text = f"Seu código de recuperação de senha do Braga Saúde é: {code}. Válido por 15 minutos."
     html = _reset_html(code)
 
