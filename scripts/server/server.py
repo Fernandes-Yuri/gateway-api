@@ -259,6 +259,13 @@ install_vip_routes(
 install_preference_routes(app, lambda: db_pool)
 WHATSAPP_EVENT_LOG: List[Dict[str, Any]] = []
 
+# AUD-G(M): outbox durável do webhook. Antes o handler ackava 200 para a Meta
+# e só DEPOIS processava numa BackgroundTask — se o processo caísse nesse meio,
+# a mensagem era perdida para sempre (a Meta não reenvia quem já recebeu 200).
+# O WHATSAPP_EVENT_LOG é só diagnóstico e vive em memória. Este arquivo JSONL é
+# o registro de recuperação: escrito ANTES do ack, sobrevive a crash/restart.
+WEBHOOK_OUTBOX_PATH = os.path.join(PROJECT_ROOT, "webhook_outbox.log")
+
 
 rate_limiter = StrictRateLimiter()
 
@@ -3275,11 +3282,24 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
 
     try:
         body = json.loads(raw_body.decode("utf-8"))
+        # AUD-G(M): persiste o evento BRUTO no outbox ANTES de ackar. Se o
+        # processo cair entre este ponto e o retorno 200, a mensagem se perde
+        # (a Meta não reenvia quem ackou). Falha aqui é só warning — melhor
+        # processar sem registro que perder a mensagem inteira.
+        try:
+            with open(WEBHOOK_OUTBOX_PATH, "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({
+                    "ts": datetime.utcnow().isoformat(),
+                    "payload": body,
+                }, ensure_ascii=False) + "\n")
+        except Exception as _e:
+            print(f"[WhatsApp Webhook] Aviso: não gravou no outbox: {_e}")
+
         WHATSAPP_EVENT_LOG.append({
             "timestamp": datetime.utcnow().isoformat(),
             "payload": body
         })
-        if len(WHATSAPP_EVENT_LOG) > 20:
+        if len(WHATSAPP_EVENT_LOG) > 200:
             WHATSAPP_EVENT_LOG.pop(0)
         
         # Detectar cliques em botões interativos (confirmação)
