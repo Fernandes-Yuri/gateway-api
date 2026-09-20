@@ -107,6 +107,14 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             raise HTTPException(503, 'Banco indisponível. Tente novamente.')
         return value
 
+    def _parse_uuid(value: str):
+        """AUD-G14: uuid.UUID() sem guarda transforma input inválido em 500
+        (stack trace no log). Devolve 422, que é o correto para input ruim."""
+        try:
+            return uuid.UUID(value)
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(422, 'ID inválido.')
+
     @app.post('/api/sync/family-binding')
     async def sync_binding(b: binding_model, request: Request, uid: str = Depends(firebase_uid)):
         client_ip = get_client_ip(request)
@@ -114,7 +122,7 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             await rate_limiter.check("family_binding_ip", client_ip, limit=10, window_seconds=60, ip=client_ip, pool=pool())
         async with pool().acquire() as conn, conn.transaction():
             if b.status == 'REVOKED':
-                row = await conn.fetchrow('SELECT * FROM family_bindings WHERE id=$1 FOR UPDATE', uuid.UUID(b.id))
+                row = await conn.fetchrow('SELECT * FROM family_bindings WHERE id=$1 FOR UPDATE', _parse_uuid(b.id))
                 if not row or uid not in (row['patient_id'], row['caregiver_id']):
                     raise HTTPException(403, 'Vínculo indisponível.')
                 await conn.execute("UPDATE family_bindings SET status='REVOKED' WHERE id=$1", row['id'])
@@ -127,7 +135,7 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                 raise HTTPException(422, 'Código inválido.')
             if not await conn.fetchval('SELECT self_care_complete FROM profiles WHERE id=$1', uid):
                 raise HTTPException(409, 'Conclua e sincronize seu perfil antes de criar um convite.')
-            binding_id = uuid.UUID(b.id) if b.id else uuid.uuid4()
+            binding_id = _parse_uuid(b.id) if b.id else uuid.uuid4()
             now = datetime.now(timezone.utc)
             # Sanitização Zero-Trust
             caregiver_name = sanitize_zero_trust_text(b.caregiverName, max_length=100, field_name="caregiverName", ip=client_ip, rate_limiter=rate_limiter, pool=pool())

@@ -124,6 +124,14 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
 
         # Leitura e gravação do binário caso o usuário tenha consentido com nuvem
         if cloud_consent:
+            # AUD-G06: antes fazia await file.read() do body INTEIRO e só depois
+            # checava o tamanho — um atacante podia esgotar a RAM enviando 500MB
+            # (limite só era aplicado depois do buffer). Agora rejeitamos pelo
+            # Content-Length conhecido antes de materializar 1 byte.
+            declared = request.headers.get("content-length")
+            if declared and int(declared) > 35 * 1024 * 1024:
+                raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Arquivo excede o limite de 35MB.")
+
             content = await file.read()
             if not content:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="O arquivo enviado está vazio.")
@@ -147,43 +155,63 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
             storage_status = "CLOUD_STORED"
 
         # Transação de persistência atômica no PostgreSQL
-        async with pool().acquire() as conn, conn.transaction():
-            # 1. Registra auditoria de consentimento se nuvem aceita
-            if cloud_consent:
-                consent_query = """
-                INSERT INTO exam_cloud_consents
-                    (user_id, exam_id, terms_version, accepted_cloud_storage,
-                     accepted_third_party_attack_waiver, ip_address, accepted_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                """
-                await conn.execute(
-                    consent_query,
-                    uid, parsed_exam_id, terms_version, True, True, client_ip, now
-                )
+        # AUD-G11: o laudo PHI é gravado em disco ANTES da transação. Se o INSERT
+        # falhar (UUID conflitado, constraint, queda do pool), o arquivo ficava
+        # órfão no disco pra sempre. Agora qualquer falha na transação remove o
+        # arquivo — nada de PHI sem dono no storage.
+        try:
+            async with pool().acquire() as conn, conn.transaction():
+                # 1. Registra auditoria de consentimento se nuvem aceita
+                if cloud_consent:
+                    consent_query = """
+                    INSERT INTO exam_cloud_consents
+                        (user_id, exam_id, terms_version, accepted_cloud_storage,
+                         accepted_third_party_attack_waiver, ip_address, accepted_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """
+                    await conn.execute(
+                        consent_query,
+                        uid, parsed_exam_id, terms_version, True, True, client_ip, now
+                    )
 
-            # 2. Insere ou atualiza o exame
-            exam_query = """
-            INSERT INTO exams
-                (id, user_id, title, category, exam_date, file_url,
-                 exam_type, is_cloud_stored, cloud_consent_accepted, status, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'confirmed', $10)
-            ON CONFLICT (id) DO UPDATE SET
-                title = EXCLUDED.title,
-                category = EXCLUDED.category,
-                exam_date = EXCLUDED.exam_date,
-                file_url = COALESCE(EXCLUDED.file_url, exams.file_url),
-                exam_type = EXCLUDED.exam_type,
-                is_cloud_stored = EXCLUDED.is_cloud_stored,
-                cloud_consent_accepted = EXCLUDED.cloud_consent_accepted,
-                status = 'confirmed'
-            WHERE exams.user_id = $2
-            RETURNING id;
-            """
-            await conn.fetchrow(
-                exam_query,
-                parsed_exam_id, uid, clean_title, clean_category, parsed_date,
-                file_url, safe_exam_type, cloud_consent, cloud_consent, now
-            )
+                # 2. Insere ou atualiza o exame
+                exam_query = """
+                INSERT INTO exams
+                    (id, user_id, title, category, exam_date, file_url,
+                     exam_type, is_cloud_stored, cloud_consent_accepted, status, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'confirmed', $10)
+                ON CONFLICT (id) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    category = EXCLUDED.category,
+                    exam_date = EXCLUDED.exam_date,
+                    file_url = COALESCE(EXCLUDED.file_url, exams.file_url),
+                    exam_type = EXCLUDED.exam_type,
+                    is_cloud_stored = EXCLUDED.is_cloud_stored,
+                    cloud_consent_accepted = EXCLUDED.cloud_consent_accepted,
+                    status = 'confirmed'
+                WHERE exams.user_id = $2
+                RETURNING id;
+                """
+                await conn.fetchrow(
+                    exam_query,
+                    parsed_exam_id, uid, clean_title, clean_category, parsed_date,
+                    file_url, safe_exam_type, cloud_consent, cloud_consent, now
+                )
+        except Exception:
+            # AUD-G11: a transação falhou — não deixa laudo PHI órfão no disco.
+            if cloud_consent and file_url:
+                try:
+                    parts = file_url.split("/api/files/exams/")[-1].split("/")
+                    if len(parts) == 2:
+                        u_part, f_part = parts
+                        safe_u = re.sub(r"[^a-zA-Z0-9_-]", "", u_part)
+                        safe_f = os.path.basename(f_part)
+                        orphan = os.path.join(STORAGE_EXAMS_DIR, safe_u, safe_f)
+                        if os.path.exists(orphan):
+                            os.remove(orphan)
+                except Exception as ex:
+                    print(f"[LGPD Upload] Falha ao remover laudo órfão: {ex}")
+            raise
 
         return {
             "success": True,

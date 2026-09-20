@@ -115,8 +115,23 @@ def quer_agendar(texto: str) -> bool:
 # --- D51: intents de confirmacao / correcao / cancelamento por voz ---
 
 _PADRAO_CONFIRMAR = re.compile(
-    r"\b(confirmo|confirmar|pode confirmar|esta confirmado|pode agendar|"
-    r"agendar|pode marcar|eu confirmo|sim confirmo|confirmado)\b",
+    r"\b(confirmo|confirmar|pode confirmar|esta confirmado|eu confirmo|"
+    r"sim confirmo|confirmado)\b",
+    re.IGNORECASE,
+)
+
+# AUD-G18: "pode agendar"/"agendar"/"pode marcar" estavam na regex de
+# CONFIRMACAO. Mas "pode agendar uma consulta?" e uma PERGUNTA, nao a
+# confirmacao de um rascunho — engolia a intencao e tentava gravar um
+# agendamento que nunca foi montado. Agora esses verbos so contam como
+# confirmacao quando nao ha marca de pergunta nem objeto (consulta/exame).
+_PADRAO_AGENDAR_VERBO = re.compile(
+    r"\b(pode agendar|pode marcar|agendar|marcar)\b",
+    re.IGNORECASE,
+)
+_PADRAO_PERGUNTA_OU_OBJETO = re.compile(
+    r"(\?|^(posso|pode|poderia|gostaria|quero|queria)\b|"
+    r"\b(consulta|exame|consulta medica|medica)\b)",
     re.IGNORECASE,
 )
 
@@ -142,7 +157,13 @@ def quer_confirmar(texto: str) -> bool:
         return False
     if _PADRAO_CORRIGIR.search(baixa) or _PADRAO_CANCELAR.search(baixa):
         return False
-    return bool(_PADRAO_CONFIRMAR.search(baixa))
+    if _PADRAO_CONFIRMAR.search(baixa):
+        return True
+    # AUD-G18: verbo de agendamento so confirma se for resposta direta, sem
+    # marca de pergunta ("pode agendar uma consulta?" NAO e confirmacao).
+    if _PADRAO_AGENDAR_VERBO.search(baixa) and not _PADRAO_PERGUNTA_OU_OBJETO.search(baixa):
+        return True
+    return False
 
 
 def quer_corrigir(texto: str) -> bool:

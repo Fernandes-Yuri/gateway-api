@@ -18,13 +18,25 @@ WHATSAPP_API_URL = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP
 
 
 def sanitize_phone_number(phone: str) -> str:
-    """Remove caracteres especiais e garante DDI 55 para o Brasil se omitido."""
+    """Remove caracteres especiais e garante DDI 55 para o Brasil se omitido.
+
+    AUD-G12: a versão anterior prefixava 55 em qualquer número de 10-11 dígitos
+    QUE NÃO COMEÇASSE com "55". Mas o Rio Grande do Sul tem DDD 55, então um
+    número de celular de lá (ex: 55 99999-8888 -> '55999998888', 11 dígitos)
+    era deixado sem DDI e a Meta não entregava a mensagem. A ambiguidade entre
+    "55 = DDI" e "55 = DDD do RS" se resolve pelo TAMANHO: número brasileiro
+    com DDI tem 12 (fixo) ou 13 (móvel) dígitos; sem DDI tem 10 ou 11.
+    """
     cleaned = "".join(filter(str.isdigit, phone))
     if cleaned.startswith("0"):
         cleaned = cleaned[1:]
-    # Se o usuário digitou DDD + número (ex: 11999998888 -> 11 dígitos), prefixar com 55
-    if len(cleaned) in (10, 11) and not cleaned.startswith("55"):
-        cleaned = "55" + cleaned
+    # Já tem DDI do Brasil: 12 (fixo) ou 13 (móvel) dígitos começando com 55.
+    if len(cleaned) in (12, 13) and cleaned.startswith("55"):
+        return cleaned
+    # Sem DDI: 10 (fixo) ou 11 (móvel) dígitos — precisa do 55, INCLUSIVE os
+    # do Rio Grande do Sul (DDD 55), que a versão antiga deixava sem prefixo.
+    if len(cleaned) in (10, 11):
+        return "55" + cleaned
     return cleaned
 
 
@@ -92,19 +104,27 @@ async def send_whatsapp_text(
         }
     }
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(WHATSAPP_API_URL, headers=headers, json=payload)
-        try:
-            res_json = response.json()
-        except Exception:
-            res_json = {"raw": response.text}
+    # AUD-G15: o POST estourava direto (httpx.ConnectError, timeout, DNS). Num
+    # webhook isso vira 500 na resposta à Meta — que então TENTA DE NOVO, e a
+    # re-entrega conta como nova tentativa (mensagem duplicada para o usuário).
+    # Agora toda falha de transporte é capturada e reportada como success=false.
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(WHATSAPP_API_URL, headers=headers, json=payload)
+            try:
+                res_json = response.json()
+            except Exception:
+                res_json = {"raw": response.text}
 
-        print(f"[WhatsApp Text] Status: {response.status_code} | Resposta: {res_json}")
-        return {
-            "success": response.status_code in (200, 201),
-            "status_code": response.status_code,
-            "response": res_json
-        }
+            print(f"[WhatsApp Text] Status: {response.status_code} | Resposta: {res_json}")
+            return {
+                "success": response.status_code in (200, 201),
+                "status_code": response.status_code,
+                "response": res_json
+            }
+    except Exception as exc:
+        print(f"[WhatsApp Text] Falha de transporte ao enviar para {cleaned_number}: {exc}")
+        return {"success": False, "status_code": None, "error": str(exc)}
 
 
 async def mark_whatsapp_message_read(message_id: str) -> bool:

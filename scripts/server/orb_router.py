@@ -242,6 +242,14 @@ def detect_all(raw: str) -> dict:
 
     if detect_emergency(norm):
         return {"kind": "emergency"}
+    # AUD-G17: a detecção de PA (X por Y) vinia ANTES da de data. "Que dia é
+    # hoje, 20/09/2026?" casava o padrão "20/09" como pressão 200x90 e o
+    # usuário ouvia um absurdo clínico. Perguntas de data/hora são resolvidas
+    # primeiro — elas nunca contêm um valor de saúde.
+    if _TIME_RE.search(norm):
+        return {"kind": "time"}
+    if _DATE_RE.search(norm):
+        return {"kind": "date"}
     bp = detect_bp(norm)
     if bp:
         return {"kind": "bp", "sys": bp[0], "dia": bp[1]}
@@ -272,10 +280,7 @@ def detect_all(raw: str) -> dict:
     if extract_grocery_items is not None and re.search(
             r"\b(lista|compr\w*|mercado|feira|adiciona|adicione|anota|anote)\b", norm):
         return {"kind": "grocery", "items": extract_grocery_items(norm)}
-    if _TIME_RE.search(norm):
-        return {"kind": "time"}
-    if _DATE_RE.search(norm):
-        return {"kind": "date"}
+    # AUD-G17: data/hora agora é resolvido ANTES da PA (movido para cima).
     if re.search(r"\bbom dia\b|\botimo dia\b", norm):
         return {"kind": "greeting_morning"}
     if re.search(r"\bboa tarde\b|\botima tarde\b", norm):

@@ -1082,7 +1082,12 @@ async def get_vitals(
         return result
 
 @app.post("/api/sync/daily-metrics")
-async def sync_daily_metrics(m: DailyMetricSyncDto):
+async def sync_daily_metrics(m: DailyMetricSyncDto, uid: str = Depends(firebase_uid)):
+    # AUD-G07: antes aceitava qualquer userId do body — métricas falsas podiam ser
+    # injetadas em nome de outro usuário. Agora exige token Firebase e só grava
+    # para o dono do token.
+    if uid != m.userId:
+        raise HTTPException(403, "Não autorizado: métricas só podem ser gravadas para a própria conta.")
     if not db_pool:
         return {"status": "offline_mode"}
     query = """
@@ -1162,7 +1167,14 @@ async def sync_social_post(p: SocialPostSyncDto, uid: str = Depends(firebase_uid
     return {"status": "success", "id": str(row["id"])}
 
 @app.get("/api/social/feed")
-async def get_social_feed(limit: int = 30):
+async def get_social_feed(
+    limit: int = Query(30, ge=1, le=100, description="Máximo 100 posts por página"),
+    offset: int = Query(0, ge=0, description="Deslocamento para paginação"),
+    uid: str = Depends(firebase_uid),
+):
+    # AUD-G08: antes era anônimo (sem firebase_uid) e aceitava limit sem teto
+    # (?limit=1000000) — dump de full_name de pacientes por qualquer um. Agora
+    # exige conta logada e o limit é forçado a <=100 pela validação do Query.
     if not db_pool:
         return []
     query = """
@@ -1173,10 +1185,10 @@ async def get_social_feed(limit: int = 30):
     JOIN profiles p ON sp.user_id = p.id
     WHERE sp.is_visible = TRUE
     ORDER BY sp.created_at DESC
-    LIMIT $1;
+    LIMIT $1 OFFSET $2;
     """
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(query, limit)
+        rows = await conn.fetch(query, limit, offset)
         result = []
         for r in rows:
             d = dict(r)
@@ -1186,7 +1198,11 @@ async def get_social_feed(limit: int = 30):
         return result
 
 @app.post("/api/sync/post-reaction")
-async def sync_post_reaction(r: PostReactionSyncDto):
+async def sync_post_reaction(r: PostReactionSyncDto, uid: str = Depends(firebase_uid)):
+    # AUD-G07: antes aceitava qualquer userId do body — permitia forjar reações
+    # em nome de outro usuário. Agora exige token Firebase e valida dono.
+    if uid != r.userId:
+        raise HTTPException(403, "Não autorizado: reações só podem ser gravadas para a própria conta.")
     if not db_pool:
         return {"status": "offline_mode"}
     query = """
@@ -1208,14 +1224,21 @@ install_caregiver_alert_routes(app, lambda: db_pool, load_devices, dispatch_push
 install_exam_routes(app, lambda: db_pool, rate_limiter=rate_limiter)
 
 @app.post("/api/sync/feedback")
-async def sync_feedback(f: FeedbackSyncDto, request: Request):
+async def sync_feedback(f: FeedbackSyncDto, request: Request, uid: str = Depends(firebase_uid)):
+    # AUD-G07: antes confia em f.userId do body — feedbacks podiam ser forjados
+    # em nome de outro usuário (e no e-mail de contato). Agora o userId vem do
+    # token; o e-mail/name do body são sanitizados e truncados por segurança.
+    if uid != f.userId:
+        raise HTTPException(403, "Não autorizado: feedbacks só podem ser enviados para a própria conta.")
     if not db_pool:
         return {"status": "offline_mode"}
     client_ip = get_client_ip(request)
     await rate_limiter.check("sync_feedback_ip", client_ip, limit=10, window_seconds=60, ip=client_ip, pool=db_pool)
-    
+
     clean_title = sanitize_zero_trust_text(f.title, max_length=200, field_name="title", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
     clean_message = sanitize_zero_trust_text(f.message, max_length=1000, field_name="message", ip=client_ip, rate_limiter=rate_limiter, pool=db_pool)
+    clean_email = sanitize_zero_trust_text(f.userEmail or "", max_length=254, field_name="userEmail", ip=client_ip)
+    clean_name = sanitize_zero_trust_text(f.userName or "", max_length=120, field_name="userName", ip=client_ip)
 
     query = """
     INSERT INTO feedbacks (user_id, user_email, user_name, category, title, message, input_method, app_version, device_info, created_at)
@@ -1223,7 +1246,7 @@ async def sync_feedback(f: FeedbackSyncDto, request: Request):
     RETURNING id;
     """
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(query, f.userId, f.userEmail, f.userName, f.category, clean_title, clean_message, f.inputMethod, f.appVersion, f.deviceInfo)
+        row = await conn.fetchrow(query, uid, clean_email, clean_name, f.category, clean_title, clean_message, f.inputMethod, f.appVersion, f.deviceInfo)
     return {"status": "success", "id": str(row["id"])}
 
 
@@ -1683,7 +1706,15 @@ def list_devices(uid: str = Depends(firebase_uid)):
 
 @app.post("/api/notify/alert")
 def send_alert(req: AlertNotificationRequest, uid: str = Depends(firebase_uid)):
+    # AUD-G16: antes este endpoint era um BROADCAST irrestrito — qualquer conta
+    # autenticada podia disparar push com title/message arbitrários para TODOS
+    # os aparelhos (poderia ser usado para phishing em massa pela marca).
+    # Agora só administração dispara broadcast; cuidador só fala com os seus.
     devices = load_devices()
+    caller = devices.get(uid) or {}
+    caller_role = caller.get("role")
+    if req.targetRole in ("ALL", "ADMIN") and caller_role != "ADMIN":
+        raise HTTPException(403, "Apenas administradores podem disparar alertas para todos.")
     sent_count = 0
     for dev_uid, dev in devices.items():
         if req.targetRole == "ALL" or dev.get("role") == req.targetRole:
@@ -3379,9 +3410,20 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
 def whatsapp_events(limit: int = Query(10, ge=1, le=50), uid: str = Depends(firebase_uid)):
     """Retorna os últimos eventos brutos recebidos pelo webhook do WhatsApp para diagnóstico.
 
-    Payloads conteem telefones e corpos de mensagens (PII): acesso restrito
-    a usuario autenticado.
+    Payloads conteem telefones e corpos de mensagens (PII) DE TODOS OS USUARIOS:
+    qualquer conta autenticada podia ler as mensagens dos outros. AUD-G09:
+    agora exige flag de administrador no perfil.
     """
+    if not db_pool:
+        raise HTTPException(503, "Banco de dados não disponível")
+    try:
+        role = None
+        with db_pool.acquire() as _conn:
+            role = _conn.fetchval("SELECT user_role FROM profiles WHERE id = $1", uid)
+    except Exception:
+        pass
+    if role != "ADMIN":
+        raise HTTPException(403, "Acesso restrito a administradores.")
     return {
         "total_eventos_recebidos": len(WHATSAPP_EVENT_LOG),
         "eventos": list(reversed(WHATSAPP_EVENT_LOG[-limit:]))
@@ -3618,7 +3660,21 @@ async def reset_password(req: PasswordResetRequest, request: Request):
             firebase_updated = True
             print(f"[Auth Service] Senha atualizada no Firebase Auth para {identifier}")
         except Exception as e:
+            # AUD-G13: a falha NÃO pode ser engolida com mensagem de sucesso. O
+            # usuário acreditaria que a senha foi trocada e não entenderia por que
+            # o login antigo ainda funciona (e ficaria sem saber o que fazer).
             print(f"[Auth Service Firebase Error] {e}")
+            raise HTTPException(
+                status_code=503,
+                detail="Não foi possível atualizar a senha no Firebase Auth. O token de redefinição já foi consumido — solicite um novo código."
+            )
+
+    return {
+        "status": "password_updated",
+        "success": True,
+        "firebaseUpdated": firebase_updated,
+        "message": "Senha redefinida com sucesso! Você já pode entrar com sua nova senha."
+    }
 
     # doc 10 §4.5: alerta de segurança ao dono da conta. Se a troca partiu de
     # um OTP legítimo o e-mail é só um recibo; se partiu de um invasor, o dono
