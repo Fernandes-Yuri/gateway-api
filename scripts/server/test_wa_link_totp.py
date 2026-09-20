@@ -115,16 +115,18 @@ class TestTotpPrimitives(unittest.TestCase):
         s = generate_totp_secret()
         self.assertEqual(current_totp_code(s), current_totp_code(s))
 
-    def test_verify_accepts_current_code_only(self):
+    def test_verify_accepts_current_and_adjacent_steps(self):
         s = generate_totp_secret()
         now = time.time()
         self.assertTrue(verify_totp_code(s, current_totp_code(s, at=now), at=now))
-        # codigo de 3 minutos atras (janela anterior): rejeitado, sem tolerancia
+        # D-WA1: tolera +/-1 janela (drift de relogio celular x servidor)
         old = current_totp_code(s, at=now - TOTP_STEP_SECONDS)
-        self.assertFalse(verify_totp_code(s, old, at=now))
-        # codigo adiantado (proxima janela): rejeitado
+        self.assertTrue(verify_totp_code(s, old, at=now))
         nxt = current_totp_code(s, at=now + TOTP_STEP_SECONDS)
-        self.assertFalse(verify_totp_code(s, nxt, at=now))
+        self.assertTrue(verify_totp_code(s, nxt, at=now))
+        # 2 janelas atras/adiante: ainda rejeitado
+        self.assertFalse(verify_totp_code(s, current_totp_code(s, at=now - 2 * TOTP_STEP_SECONDS), at=now))
+        self.assertFalse(verify_totp_code(s, current_totp_code(s, at=now + 2 * TOTP_STEP_SECONDS), at=now))
         self.assertFalse(verify_totp_code(s, "000000", at=now))
 
     def test_six_digit_helper(self):
@@ -173,9 +175,9 @@ class TestLinkAttempt(unittest.TestCase):
         _, sent = self._run(state, "000000")
         self.assertIn("Volte no aplicativo", sent[0][1])
 
-    def test_expired_code_is_rejected_without_tolerance(self):
+    def test_far_expired_code_is_rejected(self):
         state, secret = _state_with_account()
-        old = current_totp_code(secret, at=time.time() - TOTP_STEP_SECONDS)
+        old = current_totp_code(secret, at=time.time() - 2 * TOTP_STEP_SECONDS)
         consumed, sent = self._run(state, old)
         self.assertTrue(consumed)
         self.assertIn("não é válido", sent[0][1])

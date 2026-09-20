@@ -5,8 +5,9 @@ atual localmente, no ato do clique, sem chamar o servidor. O webhook recomputa o
 mesmo codigo a partir do segredo guardado na conta e, se bater, vincula o numero
 (que veio verificado pela Meta) aquela conta.
 
-Janela de 180s, SEM tolerancia de janelas adjacentes: ou esta dentro, ou o usuario
-volta no app e pega um codigo novo.
+Janela de 180s, com tolerancia de +/-1 janela adjacente: um relogio de celular
+descompassado em alguns minutos nao bloqueia o vinculo; codigos a mais de uma
+janela de distancia continuam rejeitados (o usuario volta no app e pega um novo).
 """
 import base64
 import hmac
@@ -50,14 +51,21 @@ def current_totp_code(secret_b32: str, at: float = None) -> str:
 
 def verify_totp_code(secret_b32: str, code: str, at: float = None) -> bool:
     """
-    True apenas se o codigo bate com a janela atual. Sem +/-1 janela: codigo
-    velho ou adiantado e rejeitado, e o usuario deve voltar no app.
+    True se o codigo bater com a janela atual ou com as janelas adjacentes (+/-1
+    step), tolerando drift de relogio entre o celular do usuario e o servidor.
+    Codigos a mais de uma janela de distancia sao rejeitados.
     """
     if not secret_b32 or not code:
         return False
-    expected = current_totp_code(secret_b32, at=at)
-    # Comparacao em tempo constante: nao vaza progresso por timing.
-    return hmac.compare_digest(str(code).strip().zfill(TOTP_DIGITS), expected)
+    now = time.time() if at is None else at
+    base_counter = int(now // TOTP_STEP_SECONDS)
+    submitted = str(code).strip().zfill(TOTP_DIGITS)
+    # D-WA1: aceita a janela atual e as vizinhas; comparacao em tempo constante em
+    # cada tentativa (nao vaza progresso por timing).
+    for step in (base_counter - 1, base_counter, base_counter + 1):
+        if hmac.compare_digest(submitted, _hotp(secret_b32, step)):
+            return True
+    return False
 
 
 def seconds_until_rotation(at: float = None) -> int:
