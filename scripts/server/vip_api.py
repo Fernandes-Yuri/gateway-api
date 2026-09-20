@@ -53,8 +53,13 @@ def install_vip_routes(app, get_pool, notify_admin=None, send_confirmation_email
         origin = request.headers.get('origin')
         if origin is not None and origin not in origins:
             raise HTTPException(403, 'Origem não autorizada.')
-        # Do not trust arbitrary X-Forwarded-For headers supplied by visitors.
-        await limiter.check(request.client.host if request.client else 'unknown')
+        # AUD-G19: request.client.host é SEMPRE 127.0.0.1 atrás do túnel
+        # Cloudflare — todos os visitantes compartilhavam um único bucket e o
+        # rate limit do VIP era ineficaz contra floods reais (e podia bloquear
+        # usuários legítimos por culpa de um único abusador). get_client_ip
+        # respeita a ordem correta de headers (cf-connecting-ip primeiro).
+        from security_defense import get_client_ip
+        await limiter.check(get_client_ip(request))
         if request.headers.get('content-type', '').split(';')[0].strip() != 'application/json':
             raise HTTPException(415, 'Envie os dados como JSON.')
         body = bytearray()
