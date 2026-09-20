@@ -86,6 +86,16 @@ async def run_migrate():
 
     conn = await asyncpg.connect(DATABASE_URL)
     try:
+        # AUD-G(M): SEM advisory lock, duas execucoes concorrentes do migrate
+        # (deploy + cron, ou dois pods subindo juntos) liam a mesma lista de
+        # pendentes e aplicavam a mesma migration DUAS VEZES — DDL idempotente
+        # mascara a maioria, mas um ALTER ou CREATE INDEX concorrente pode
+        # corromper o schema_migrations e deixar os nodes em versoes diferentes.
+        # Lock por-sessao; liberado no finally.
+        LOCK_KEY = -872314509  # chave fixa, BragaSaude migrations
+        await conn.execute("SELECT pg_advisory_lock($1)", LOCK_KEY)
+        print("[Migrations] Lock consultivo obtido.")
+
         applied = await get_applied_migrations(conn)
         sql_files = sorted(MIGRATIONS_DIR.glob("*.sql"))
         pending = [f for f in sql_files if f.stem not in applied]
@@ -142,6 +152,11 @@ async def run_migrate():
 
         print("[Migrations] Todas as migrations foram aplicadas com sucesso.")
     finally:
+        # AUD-G(M): libera o lock consultivo antes de fechar a conexao.
+        try:
+            await conn.execute("SELECT pg_advisory_unlock($1)", -872314509)
+        except Exception:
+            pass  # conexao ja morta; o lock libera sozinho ao fechar
         await conn.close()
 
 if __name__ == "__main__":
