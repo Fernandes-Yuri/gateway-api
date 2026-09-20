@@ -1329,6 +1329,22 @@ async def sync_exam(e: ExamSyncDto, uid: str = Depends(firebase_uid)):
     require_owner(uid, e.userId)
     if not db_pool:
         return {"status": "offline_mode"}
+
+    # AUD-G(M): DUAS implementações de exame com contratos diferentes.
+    # exams_api.py (upload/manual) FIXA status='confirmed'; esta rota legada
+    # aceitava QUALQUER string — o app só envia "uploaded" (com arquivo) ou
+    # "confirmed" (sem), mas nada impedia gravar lixo/valores inventados na
+    # mesma tabela exams. Filtros downstream (NutritionViewModel, ExamsScreen)
+    # testam status == 'confirmed', então status arbitrário tornava o exame
+    # invisível na UI. Agora a lista é fechada; valor fora dela é rejeitado
+    # com 400 em vez de ser gravado silenciosamente.
+    EXAM_STATUS_ALLOWED = ("uploaded", "confirmed", "failed")
+    if e.status not in EXAM_STATUS_ALLOWED:
+        raise HTTPException(
+            400,
+            f"status de exame inválido: {e.status!r}. Valores aceitos: {', '.join(EXAM_STATUS_ALLOWED)}."
+        )
+
     query = """
     INSERT INTO exams (id, user_id, title, category, exam_date, result_summary, file_url, status, ai_extracted_data, validated_by, validation_notes)
     VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
