@@ -131,12 +131,39 @@ O portal Next.js no Render consome estes endpoints com um **token de serviço**
 (`SERVICE_TOKEN` do env — escopo reduzido, não reutiliza `ADMIN_API_TOKEN`).
 Nenhuma credencial de banco vai para o Render; o RDS permanece privado.
 
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/admin/feedback` | Lista paginada (filtros: `category`, `status`, `priority`, `search`; KPIs em `stats`) |
+| PATCH | `/api/admin/feedback/{id}/status` | novo → investigando → resolvido → arquivado (allowlist) |
+| POST | `/api/admin/feedback/{id}/reply` | Resposta da equipe → `feedback_replies` (o app lê e notifica) |
+| GET | `/api/admin/blocked-ips` | Blocklist autoritativa (`security_blocked_ips`) |
+| GET | `/api/admin/metrics/active-users` | `?days=7` — COUNT(DISTINCT user_id) em `audit_logs` |
+| GET | `/api/admin/metrics/engagement` | Distribuição de streak e nível por faixa |
+| GET | `/api/admin/metrics/notifications` | Opt-in + ações por canal (whatsapp/fcm/app) |
+| GET | `/api/admin/metrics/feature-usage` | Top ações registradas (`?days=30`) |
+
 ```bash
 # Exemplo: métricas de usuários ativos
 curl -H "Authorization: Bearer $SERVICE_TOKEN" \
      https://api.bragasaude.online/api/admin/metrics/active-users?days=7
 # {"success": true, "activeUsers": 42, "totalUsers": 100, "days": 7}
+
+# Exemplo: feedbacks com KPIs do cabeçalho
+curl -H "Authorization: Bearer $SERVICE_TOKEN" \
+     "https://api.bragasaude.online/api/admin/feedback?priority=high"
+# {"success":true,"data":[...],"pagination":{...},
+#  "stats":{"total":12,"pending":3,"highPriority":2,"suggestions":4,"bugs":5,...}}
 ```
+
+**Autenticação:** `require_service_token` usa `secrets.compare_digest` (constante
+no tempo). Token ausente/divergente → **401**; token não configurado no env →
+**503** (o recurso nunca fica aberto por default). Cada acesso é logado com path
+e IP — o token em si nunca aparece no log.
+
+**Prioridade (temporário):** o gateway ainda não tem `is_high_priority` na tabela
+`feedbacks` (D-WS3/migration 014 pendente); o filtro `priority=high` espelha os
+16 termos críticos do portal (`socorro`, `tela preta`, `desmaiou`…) via
+`LOWER(message) LIKE ANY(...)`. Resultado equivalente até a migration existir.
 
 **Métricas são aggregate-only (k-anonimato):** só números cruzam a rede —
 nunca uma linha de usuário. Buckets com menos de 5 usuários são suprimidos
