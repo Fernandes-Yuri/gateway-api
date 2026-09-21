@@ -65,6 +65,10 @@ import httpx
 
 # Nucleo extraido (Fase A passo 1): sanitizacao de TTS e PII (LGPD).
 from core.text import clean_text_for_tts, sanitize_pii, EMOJI_REGEX, PHONE_REGEX, CPF_REGEX, EMAIL_REGEX, CEP_REGEX, OTP_REGEX
+# Nucleo extraido (Fase A passo 2): helpers de dispositivos e FCM.
+from core.devices import load_devices, save_devices, dispatch_push
+# Routers extraidos (Fase A passo 2): health, dataset, devices, notify, emergency.
+from routers import health as health_router
 
 # Configuração central (Fase B, passo 1 — doc 36): env vars, defaults e paths.
 from config import (
@@ -184,6 +188,18 @@ SEM_REST = asyncio.Semaphore(2)
 SEM_WA = asyncio.Semaphore(3)
 
 app = FastAPI(title="Braga Saúde Gateway, TTS, Sync & Notification Hub", version="5.0")
+
+# Routers extraidos (Fase A passo 2): o estado global fica aqui no server e e
+# passado para o router via configure_state; os endpoints leem sem acoplar.
+health_router.configure_state(
+    db_pool=None,  # preenchido no startup (init_db)
+    has_postgres=HAS_POSTGRES,
+    has_scheduler=HAS_SCHEDULER,
+    has_fcm=HAS_FCM,
+    has_whatsapp=HAS_WHATSAPP,
+    messaging=messaging if HAS_FCM else None,
+)
+app.include_router(health_router.router)
 
 # Origens permitidas via env (separadas por vírgula). "CORS *" com credenciais
 # é inseguro e inválido perante a spec; a lista precisa ser explícita.
@@ -322,25 +338,8 @@ class VoiceRequest(BaseModel):
     rate: Optional[str] = "-2%"
     volume: Optional[str] = "+20%"
 
-class DeviceRegistrationRequest(BaseModel):
-    userId: str
-    token: str
-    role: Optional[str] = "PATIENT"
-    name: Optional[str] = "Usuário Braga"
-    platform: Optional[str] = "android"
-
-class AlertNotificationRequest(BaseModel):
-    type: str
-    title: str
-    message: str
-    sourceUserId: str
-    targetRole: Optional[str] = "CAREGIVER"
-    metricValue: Optional[str] = None
-
-class EmergencyTriggerRequest(BaseModel):
-    userId: str
-    userName: str
-    details: str
+# DeviceRegistrationRequest, AlertNotificationRequest, EmergencyTriggerRequest:
+# movidos para routers/health.py (Fase A passo 2).
 
 class WhatsAppSendRequest(BaseModel):
     phone: str
@@ -766,61 +765,11 @@ async def shutdown():
         await db_pool.close()
 
 # =============================================================
-# MÉTODOS AUXILIARES DE DISPOSITIVOS E FCM
+# MÉTODOS AUXILIARES DE DISPOSITIVOS E FCM — ver core/devices.py
+# (Fase A passo 2). Importados de la; nao redeclarar aqui.
 # =============================================================
-def load_devices() -> Dict[str, Any]:
-    if not os.path.exists(DEVICES_PATH):
-        return {}
-    try:
-        with open(DEVICES_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
 
-def save_devices(data: Dict[str, Any]):
-    try:
-        with open(DEVICES_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
 
-def dispatch_push(token: str, title: str, body: str, data: Dict[str, str] = None,
-                  include_notification: bool = True) -> bool:
-    if HAS_FCM:
-        try:
-            # Prioridade ALTA e canal explicito: sem isso o Android em repouso
-            # (Doze) nao acorda e a mensagem fica enfileirada silenciosamente.
-            # O canal family_alerts e o padrao declarado no AndroidManifest
-            # (com.google.firebase.messaging.default_notification_channel_id).
-            android_cfg = messaging.AndroidConfig(
-                priority="high",
-                notification=messaging.AndroidNotification(
-                    channel_id="bragasaude_family_alerts",
-                    priority="high",
-                    sound="default",
-                    # Mantem o tipo no payload: com app fechado o SO desenha o
-                    # balao (onMessageReceived nao roda); com app aberto o
-                    # service le data["type"] e faz o deep link.
-                    click_action="OPEN_FAMILY_MESSAGES" if (data or {}).get("type") == "FAMILY_MESSAGE" else None,
-                ),
-            )
-            message = messaging.Message(
-                notification=messaging.Notification(title=title, body=body) if include_notification else None,
-                data=data or {},
-                android=android_cfg,
-                token=token
-            )
-            messaging.send(message)
-            return True
-        except Exception as e:
-            print(f"[FCM Error] {e}")
-            return False
-    else:
-        # doc 10 §1B.2: o mock NÃO devolve mais True — sucesso fingido mascarava
-        # push nunca enviado e fazia os endpoints reportarem enviados que não
-        # aconteceram. Registra a intenção e devolve False.
-        print(f"[FCM Mock — NÃO ENVIADO] Push para {token[:10]}...: {title} - {body}")
-        return False
 
 
 async def dispatch_clinical_alert(
@@ -1640,150 +1589,15 @@ async def agent_receipt(r: AgentReceiptDto, uid: str = Depends(firebase_uid)):
 # =============================================================
 # ENDPOINTS EXISTENTES (IA, VOZ, DISPOSITIVOS, ALERTAS)
 # =============================================================
-@app.get("/health")
-def health():
-    return {
-        "profile_contract": 1,
-        "status": "online",
-        "mode": "groq_qwen_gateway_with_neural_tts_and_postgresql",
-        "ai_provider": "groq_cloud",
-        "model": MODEL_ID,
-        "database": "postgresql_16_alpine" if HAS_POSTGRES and db_pool else "pending_connect",
-        "clinical_guardrails": "SBC_SBD_OMS_MS_ENFORCED",
-        "security_shield": "ANTI_PROMPT_INJECTION_ACTIVE",
-        "notification_hub": {
-            "has_scheduler": HAS_SCHEDULER,
-            "has_fcm": HAS_FCM,
-            "has_whatsapp": HAS_WHATSAPP
-        }
-    }
+# =============================================================
+# ENDPOINTS EXTRAIDOS (Fase A passo 2): /health, /dataset/*,
+# /api/device*, /api/notify/alert, /api/emergency/trigger
+# agora vivem em routers/health.py. Nao redeclarar aqui.
+# =============================================================
 
-@app.get("/dataset/stats")
-def dataset_stats(uid: str = Depends(firebase_uid)):
-    """Retorna estatísticas detalhadas do dataset de treinamento para Fine-Tuning."""
-    if not os.path.exists(DATASET_PATH):
-        return {
-            "total_conversas": 0,
-            "caminho": DATASET_PATH,
-            "tamanho_kb": 0,
-            "por_origem": {},
-            "por_categoria": {}
-        }
-    total = 0
-    by_source = {}
-    by_category = {}
-    try:
-        size_bytes = os.path.getsize(DATASET_PATH)
-        with open(DATASET_PATH, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                total += 1
-                try:
-                    item = json.loads(line)
-                    src = item.get("source", "legacy")
-                    by_source[src] = by_source.get(src, 0) + 1
-                    cat = item.get("category", "uncategorized")
-                    by_category[cat] = by_category.get(cat, 0) + 1
-                except Exception:
-                    pass
-        return {
-            "total_conversas": total,
-            "caminho": DATASET_PATH,
-            "tamanho_kb": round(size_bytes / 1024, 2),
-            "por_origem": by_source,
-            "por_categoria": by_category
-        }
-    except Exception as e:
-        print(f"[Dataset Stats Error] {type(e).__name__}: {e}")
-        return {"total_conversas": total, "caminho": DATASET_PATH, "error": "Erro ao processar estatísticas do dataset."}
+# (device/register, devices, notify/alert, emergency/trigger: ver routers/health.py)
 
-@app.get("/dataset/sample")
-def dataset_sample(limit: int = Query(5, ge=1, le=50), uid: str = Depends(firebase_uid)):
-    """Retorna as amostras mais recentes do dataset higienizadas por LGPD para auditoria."""
-    if not os.path.exists(DATASET_PATH):
-        return {"samples": []}
-    samples = []
-    try:
-        with open(DATASET_PATH, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-            for line in reversed(lines[-limit:]):
-                if line.strip():
-                    try:
-                        samples.append(json.loads(line))
-                    except Exception:
-                        pass
-    except Exception as e:
-        print(f"[Dataset Sample Error] {type(e).__name__}: {e}")
-        return {"error": "Erro ao ler amostras do dataset."}
-    return {"total_amostras": len(samples), "amostras": samples}
 
-@app.post("/api/device/register")
-def register_device(req: DeviceRegistrationRequest, uid: str = Depends(firebase_uid)):
-    require_owner(uid, req.userId)
-    devices = load_devices()
-    devices[req.userId] = {
-        "userId": req.userId,
-        "token": req.token,
-        "role": req.role,
-        "name": req.name,
-        "platform": req.platform,
-        "updatedAt": datetime.utcnow().isoformat()
-    }
-    save_devices(devices)
-    return {"status": "success", "registeredUsers": len(devices)}
-
-@app.get("/api/devices")
-def list_devices(uid: str = Depends(firebase_uid)):
-    # Tokens FCM equivalem a credenciais de push. Antes eram devolvidos a
-    # qualquer pessoa anonima.
-    devices = load_devices()
-    own = devices.get(uid)
-    return {"total": 1 if own else 0, "devices": [own] if own else []}
-
-@app.post("/api/notify/alert")
-def send_alert(req: AlertNotificationRequest, uid: str = Depends(firebase_uid)):
-    # AUD-G16: antes este endpoint era um BROADCAST irrestrito — qualquer conta
-    # autenticada podia disparar push com title/message arbitrários para TODOS
-    # os aparelhos (poderia ser usado para phishing em massa pela marca).
-    # Agora só administração dispara broadcast; cuidador só fala com os seus.
-    devices = load_devices()
-    caller = devices.get(uid) or {}
-    caller_role = caller.get("role")
-    if req.targetRole in ("ALL", "ADMIN") and caller_role != "ADMIN":
-        raise HTTPException(403, "Apenas administradores podem disparar alertas para todos.")
-    sent_count = 0
-    for dev_uid, dev in devices.items():
-        if req.targetRole == "ALL" or dev.get("role") == req.targetRole:
-            success = dispatch_push(
-                token=dev["token"],
-                title=req.title,
-                body=req.message,
-                data={
-                    "type": req.type,
-                    "sourceUserId": uid,
-                    "metricValue": req.metricValue or ""
-                }
-            )
-            if success:
-                sent_count += 1
-    return {"status": "dispatched", "recipients": sent_count}
-
-@app.post("/api/emergency/trigger")
-def trigger_emergency(req: EmergencyTriggerRequest, uid: str = Depends(firebase_uid)):
-    require_owner(uid, req.userId)
-    devices = load_devices()
-    sent_count = 0
-    for dev_uid, dev in devices.items():
-        if dev.get("role") == "CAREGIVER" or dev_uid != uid:
-            dispatch_push(
-                token=dev["token"],
-                title="ALERTA DE EMERGÊNCIA FAMILIAR",
-                body=f"{req.userName} acionou socorro: {req.details}",
-                data={"type": "EMERGENCY", "userId": uid, "details": req.details}
-            )
-            sent_count += 1
-    return {"status": "emergency_broadcasted", "notified": sent_count}
 
 # AUD-G27: REMOVIDA a cópia local de INJECTION_PATTERNS e is_prompt_injection.
 # Ela sombreava a importação de security_defense.py (linha 56-62) sendo uma
