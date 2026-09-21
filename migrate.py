@@ -24,6 +24,49 @@ for env_candidate in [
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+
+def _strip_transaction_control(sql: str) -> str:
+    """Remove BEGIN/COMMIT de nivel-zero, preservando PL/pgSQL.
+
+    Linhas "BEGIN"/"COMMIT" soltas no nivel zero do SQL seriam aninhadas
+    dentro da transacao asyncpg (warning + COMMIT prematuro). Mas o mesmo
+    token dentro de DO $$ ... $$ ou corpo de FUNCTION e codigo PL/pgSQL —
+    remover parte a sintaxe. Por isso so tocamos o que esta FORA de
+    dollar-quotes.
+    """
+    import re
+    # Captura spans $tag$ ... $tag$ (tag vazia ou nomeada), pares completos.
+    token = re.compile(r"\$[A-Za-z_0-9]*\$")
+    spans = []  # (start, end) de cada par aberto+fechado
+    open_tags = []  # pilha de (start, tag)
+    for m in token.finditer(sql):
+        tag = m.group(0)
+        if open_tags and open_tags[-1][1] == tag:
+            s, _ = open_tags.pop()
+            spans.append((s, m.end()))
+        else:
+            open_tags.append((m.start(), tag))
+    # Se ficou tag aberta (SQL malformado), nao remove nada — fail-safe.
+    if open_tags:
+        return sql
+
+    def inside_dollar(pos: int) -> bool:
+        return any(s <= pos < e for s, e in spans)
+
+    out = []
+    pos = 0
+    for line in sql.splitlines():
+        stripped = line.strip().upper()
+        is_ctrl = stripped in ("BEGIN;", "COMMIT;", "BEGIN", "COMMIT")
+        # pos aponta para o 1o char desta linha no SQL original — so assim
+        # inside_dollar() (que usa offsets absolutos) funciona.
+        if is_ctrl and not inside_dollar(pos):
+            continue
+        out.append(line)
+        pos += len(line) + 1  # +1 pelo \n que splitlines descartou
+    return "\n".join(out)
+
+
 async def get_applied_migrations(conn) -> set:
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -138,13 +181,11 @@ async def run_migrate():
             
             if not applied_successfully:
                 sql_content = f.read_text(encoding="utf-8-sig")
-                clean_lines = []
-                for line in sql_content.splitlines():
-                    stripped = line.strip().upper()
-                    if stripped in ("BEGIN;", "COMMIT;", "BEGIN", "COMMIT"):
-                        continue
-                    clean_lines.append(line)
-                clean_sql = "\n".join(clean_lines)
+                # AUD-G(M): o stripper antigo removia TODA linha "BEGIN"/"COMMIT"
+                # — incluindo as dentro de blocos DO $$ ... $$ e corpos de
+                # FUNCTION (PL/pgSQL), partindo a sintaxe. Agora so remove
+                # controle de transacao FORA de dollar-quotes.
+                clean_sql = _strip_transaction_control(sql_content)
                 
                 async with conn.transaction():
                     await conn.execute("SET LOCAL lock_timeout = '10s';")
