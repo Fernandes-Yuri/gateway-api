@@ -74,6 +74,8 @@ from routers import app as app_router
 from routers import audio as audio_router
 # Routers extraidos (Fase A passo 4): chat conversacional.
 from routers import chat as chat_router
+# Routers extraidos (Fase A passo 4b): autenticacao (OTP, reset, conta).
+from routers import auth as auth_router
 
 # Configuração central (Fase B, passo 1 — doc 36): env vars, defaults e paths.
 from config import (
@@ -342,28 +344,8 @@ class WhatsAppSendRequest(BaseModel):
     templateName: Optional[str] = None
     languageCode: Optional[str] = "en_US"
 
-class OtpSendRequest(BaseModel):
-    identifier: str  # E-mail ou Telefone
-    purpose: Optional[str] = "EMAIL_VERIFICATION"  # "EMAIL_VERIFICATION" ou "PASSWORD_RESET"
-    channel: Optional[str] = "EMAIL"  # "EMAIL" ou "WHATSAPP" (WHATSAPP pausado — ver WHATSAPP_OTP_PAUSED)
-
-class OtpVerifyRequest(BaseModel):
-    identifier: str
-    code: str
-    purpose: Optional[str] = "EMAIL_VERIFICATION"
-
-class PasswordResetRequest(BaseModel):
-    identifier: str
-    resetToken: str
-    newPassword: str
-
-class WelcomeEmailRequest(BaseModel):
-    email: str
-    name: Optional[str] = ""
-
-class CheckAccountRequest(BaseModel):
-    identifier: str
-    recaptchaToken: Optional[str] = None
+# Modelos de auth (OtpSend, OtpVerify, PasswordReset, WelcomeEmail,
+# CheckAccount): movidos para routers/auth.py (Fase A passo 4b).
 
 # Modelos de Sincronização PostgreSQL
 class ProfileSyncDto(BaseModel):
@@ -2054,6 +2036,27 @@ chat_router.configure_state(
 )
 app.include_router(chat_router.router)
 
+# Registro do router de auth (Fase A passo 4b): os modulos defensivos
+# (email_service, whatsapp_service, recaptcha) sao importados no topo deste
+# arquivo com fallback gracioso; passamos o que estiver disponivel.
+auth_router.configure_state(
+    db_pool=None,  # preenchido no startup (init_db)
+    rate_limiter=rate_limiter,
+    whatsapp_otp_paused=WHATSAPP_OTP_PAUSED,
+    has_email=HAS_EMAIL,
+    has_whatsapp=HAS_WHATSAPP,
+    has_fcm=HAS_FCM,
+    firebase_admin=firebase_admin if HAS_FCM else None,
+    is_email_configured=is_email_configured if HAS_EMAIL else None,
+    send_security_code_email=send_security_code_email if HAS_EMAIL else None,
+    send_security_code_whatsapp=send_security_code_whatsapp if HAS_WHATSAPP else None,
+    send_security_alert_email=send_security_alert_email if HAS_EMAIL else None,
+    send_welcome_email=send_welcome_email if HAS_EMAIL else None,
+    build_wa_link=build_wa_link if HAS_WHATSAPP else None,
+    verify_recaptcha=verify_recaptcha if HAS_RECAPTCHA else None,
+)
+app.include_router(auth_router.router)
+
 # Memoria/ORB_CHAT_PROMPT/chat_completions: ver routers/chat.py (Fase A
 # passo 4). As estruturas _REST_* agora vivem la; o endpoint /v1/chat/completions
 # e registrado via chat_router. assistant_memory e log_fine_tuning_sample
@@ -2986,411 +2989,11 @@ def whatsapp_events(limit: int = Query(10, ge=1, le=50), uid: str = Depends(fire
 # ENDPOINTS DE SEGURANÇA E AUTENTICAÇÃO OMNICHANNEL (OTP)
 # =============================================================
 
-@app.post("/api/auth/otp/send")
-async def send_auth_otp(request: Request, req: OtpSendRequest, background_tasks: BackgroundTasks):
-    """
-    Gera um código OTP de 6 dígitos numéricos, armazena no PostgreSQL
-    com expiração de 15 minutos e despacha via WhatsApp ou E-mail.
-    """
-    if not db_pool:
-        raise HTTPException(status_code=503, detail="Banco de dados não disponível")
+# ENDPOINTS DE AUTENTICACAO (/api/auth/*): ver routers/auth.py
+# (Fase A passo 4b). OTP send/verify, password/reset, welcome-email,
+# check-account. Nao redeclarar aqui.
 
-    identifier = req.identifier.strip().lower()
-    channel = req.channel.upper()
-    purpose = req.purpose.upper()
 
-    if not identifier:
-        raise HTTPException(status_code=400, detail="Identificador não informado")
-
-    if channel not in ("EMAIL", "WHATSAPP"):
-        raise HTTPException(status_code=400, detail="Canal inválido. Utilize 'EMAIL' ou 'WHATSAPP'.")
-
-    # Canal WhatsApp pausado temporariamente (Meta nao aprova template de OTP).
-    # O codigo abaixo esta intacto e pode ser religado com WHATSAPP_OTP_PAUSED = False.
-    if channel == "WHATSAPP" and WHATSAPP_OTP_PAUSED:
-        raise HTTPException(
-            status_code=503,
-            detail="Canal WhatsApp temporariamente indisponível. Utilize o canal EMAIL."
-        )
-
-    # Impede custos e acesso ao banco antes de gerar/enviar um novo OTP.
-    client_ip = get_client_ip(request)
-    await rate_limiter.check("otp_send_identifier", identifier, limit=3, window_seconds=15 * 60, ip=client_ip, pool=db_pool)
-    await rate_limiter.check("otp_send_ip", client_ip, limit=3, window_seconds=15 * 60, ip=client_ip, pool=db_pool)
-
-    if channel == "EMAIL" and (not HAS_EMAIL or not is_email_configured()):
-        raise HTTPException(
-            status_code=503,
-            detail="Serviço de e-mail não configurado. Configure o Gmail SMTP no servidor.",
-        )
-
-    # Gera código aleatorio de 6 digitos. secrets (CSPRNG) e obrigatorio:
-    # random.randint usa um PRNG nao criptografico e o codigo e previsivel.
-    code = f"{secrets.randbelow(900000) + 100000}"
-    expires_at = datetime.utcnow() + timedelta(minutes=15)
-
-    # Para e-mail, confirma que o Gmail aceitou a mensagem antes de registrar o
-    # OTP. Assim o app não recebe uma falsa confirmação em caso de erro SMTP.
-    if channel == "EMAIL":
-        delivery = await send_security_code_email(identifier, code, purpose)
-        if not delivery.get("success"):
-            raise HTTPException(status_code=502, detail="Não foi possível enviar o código por e-mail. Tente novamente mais tarde.")
-
-    # Invalida códigos anteriores ativos para este mesmo identificador e finalidade
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE auth_verification_codes SET is_used = TRUE WHERE identifier = $1 AND purpose = $2 AND is_used = FALSE",
-            identifier, purpose
-        )
-        await conn.execute(
-            """
-            INSERT INTO auth_verification_codes (identifier, code, purpose, channel, expires_at)
-            VALUES ($1, $2, $3, $4, $5)
-            """,
-            identifier, code, purpose, channel, expires_at
-        )
-
-    # Despacho Assíncrono via Canal Selecionado
-    if channel == "WHATSAPP":
-        if not HAS_WHATSAPP:
-            raise HTTPException(status_code=503, detail="Serviço de WhatsApp não configurado")
-        # Plano B (sem template aprovado): tenta o envio direto (funciona com
-        # janela de 24h aberta); se a Meta recusar, o app abre a conversa.
-        from urllib.parse import quote as _quote
-        _wa_direct = await send_security_code_whatsapp(identifier, code, purpose)
-        if _wa_direct.get("success"):
-            return {
-                "status": "code_dispatched",
-                "channel": channel,
-                "purpose": purpose,
-                "expiresInSeconds": 900
-            }
-        return {
-            "status": "open_conversation",
-            "channel": channel,
-            "purpose": purpose,
-            "expiresInSeconds": 900,
-            "waLink": build_wa_link(),
-            "detail": "Abra a conversa no WhatsApp e envie a mensagem para receber o código."
-        }
-
-    return {
-        "status": "code_dispatched",
-        "channel": channel,
-        "purpose": purpose,
-        "expiresInSeconds": 900
-    }
-
-@app.post("/api/auth/otp/verify")
-async def verify_auth_otp(request: Request, req: OtpVerifyRequest):
-    """
-    Valida o código OTP de 6 dígitos digitado pelo usuário.
-    Possui trava anti-brute force de no máximo 5 tentativas.
-    Para 'PASSWORD_RESET', gera um resetToken seguro válido por 10 minutos.
-    """
-    if not db_pool:
-        raise HTTPException(status_code=503, detail="Banco de dados não disponível")
-
-    identifier = req.identifier.strip().lower()
-    code = req.code.strip()
-    purpose = req.purpose.upper()
-
-    if not identifier:
-        raise HTTPException(status_code=400, detail="Identificador não informado")
-
-    # Bloqueia rajadas de tentativa antes de consultar ou atualizar o PostgreSQL.
-    client_ip = get_client_ip(request)
-    await rate_limiter.check("otp_verify_identifier", identifier, limit=5, window_seconds=5 * 60, ip=client_ip, pool=db_pool)
-    await rate_limiter.check("otp_verify_ip", client_ip, limit=5, window_seconds=5 * 60, ip=client_ip, pool=db_pool)
-
-    async with db_pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
-                SELECT id, code, attempts, expires_at, is_used
-                FROM auth_verification_codes
-                WHERE identifier = $1 AND purpose = $2 AND is_used = FALSE
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                identifier, purpose
-            )
-
-            if not row:
-                raise HTTPException(status_code=404, detail="Código não encontrado ou expirado. Solicite um novo código.")
-
-            record_id = row["id"]
-            stored_code = row["code"]
-            attempts = row["attempts"]
-            expires_at = row["expires_at"]
-
-            # 1. Verifica limite de tentativas
-            if attempts >= 5:
-                await conn.execute("UPDATE auth_verification_codes SET is_used = TRUE WHERE id = $1", record_id)
-                raise HTTPException(status_code=429, detail="Limite de 5 tentativas excedido. Solicite um novo código por segurança.")
-
-            # 2. Verifica expiração
-            if datetime.utcnow().replace(tzinfo=expires_at.tzinfo) > expires_at:
-                await conn.execute("UPDATE auth_verification_codes SET is_used = TRUE WHERE id = $1", record_id)
-                raise HTTPException(status_code=410, detail="Código expirado (validade de 15 minutos ultrapassada).")
-
-            # 3. Validação do código
-            if code != stored_code:
-                await conn.execute("UPDATE auth_verification_codes SET attempts = attempts + 1 WHERE id = $1", record_id)
-                remaining = 4 - attempts
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Código incorreto. Você ainda tem {remaining} tentativa(s)."
-                )
-
-            # Código Correto!
-            reset_token = secrets.token_urlsafe(32) if purpose == "PASSWORD_RESET" else None
-            await conn.execute(
-                "UPDATE auth_verification_codes SET is_used = TRUE, reset_token = $1 WHERE id = $2",
-                reset_token, record_id
-            )
-
-            # Se for verificação de e-mail, atualiza data no perfil correspondente
-            if purpose == "EMAIL_VERIFICATION":
-                await conn.execute(
-                    "UPDATE profiles SET updated_at = NOW() WHERE phone = $1 OR emergency_contact_phone = $1 OR id = $1",
-                    identifier
-                )
-
-            return {
-                "status": "verified",
-                "success": True,
-                "purpose": purpose,
-                "resetToken": reset_token
-            }
-
-@app.post("/api/auth/password/reset")
-async def reset_password(req: PasswordResetRequest, request: Request):
-    """
-    Efetua a troca da senha do usuário após comprovação do resetToken obtido via OTP.
-    Atualiza no Firebase Auth (se ativo) ou na persistência de contas.
-    """
-    if not db_pool:
-        raise HTTPException(status_code=503, detail="Banco de dados não disponível")
-
-    client_ip = get_client_ip(request)
-    await rate_limiter.check("password_reset_ip", client_ip, limit=3, window_seconds=15 * 60, ip=client_ip, pool=db_pool)
-
-    identifier = req.identifier.strip().lower()
-    reset_token = req.resetToken.strip()
-    new_password = req.newPassword.strip()
-
-    if len(new_password) < 6:
-        raise HTTPException(status_code=400, detail="A nova senha deve possuir no mínimo 6 caracteres.")
-
-    async with db_pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
-                SELECT id, created_at, expires_at
-                FROM auth_verification_codes
-                WHERE identifier = $1 AND reset_token = $2 AND purpose = 'PASSWORD_RESET'
-                  AND expires_at > NOW() AND reset_token IS NOT NULL
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                identifier, reset_token
-            )
-
-            if not row:
-                raise HTTPException(status_code=403, detail="Token de redefinição inválido, expirado ou não autorizado.")
-
-            # Invalida o token após o uso
-            await conn.execute("UPDATE auth_verification_codes SET reset_token = NULL WHERE id = $1", row["id"])
-
-    # Atualização no Firebase Auth se disponível
-    firebase_updated = False
-    if HAS_FCM and firebase_admin._apps:
-        try:
-            from firebase_admin import auth as fb_auth
-            user_record = fb_auth.get_user_by_email(identifier)
-            fb_auth.update_user(user_record.uid, password=new_password)
-            firebase_updated = True
-            print(f"[Auth Service] Senha atualizada no Firebase Auth para {identifier}")
-        except Exception as e:
-            # AUD-G13: a falha NÃO pode ser engolida com mensagem de sucesso. O
-            # usuário acreditaria que a senha foi trocada e não entenderia por que
-            # o login antigo ainda funciona (e ficaria sem saber o que fazer).
-            print(f"[Auth Service Firebase Error] {e}")
-            raise HTTPException(
-                status_code=503,
-                detail="Não foi possível atualizar a senha no Firebase Auth. O token de redefinição já foi consumido — solicite um novo código."
-            )
-
-    return {
-        "status": "password_updated",
-        "success": True,
-        "firebaseUpdated": firebase_updated,
-        "message": "Senha redefinida com sucesso! Você já pode entrar com sua nova senha."
-    }
-
-    # doc 10 §4.5: alerta de segurança ao dono da conta. Se a troca partiu de
-    # um OTP legítimo o e-mail é só um recibo; se partiu de um invasor, o dono
-    # descobre aqui. Best-effort: nunca bloqueia o sucesso da troca.
-    if HAS_EMAIL and 'send_security_alert_email' in globals():
-        try:
-            await send_security_alert_email(
-                identifier,
-                'Sua senha foi alterada',
-                'Sua senha do Braga Saúde foi redefinida agora há pouco. Se você não reconhece esta alteração, sua conta pode estar sendo usada por outra pessoa.',
-            )
-        except Exception as e:
-            print(f"[Auth Service] Falha no e-mail de alerta de segurança: {e}")
-
-    return {
-        "status": "password_updated",
-        "success": True,
-        "firebaseUpdated": firebase_updated,
-        "message": "Senha redefinida com sucesso! Você já pode entrar com sua nova senha."
-    }
-
-@app.post("/api/auth/welcome-email")
-async def send_user_welcome_email(
-    req: WelcomeEmailRequest,
-    background_tasks: BackgroundTasks,
-    request: Request,
-):
-    """
-    Dispara e-mail de boas-vindas acolhedor com a marca Braga Saúde.
-
-    O destino e o nome vindo do cliente sao ignorados: sem isso, qualquer um
-    enviava spam ilimitado para enderecos arbitrarios.
-    """
-    # UID autenticado obrigatorio; destinatario derivado do proprio token.
-    uid = await firebase_uid(request)
-    email = ""
-    name = ""
-    if HAS_EMAIL and HAS_FCM and firebase_admin._apps:
-        try:
-            from firebase_admin import auth as fb_auth
-            fb_user = fb_auth.get_user(uid)
-            email = (fb_user.email or "").strip().lower()
-            name = (fb_user.display_name or "").strip()
-        except Exception:
-            raise HTTPException(status_code=400, detail="Não foi possível obter o perfil autenticado.")
-    if not email:
-        raise HTTPException(status_code=400, detail="Conta autenticada não possui e-mail.")
-
-    if HAS_EMAIL:
-        background_tasks.add_task(send_welcome_email, email, name)
-        return {"status": "welcome_email_queued", "email": email}
-    return {"status": "email_service_unavailable"}
-
-@app.post("/api/auth/check-account")
-async def check_account_status(request: Request, req: CheckAccountRequest):
-    """
-    Verifica se a conta já existe e qual o método de login oficial (Google vs Direto).
-    """
-    identifier = req.identifier.strip().lower()
-    if not identifier:
-        raise HTTPException(status_code=400, detail="Identificador não informado")
-
-    client_ip = get_client_ip(request)
-    await rate_limiter.check("check_account_ip", client_ip, limit=5, window_seconds=5 * 60, ip=client_ip, pool=db_pool)
-
-    # Validacao server-side do Google reCAPTCHA (zero-trust): o token gerado
-    # no front so e confiavel apos o Google confirma-lo aqui. Sem isso, a
-    # verificacao do cliente é burlavel.
-    captcha = verify_recaptcha(req.recaptchaToken, expected_action="login", remote_ip=client_ip)
-    if not captcha["valid"]:
-        if captcha["reason"] == "disabled":
-            # Secret nao configurado: nao derruba o fluxo em dev, mas registra.
-            print("[reCAPTCHA] Secret ausente — verificacao pulada (RECAPTCHA_SECRET).")
-        elif captcha["reason"] in ("missing_token", "rejected", "low_score", "action_mismatch"):
-            raise HTTPException(status_code=403, detail="Verificação de segurança falhou. Tente novamente.")
-        # verify_unavailable: o Google esta fora; nao aprova, mas nao trava o usuario legitimo.
-        print(f"[reCAPTCHA] Indisponível ({captcha['reason']}) — solicitacao sem verificacao.")
-
-    profile_exists = False
-    profile_id = None
-
-    if db_pool:
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT id, full_name, phone, emergency_contact_phone
-                FROM profiles
-                WHERE id = $1 OR phone = $1 OR emergency_contact_phone = $1
-                ORDER BY CASE WHEN id = $1 THEN 0 WHEN phone = $1 THEN 1 ELSE 2 END
-                LIMIT 1
-                """,
-                identifier
-            )
-            if row:
-                profile_exists = True
-                profile_id = row["id"]
-
-    # Checa também no Firebase Auth se for e-mail
-    fb_user = None
-    is_google_user = False
-    if HAS_FCM and firebase_admin._apps and "@" in identifier:
-        try:
-            from firebase_admin import auth as fb_auth
-            fb_user = fb_auth.get_user_by_email(identifier)
-            if fb_user:
-                if not profile_id:
-                    profile_id = fb_user.uid
-                for provider in fb_user.provider_data:
-                    if provider.provider_id == "google.com":
-                        is_google_user = True
-                        break
-        except Exception:
-            fb_user = None
-
-    # Se descobriu UID no Firebase mas ainda não achou perfil, busca pelo UID no banco
-    if fb_user and not profile_exists and db_pool:
-        async with db_pool.acquire() as conn:
-            p_row = await conn.fetchrow("SELECT id FROM profiles WHERE id = $1", fb_user.uid)
-            if p_row:
-                profile_exists = True
-                profile_id = fb_user.uid
-
-    # Cenário 1: Conta foi deletada no nosso banco (perfil não existe), mas resquício ficou no Firebase
-    if fb_user and not profile_exists:
-        try:
-            from firebase_admin import auth as fb_auth
-            fb_auth.delete_user(fb_user.uid)
-            print(f"[Auth Cleanup] Usuário deletado no banco purgado do Firebase Auth: {fb_user.uid}")
-        except Exception as e:
-            print(f"[Auth Cleanup Error] {e}")
-
-        return {
-            "exists": False,
-            "provider": "DELETED",
-            "canCreateDirect": True,
-            "message": "Conta anterior foi excluída. Você pode criar um novo cadastro diretamente conosco."
-        }
-
-    # Cenário 2: Usuário com conta Google ativa
-    if is_google_user and profile_exists:
-        return {
-            "exists": True,
-            "provider": "GOOGLE",
-            "canCreateDirect": False,
-            "message": "Você já possui uma conta criada com o Google. Para sua segurança, faça login tocando em 'Continuar com o Google'."
-        }
-
-    # Cenário 3: Conta direta já cadastrada e ativa
-    if profile_exists:
-        return {
-            "exists": True,
-            "provider": "DIRECT",
-            "canCreateDirect": False,
-            "message": "Esta conta já está cadastrada. Por favor, faça login com seu e-mail e senha."
-        }
-
-    # Cenário 4: Conta nova / Não cadastrada
-    return {
-        "exists": False,
-        "provider": None,
-        "canCreateDirect": True,
-        "message": "Conta disponível para cadastro."
-    }
 
 
 # =============================================================
