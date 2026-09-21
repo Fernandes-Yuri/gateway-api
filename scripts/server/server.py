@@ -2868,16 +2868,18 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         if msg_type in ("audio", "voice"):
                             audio_sent = False
                             try:
+                                # Unificado no Piper (decisao 20/09/2026, doc 11 §3.1):
+                                # edge_tts nunca foi importado neste arquivo -> o NameError
+                                # era engolido aqui e a recusa caia sempre em texto.
                                 spoken_refusal = clean_text_for_tts(refusal_text)
-                                communicate = edge_tts.Communicate(spoken_refusal, "pt-BR-AntonioNeural", rate="-2%", volume="+20%")
-                                audio_buf = bytearray()
-                                async for chunk in communicate.stream():
-                                    if chunk["type"] == "audio":
-                                        audio_buf.extend(chunk["data"])
-                                if audio_buf:
-                                    a_res = await send_whatsapp_audio(sender_phone, audio_bytes=bytes(audio_buf))
-                                    if a_res.get("success"):
-                                        audio_sent = True
+                                refusal_path = os.path.join(AUDIO_CACHE_DIR, f"refusal_{hashlib.md5(spoken_refusal.encode('utf-8')).hexdigest()}.wav")
+                                if await synthesize_with_piper(spoken_refusal, "faber", refusal_path) and os.path.exists(refusal_path):
+                                    with open(refusal_path, "rb") as f:
+                                        audio_buf = bytearray(f.read())
+                                    if audio_buf:
+                                        a_res = await send_whatsapp_audio(sender_phone, audio_bytes=bytes(audio_buf))
+                                        if a_res.get("success"):
+                                            audio_sent = True
                             except Exception as e:
                                 print(f"[Refusal Audio Error] {e}")
                             if not audio_sent:
@@ -2986,10 +2988,15 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                     f_bytes = f.read()
                             if not f_bytes:
                                 try:
-                                    comm = edge_tts.Communicate(data["text"], "pt-BR-AntonioNeural", rate="-2%", volume="+20%")
-                                    await comm.save(audio_path)
-                                    with open(audio_path, "rb") as f:
-                                        f_bytes = f.read()
+                                    # Unificado no Piper (decisao 20/09/2026, doc 11 §3.1):
+                                    # antes usava edge_tts aqui, mas edge_tts nunca foi
+                                    # importado neste arquivo -> NameError silencioso.
+                                    # O Piper ja e a engine do fast-lane de startup
+                                    # (init_fast_lane_audio_cache) e da voz em producao.
+                                    ok = await synthesize_with_piper(data["text"], "faber", audio_path)
+                                    if ok:
+                                        with open(audio_path, "rb") as f:
+                                            f_bytes = f.read()
                                 except Exception as e:
                                     print(f"[Fast-Lane On-Demand Error] {e}")
                             cached = {"text": data["text"], "bytes": f_bytes, "media_id": None}
