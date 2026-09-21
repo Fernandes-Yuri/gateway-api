@@ -66,6 +66,8 @@ async def require_service_token(request: Request):
     - 503 se o token nao esta configurado (recurso desativado, nunca aberto).
     - 401 se ausente ou divergente. compare_digest e constante no tempo
       para nao vazar o token por timing side-channel.
+    - Loga cada acesso (path + IP) para auditoria. O token em si nunca
+      aparece no log.
     """
     token = _service_token()
     if not token:
@@ -73,10 +75,14 @@ async def require_service_token(request: Request):
     supplied = request.headers.get("Authorization", "")
     # So compara se o formato for exatamente "Bearer <token>".
     if not supplied.startswith("Bearer "):
+        print(f"[ADMIN] Acesso negado (sem Bearer) {get_client_ip(request)} {request.url.path}")
         raise HTTPException(401, "Não autorizado.")
     candidate = supplied[len("Bearer "):]
     if not secrets.compare_digest(candidate, token):
+        # Nao loga o candidato — so o fato da divergência.
+        print(f"[ADMIN] Token invalido {get_client_ip(request)} {request.url.path}")
         raise HTTPException(401, "Não autorizado.")
+    print(f"[ADMIN] OK {get_client_ip(request)} {request.url.path}")
     return "service"
 
 
@@ -145,12 +151,15 @@ async def list_feedback_admin(
     limit: int = Query(15, ge=1, le=100),
     category: str = Query("all"),
     status: str = Query("all"),
+    priority: str = Query("all"),
     search: str = Query(""),
 ):
     """Lista feedbacks do app para o painel — paginado e filtrado.
 
     Le a tabela 'feedbacks' (a do gateway, escrita por /api/sync/feedback).
-    Inclui contagem de respostas por item (o portal mostra o badge).
+    Inclui contagem de respostas por item (o portal mostra o badge) e os
+    KPIs do cabecalho (total/pendentes/alta prioridade) — sempre agregados,
+    nunca linhas individiais alem da pagina atual.
     """
     pool = _require_pool()
     client_ip = get_client_ip(request)
@@ -170,6 +179,14 @@ async def list_feedback_admin(
         conditions.append("LOWER(status) = ANY($%d::text[])" % idx)
         # Aceita ambos os vocabularios na entrada.
         values.append([status, _map_status_portal_to_gateway(status)])
+        idx += 1
+    if priority == "high":
+        # O gateway nao tem coluna de prioridade (D-WS3 pendente); a alta
+        # prioridade do portal vinha de termos criticos no texto. Para nao
+        # devolver sempre 'all', filtra pelos mesmos termos criticos que o
+        # portal usava — logica espelhada, resultado equivalente.
+        conditions.append(_critical_terms_condition(idx))
+        values.append([f"%{t}%" for t in _CRITICAL_TERMS])
         idx += 1
     if search:
         # LIKE trata % e _ como curingas — escapa antes de envolver.
@@ -196,8 +213,19 @@ async def list_feedback_admin(
                 ORDER BY f.created_at DESC
                 LIMIT ${idx} OFFSET ${idx + 1}""",
             *values, limit, offset)
+        # KPIs do cabecalho do painel: agregados puros sobre a mesma base.
+        # ~* e case/accent-insensitive; o regex cobre os termos criticos.
+        kpis = await conn.fetchrow(
+            f"""SELECT
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE LOWER(status) IN ('pending','analyzed')) AS pendentes,
+                   COUNT(*) FILTER (WHERE message ~* $1) AS alta_prioridade
+                FROM feedbacks {where}""",
+            _CRITICAL_REGEX, *values)
 
     items = [_row_to_feedback(r) for r in rows]
+    # KPIs podem faltar em mock/teste; defensivo para nao quebrar a lista.
+    k = kpis or {}
     return {
         "success": True,
         "data": items,
@@ -205,7 +233,31 @@ async def list_feedback_admin(
             "page": page, "limit": limit, "total": total,
             "totalPages": max(1, (total + limit - 1) // limit),
         },
+        # KPIs agregados: o painel mostra no cabecalho da lista.
+        "stats": {
+            "total": int(k.get("total") or 0),
+            "pending": int(k.get("pendentes") or 0),
+            "highPriority": int(k.get("alta_prioridade") or 0),
+        },
     }
+
+
+# Termos criticos — espelham o checkCriticalRisk do portal (CRITICAL_TERMS),
+# sem acentos para casar com mensagem normalizada. Usados no filtro de
+# prioridade ate a migration 014 criar is_high_priority (D-WS3).
+_CRITICAL_TERMS = [
+    "nao abre", "zerou", "travou", "trava", "perdi meus dados",
+    "perdi dados", "emergencia", "socorro", "parou de funcionar",
+    "parou", "erro grave", "tela preta", "tela branca", "nao funciona",
+    "queda", "desmaiou",
+]
+# Regex unico, reusado no WHERE do filtro e no FILTER dos KPIs.
+_CRITICAL_REGEX = "(" + "|".join(_CRITICAL_TERMS) + ")"
+
+
+def _critical_terms_condition(idx: int) -> str:
+    """Condicao para o filtro de prioridade (LIKE ANY sobre o LOWER)."""
+    return "LOWER(message) LIKE ANY($%d::text[])" % idx
 
 
 _STATUS_PORTAL_TO_GATEWAY = {

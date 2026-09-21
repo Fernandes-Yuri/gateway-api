@@ -139,6 +139,28 @@ class FeedbackListagemTest(_AdminTestBase):
         valores = self.conn.fetch.call_args.args[1:]
         self.assertTrue(any("%" in str(v) for v in valores))
 
+    def test_kpis_vem_no_payload(self):
+        # stats (total/pendentes/alta prioridade) e agregado puro.
+        self.conn.fetchval.return_value = 3
+        self.conn.fetch.return_value = []
+        self.conn.fetchrow.return_value = {
+            "total": 3, "pendentes": 2, "alta_prioridade": 1}
+        r = self.client.get("/api/admin/feedback", headers=self._auth())
+        self.assertEqual(r.status_code, 200)
+        stats = r.json()["stats"]
+        self.assertEqual(stats["total"], 3)
+        self.assertEqual(stats["pending"], 2)
+        self.assertEqual(stats["highPriority"], 1)
+
+    def test_filtro_prioridade_aplicado(self):
+        # priority=high adiciona a condicao de termos criticos na query.
+        self.conn.fetchval.return_value = 0
+        self.conn.fetch.return_value = []
+        self.conn.fetchrow.return_value = None
+        self.client.get("/api/admin/feedback?priority=high", headers=self._auth())
+        sql = self.conn.fetch.call_args.args[0]
+        self.assertIn("LIKE ANY", sql)
+
 
 class FeedbackStatusTest(_AdminTestBase):
     def setUp(self):
