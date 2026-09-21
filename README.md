@@ -31,12 +31,14 @@ cd gateway-api
 cp .env.example .env
 # Edite .env com suas chaves
 
-python3.12 -m venv venv
-source venv/bin/activate
-pip install fastapi "uvicorn[standard]" asyncpg httpx "pydantic>=2" \
-  firebase-admin apscheduler onnxruntime aiohttp aiofiles \
-  cryptography "python-multipart" Jinja2 espeakng-loader
+python3 -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt   # versões pinadas — não instale à mão
 ```
+
+> Sem `requirements.txt` as versões divergem entre dev/homelab/EC2 e a
+> API quebra por incompatibilidade silenciosa de FastAPI/Pydantic.
+> É a primeira coisa que o deploy da EC2 roda.
 
 ### Rodar
 
@@ -55,9 +57,30 @@ curl http://localhost:8080/health
 
 ## 📁 Estrutura
 
+Monolito modularizado por domínio (Fase A, set/2026 — ver doc
+`11_PLANO_MODULARIZACAO_E_TTS.md` no Contexto). O `server.py` era um
+arquivo só de 4.123 linhas; hoje é um orquestrador magro (~800) e cada
+domínio é um router `core/`/`routers/` com estado injetado via
+`configure_state()` — nada de globais cruzando módulos.
+
 ```
 scripts/server/
-├── server.py              # Main FastAPI app (routes, startup, DB pool)
+├── server.py              # Orquestrador: config, middleware, startup/shutdown,
+│                          #   scheduler, dispatch_clinical_alert
+├── routers/               # Rotas FastAPI por domínio (APIRouter)
+│   ├── health.py          #   /health + status de serviços
+│   ├── app.py             #   /api/app/* (OTA, devices, FCM)
+│   ├── audio.py           #   /api/audio/* (TTS streaming)
+│   ├── chat.py            #   /v1/chat/completions (canal REST)
+│   ├── auth.py            #   /api/auth/* (OTP, cadastro, sessão)
+│   ├── sync.py            #   /api/sync/* (22 endpoints, gravar/sincronizar)
+│   └── whatsapp.py        #   /api/whatsapp/* (webhook, send, events)
+├── core/                  # Lógica de domínio compartilhada
+│   ├── text.py            #   Limpeza de texto + mascaramento PII
+│   ├── devices.py         #   FCM push + cadastro de dispositivos
+│   ├── prompt.py          #   System prompt base
+│   ├── confirmation.py    #   Confirmações pendentes (idempotente)
+│   └── dataset.py         #   Dataset de fine-tuning
 ├── config.py              # Centralized env vars & paths
 ├── orb_router.py          # Voice assistant routes (Orb)
 ├── ws_orb.py              # WebSocket handler (streaming TTS)
@@ -73,21 +96,32 @@ scripts/server/
 ├── rate_limiter.py
 ├── profile_contract.py
 ├── trace_llm.py
-├── test_*.py              # Test suite (unittest)
+├── test_*.py              # Test suite (pytest, asyncio_mode=auto)
 └── persona/               # System prompts
 ```
 
+> **Adicionar uma rota nova?** Crie ou edite um arquivo em `routers/` —
+> o `server.py` só deve mudar se for ligar um novo domínio no
+> `include_router()`. Estado compartilhado vem por `configure_state()`,
+> nunca por import direto de global.
+
 ## 🔌 Principais Rotas
 
-| Método | Rota | Descrição |
-|---|---|---|
-| GET | `/health` | Health check + status de todos os serviços |
-| GET | `/api/profile/{id}` | Buscar perfil |
-| POST | `/api/sync/profile` | Sincronizar perfil |
-| POST | `/api/auth/otp/send` | Enviar OTP |
-| POST | `/api/auth/otp/verify` | Verificar OTP |
-| WebSocket | `/ws/orb` | Chat de voz streaming (Orb) |
-| GET | `/api/app/latest` | Última versão do app (OTA) |
+| Método | Rota | Router | Descrição |
+|---|---|---|---|
+| GET | `/health` | `health` | Health check + status de todos os serviços |
+| GET | `/api/profile/{id}` | `sync` | Buscar perfil |
+| POST | `/api/sync/profile` | `sync` | Sincronizar perfil |
+| POST | `/api/sync/vitals` | `sync` | Gravar sinais vitais (gatilho clínico) |
+| POST | `/api/auth/otp/send` | `auth` | Enviar OTP |
+| POST | `/api/auth/otp/verify` | `auth` | Verificar OTP |
+| POST | `/v1/chat/completions` | `chat` | Chat conversacional (canal REST) |
+| WebSocket | `/ws/orb` | — | Chat de voz streaming (Orb) |
+| GET | `/api/app/latest` | `app` | Última versão do app (OTA) |
+| GET/POST | `/api/whatsapp/webhook` | `whatsapp` | Webhook da WhatsApp Cloud API |
+| POST | `/api/feedback/reply` | `sync` | Resposta a feedback (suporte) |
+
+> 48 rotas no total. Domínio completo de cada uma está no `routers/<dominio>.py`.
 
 ## 🚢 Deploy (Production)
 
@@ -148,5 +182,11 @@ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/med
 
 ```bash
 cd scripts/server
-python -m pytest test_*.py -q
+python -m pytest -q
+# 283 passed, 1 skipped (75 subtests)
+# asyncio_mode=auto esta em pytest.ini — testes async soltos rodam nativo
 ```
+
+> Validação em venv zerada antes de qualquer push (doc 06 §12.6): a suite
+# so e considerada verde se rodar contra um `pip install -r requirements.txt`
+# fresco, sem caches do ambiente de desenvolvimento.
