@@ -75,6 +75,8 @@ scripts/server/
 │   ├── auth.py            #   /api/auth/* (OTP, cadastro, sessão)
 │   ├── sync.py            #   /api/sync/* (22 endpoints, gravar/sincronizar)
 │   └── whatsapp.py        #   /api/whatsapp/* (webhook, send, events)
+├── routers/admin.py       #   /api/admin/* — portal do webservice (D-WS1):
+│                          #     token de serviço + métricas aggregate-only
 ├── core/                  # Lógica de domínio compartilhada
 │   ├── text.py            #   Limpeza de texto + mascaramento PII
 │   ├── devices.py         #   FCM push + cadastro de dispositivos
@@ -122,6 +124,23 @@ scripts/server/
 | POST | `/api/feedback/reply` | `sync` | Resposta a feedback (suporte) |
 
 > 48 rotas no total. Domínio completo de cada uma está no `routers/<dominio>.py`.
+
+### 🔐 Domínio administrativo (D-WS1)
+
+O portal Next.js no Render consome estes endpoints com um **token de serviço**
+(`SERVICE_TOKEN` do env — escopo reduzido, não reutiliza `ADMIN_API_TOKEN`).
+Nenhuma credencial de banco vai para o Render; o RDS permanece privado.
+
+```bash
+# Exemplo: métricas de usuários ativos
+curl -H "Authorization: Bearer $SERVICE_TOKEN" \
+     https://api.bragasaude.online/api/admin/metrics/active-users?days=7
+# {"success": true, "activeUsers": 42, "totalUsers": 100, "days": 7}
+```
+
+**Métricas são aggregate-only (k-anonimato):** só números cruzam a rede —
+nunca uma linha de usuário. Buckets com menos de 5 usuários são suprimidos
+dentro do SQL do gateway, e `audit_logs.metadata` nunca é selecionado.
 
 ## 🚢 Deploy (Production)
 
