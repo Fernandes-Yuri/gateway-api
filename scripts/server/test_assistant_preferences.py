@@ -117,11 +117,12 @@ class ApiTests(unittest.TestCase):
 class RestWireTests(unittest.IsolatedAsyncioTestCase):
     async def test_authenticated_rest_routes_memory_without_executing_action(self):
         import server
-        req = server.ChatCompletionRequest(messages=[server.Message(role='user', content='Pode me chamar de Léo')])
+        from routers import chat as chat_router
+        req = chat_router.ChatCompletionRequest(messages=[chat_router.Message(role='user', content='Pode me chamar de Léo')])
         request = SimpleNamespace(headers={'authorization': 'Bearer test'})
         handler = AsyncMock(return_value=('Posso guardar na sua conta?', {}))
-        with patch.object(server, 'firebase_uid', AsyncMock(return_value='owner')), patch.object(server, 'assistant_memory', handler):
-            response = await server.chat_completions(req, request)
+        with patch.object(chat_router, 'firebase_uid', AsyncMock(return_value='owner')), patch.object(chat_router._state, 'assistant_memory', handler):
+            response = await chat_router.chat_completions(req, request)
         result = json.loads(response['choices'][0]['message']['content'])
         self.assertEqual(result['fala'], 'Posso guardar na sua conta?')
         self.assertEqual(result['acao'], 'CONVERSA')
@@ -129,11 +130,12 @@ class RestWireTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rest_rejects_another_account_before_memory(self):
         import server
+        from routers import chat as chat_router
         from fastapi import HTTPException
-        req = server.ChatCompletionRequest(userId='other', messages=[])
-        with patch.object(server, 'firebase_uid', AsyncMock(return_value='owner')), patch.object(server, 'assistant_memory', AsyncMock()) as handler:
+        req = chat_router.ChatCompletionRequest(userId='other', messages=[])
+        with patch.object(chat_router, 'firebase_uid', AsyncMock(return_value='owner')), patch.object(chat_router._state, 'assistant_memory', AsyncMock()) as handler:
             with self.assertRaises(HTTPException) as caught:
-                await server.chat_completions(req, SimpleNamespace(headers={'authorization': 'Bearer test'}))
+                await chat_router.chat_completions(req, SimpleNamespace(headers={'authorization': 'Bearer test'}))
         self.assertEqual(caught.exception.status_code, 403)
         handler.assert_not_awaited()
 

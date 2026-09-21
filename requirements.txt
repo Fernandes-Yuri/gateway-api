@@ -13,6 +13,9 @@ fastapi==0.141.1
 uvicorn[standard]>=0.30.0
 starlette==1.6.0
 pydantic>=2.9,<3
+# Form data (multipart): exigido por rotas com UploadFile/File/Form
+# (exams_api, /api/upload/exam). Sem ele, o import da rota falha em runtime.
+python-multipart>=0.0.9
 
 # HTTP clients (Groq, Meta WhatsApp, reCAPTCHA)
 httpx==0.28.1

@@ -1,5 +1,8 @@
 __pycache__/
+.pytest_cache/
 venv/
+.venv/
+.venv-clean/
 .env
 node_modules/
 logs/
