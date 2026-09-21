@@ -219,7 +219,13 @@ async def list_feedback_admin(
             f"""SELECT
                    COUNT(*) AS total,
                    COUNT(*) FILTER (WHERE LOWER(status) IN ('pending','analyzed')) AS pendentes,
-                   COUNT(*) FILTER (WHERE message ~* $1) AS alta_prioridade
+                   COUNT(*) FILTER (WHERE message ~* $1) AS alta_prioridade,
+                   COUNT(*) FILTER (WHERE LOWER(category) IN ('sugestao','suggestion')) AS sugestoes,
+                   COUNT(*) FILTER (WHERE LOWER(category) = 'bug') AS bugs,
+                   COUNT(*) FILTER (WHERE LOWER(category) IN ('passos','steps')) AS passos,
+                   COUNT(*) FILTER (WHERE LOWER(category) IN ('exames','exams')) AS exames,
+                   COUNT(*) FILTER (WHERE LOWER(status) IN ('investigando','analyzed')) AS investigando,
+                   COUNT(*) FILTER (WHERE LOWER(status) IN ('resolvido_v1.2','resolved')) AS resolvidos
                 FROM feedbacks {where}""",
             _CRITICAL_REGEX, *values)
 
@@ -233,11 +239,18 @@ async def list_feedback_admin(
             "page": page, "limit": limit, "total": total,
             "totalPages": max(1, (total + limit - 1) // limit),
         },
-        # KPIs agregados: o painel mostra no cabecalho da lista.
+        # KPIs agregados: o painel mostra no cabecalho da lista. Todos sao
+        # contagens sobre a base filtrada — nunca linhas de usuario.
         "stats": {
             "total": int(k.get("total") or 0),
             "pending": int(k.get("pendentes") or 0),
             "highPriority": int(k.get("alta_prioridade") or 0),
+            "suggestions": int(k.get("sugestoes") or 0),
+            "bugs": int(k.get("bugs") or 0),
+            "steps": int(k.get("passos") or 0),
+            "exams": int(k.get("exames") or 0),
+            "investigating": int(k.get("investigando") or 0),
+            "resolved": int(k.get("resolvidos") or 0),
         },
     }
 
