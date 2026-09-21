@@ -536,21 +536,24 @@ async def startup():
             # doc 10 §4.6: rotinas pró-ativas (09h / 14h30 / 20h30). Antes isto
             # era uma função solta que criava um scheduler aninhado e nunca era
             # registrada — código morto. Agora vive no scheduler existente.
-            retention_scheduler.add_job(
-                lambda: asyncio.create_task(scheduled_proactive_job("manha")),
-                CronTrigger(hour=9, minute=0), id="proactive_manha",
-                replace_existing=True, max_instances=1, coalesce=True,
-            )
-            retention_scheduler.add_job(
-                lambda: asyncio.create_task(scheduled_proactive_job("hidratacao")),
-                CronTrigger(hour=14, minute=30), id="proactive_hidratacao",
-                replace_existing=True, max_instances=1, coalesce=True,
-            )
-            retention_scheduler.add_job(
-                lambda: asyncio.create_task(scheduled_proactive_job("noite")),
-                CronTrigger(hour=20, minute=30), id="proactive_noite",
-                replace_existing=True, max_instances=1, coalesce=True,
-            )
+            #
+            # BUG pre-existente (detectado no log da EC2 21/09 14h30): antes os
+            # 3 jobs passavam 'lambda: asyncio.create_task(...)' — um callable
+            # SINCRONO. O AsyncIOScheduler roda sync callables num executor de
+            # thread, onde NAO ha event loop rodando, entao create_task() lia
+            # 'RuntimeError: no running event loop' e a rotina caia toda vez.
+            # Os outros jobs deste scheduler (purge_*) passam a corrotina
+            # direto e funcionam; estes precisam do mesmo tratamento.
+            for _h, _m, _periodo, _id in (
+                (9, 0, "manha", "proactive_manha"),
+                (14, 30, "hidratacao", "proactive_hidratacao"),
+                (20, 30, "noite", "proactive_noite"),
+            ):
+                retention_scheduler.add_job(
+                    scheduled_proactive_job, CronTrigger(hour=_h, minute=_m),
+                    args=[_periodo], id=_id,
+                    replace_existing=True, max_instances=1, coalesce=True,
+                )
             print("[Scheduler] Rotinas pró-ativas registradas: 09h00, 14h30, 20h30.")
             retention_scheduler.start()
 
