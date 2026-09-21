@@ -82,6 +82,10 @@ from routers import sync as sync_router
 # O pipeline completo (webhook, router Fase 4, fast-lane de audio,
 # callback de confirmacao) vive la; este arquivo so registra.
 from routers import whatsapp as whatsapp_router
+# Router administrativo do portal webservice (D-WS1 / D50): leituras e
+# operacoes admin protegidas por token de servico. O portal Next.js no
+# Render consome estes endpoints e deixa de acessar o RDS diretamente.
+from routers import admin as admin_router
 # Modulos core extraidos (Fase A passo 6): confirmacao de leituras vitais
 # (maquina de pendencias + validacao clinica + botes do WhatsApp) e
 # curadoria do dataset de fine-tuning.
@@ -388,7 +392,7 @@ class FamilyMessageSyncDto(BaseModel):
 # 503/offline_mode em producao. (Detectado na revisao pre-push: os testes
 # locais passavam justamente por esperarem pool None offline.)
 _POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
-                 sync_router, whatsapp_router)
+                 sync_router, whatsapp_router, admin_router)
 
 
 def _propagate_db_pool():
@@ -851,6 +855,14 @@ whatsapp_router.configure_state(
     sem_wa=SEM_WA,
 )
 app.include_router(whatsapp_router.router)
+
+# Registro do router admin do portal (D-WS1). Autenticado por
+# SERVICE_TOKEN (env), escopo reduzido — ver routers/admin.py.
+admin_router.configure_state(
+    db_pool=None,  # preenchido no startup por _propagate_db_pool()
+    rate_limiter=rate_limiter,
+)
+app.include_router(admin_router.router)
 
 # Configuracao dos modulos core extraidos (Fase A passo 6).
 # dispatch_clinical_alert continua definido neste arquivo (compartilhado
