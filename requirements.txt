@@ -1,0 +1,31 @@
+# Dependencias do Braga Saude Gateway (FastAPI + TTS + WhatsApp + RDS).
+#
+# deploy.sh:14-18 instala este arquivo a cada deploy na EC2. Antes ele nao
+# existia, o pip install era pulado e as dependencias ficavam so no venv
+# -- sem versionamento (divida registrada no doc 11 §3.2).
+#
+# Estrategia: fixar o que foi verificado localmente/CI; minimo para o que so
+# existe na EC2 (asyncpg/APScheduler/firebase). Atualizar conforme os deploys
+# confirmarem as versoes.
+
+# Web framework (versao verificada localmente + CI verde)
+fastapi==0.141.1
+uvicorn[standard]>=0.30.0
+starlette==1.6.0
+pydantic>=2.9,<3
+
+# HTTP clients (Groq, Meta WhatsApp, reCAPTCHA)
+httpx==0.28.1
+requests>=2.31
+
+# PostgreSQL (RDS) via asyncpg — so instalado na EC2
+asyncpg>=0.29
+
+# Agendador em segundo plano (limpeza periodica) — so na EC2
+APScheduler>=3.10
+
+# Firebase Admin (FCM push + auth) — so na EC2
+firebase-admin>=6.5
+
+# Google reCAPTCHA server-side: validado via POST para a API do Google com
+# requests; nao exige SDK adicional.
