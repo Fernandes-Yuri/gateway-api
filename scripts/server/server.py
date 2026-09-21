@@ -4100,7 +4100,17 @@ async def broadcast_app_update(req: BroadcastUpdateRequest, request: Request):
 # =============================================================
 # ONBOARDING / LANDING PAGE STATICS
 # =============================================================
-ONBOARDING_DIR = "/home/yurifjs/bragasaude/onboarding_site/public"
+# =============================================================
+# ONBOARDING / LANDING PAGE STATICS
+# =============================================================
+# AUD-G(B): path absoluto do homelab (/home/yurifjs/...) — na EC2 nunca
+# existe, e a landing page e servida pela PWA/site na Cloudflare. Guardado
+# por os.path.isdir (inerte), mas env-configuravel para qualquer provedor.
+ONBOARDING_DIR = os.environ.get(
+    "ONBOARDING_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                 "onboarding_site", "public"),
+)
 
 @app.get("/")
 async def serve_landing_index():

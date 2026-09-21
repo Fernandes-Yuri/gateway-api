@@ -10,7 +10,7 @@ import os
 import re
 import uuid
 from datetime import datetime, date, timezone
-from typing import Optional, List
+from typing import Optional, List, Literal
 from fastapi import Depends, HTTPException, Request, UploadFile, File, Form, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -31,7 +31,11 @@ class ExamItemInput(BaseModel):
     value_text: str = Field(..., max_length=100)
     unit: str = Field(..., max_length=50)
     reference_text: Optional[str] = Field(None, max_length=255)
-    status: str = Field("confirmed", max_length=50)
+    # AUD-G(B): antes aceitava QUAISQUER 50 chars. O INSERT sempre grava
+    # 'confirmed' (o campo e vestigial na escrita), mas a rota legada de
+    # sync (server.py, EXAM_STATUS_ALLOWED) ja so aceita estes 3 — alinhar
+    # os dois contratos. App Android so envia "uploaded"/"confirmed".
+    status: Literal["uploaded", "confirmed", "failed"] = Field("confirmed")
 
 
 class ManualExamCreateRequest(BaseModel):

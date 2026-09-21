@@ -117,7 +117,15 @@ async def run_migrate():
                 # `ps aux` / `ps -ef`. Agora ela viaja so no ambiente (PGPASSWORD),
                 # e o DSN passado ao psql nao carrega credencial.
                 dsn_safe, psql_env = _psql_dsn_without_password()
-                cmd = ["psql", dsn_safe, "-v", "ON_ERROR_STOP=1", "-f", str(f)]
+                # AUD-G(M): --single-transaction envolve o arquivo inteiro num
+                # BEGIN/COMMIT — antes cada statement rodava em autocommit, e
+                # uma migration de 4 statements que falhasse no #3 deixava #1
+                # e #2 aplicados e o schema_migrations sem registro da versao
+                # (estado parcial, dificil de diagnosticar). Com ON_ERROR_STOP
+                # + single-transaction, ou o arquivo inteiro aplica ou nada.
+                # Seguro: nenhuma migration usa CONCURRENTLY/VACUUM/REINDEX
+                # (auditado — esses comandos nao rodam dentro de transacao).
+                cmd = ["psql", dsn_safe, "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", str(f)]
                 res = subprocess.run(cmd, capture_output=True, text=True, env=psql_env)
                 if res.returncode == 0:
                     await conn.execute(

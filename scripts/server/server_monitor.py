@@ -78,10 +78,17 @@ def check_tunnel(name: str) -> Dict:
     """Verifica status de um túnel Cloudflare e sua URL."""
     svc = check_service(name)
     url = ""
+    # AUD-G(B): os caminhos dos arquivos de URL do túnel eram absolutos do
+    # homelab (/home/yurifjs/...) — na EC2 nunca existem, então a URL vinha
+    # sempre vazia e o check de alcançabilidade reportava FALSO negativo.
+    # Agora relativos à dir da app (env-configurável).
+    app_dir = os.environ.get("BRAGA_APP_DIR") or os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))
+    )
     url_file_map = {
-        "braga-ngrok": "/home/yurifjs/projetos/braga-gateway/app/.whatsapp_tunnel_url",
-        "braga-whatsapp-tunnel": "/home/yurifjs/projetos/braga-gateway/app/.whatsapp_tunnel_url",
-        "braga-vip-tunnel": "/home/yurifjs/projetos/braga-gateway/app/.vip_tunnel_url",
+        "braga-ngrok": os.path.join(app_dir, ".whatsapp_tunnel_url"),
+        "braga-whatsapp-tunnel": os.path.join(app_dir, ".whatsapp_tunnel_url"),
+        "braga-vip-tunnel": os.path.join(app_dir, ".vip_tunnel_url"),
     }
     if name in url_file_map:
         output, _ = run_cmd(f"cat {url_file_map[name]} 2>/dev/null")
@@ -609,7 +616,12 @@ def main():
     send_email(RECIPIENTS, subject, html, plain)
 
     # Salvar relatório localmente (backup)
-    report_dir = "/home/yurifjs/projetos/braga-gateway/app/reports"
+    # AUD-G(B): hardcoded /home/yurifjs/... — na EC2 o makedirs criava uma
+    # árvore inexistente (ou falhava) e poluía o log. Agora env-configurável,
+    # fallback relativo ao script.
+    report_dir = os.environ.get("MONITOR_REPORT_DIR") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "reports"
+    )
     os.makedirs(report_dir, exist_ok=True)
     report_file = os.path.join(report_dir, f"report_{datetime.now().strftime('%Y%m%d')}.html")
     with open(report_file, "w") as f:
