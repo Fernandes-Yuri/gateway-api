@@ -379,6 +379,30 @@ class FamilyMessageSyncDto(BaseModel):
 # =============================================================
 # INICIALIZAÇÃO DE POOL E SCHEDULER
 # =============================================================
+
+# Routers extraidos que precisam do pool Postgres. Eles o capturam via
+# configure_state no momento do REGISTRO (import time), quando o pool ainda
+# nao existe — ele so e criado no startup() abaixo. Sem o repasse explicito
+# de _propagate_db_pool(), os routers ficariam com db_pool=None para sempre,
+# MESMO com DATABASE_URL configurado, e toda rota de banco devolveria
+# 503/offline_mode em producao. (Detectado na revisao pre-push: os testes
+# locais passavam justamente por esperarem pool None offline.)
+_POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
+                 sync_router, whatsapp_router)
+
+
+def _propagate_db_pool():
+    """Repassa o pool vivo (ou None) para os routers extraidos.
+
+    Idempotente: chamar no startup (apos create_pool) e no shutdown
+    (apos close) mantem todos os routers sincronizados com o ciclo de vida
+    real do pool. Em falha de conexao, propaga None — as rotas continuam
+    respondendo offline_mode/503 de forma graciosa, como ja fazem.
+    """
+    for _router in _POOL_ROUTERS:
+        _router._state.db_pool = db_pool
+
+
 @app.on_event("startup")
 async def startup():
     global db_pool
@@ -454,6 +478,7 @@ async def startup():
 
         if db_pool:
             await rate_limiter.load_blocked_ips_from_db(db_pool)
+            _propagate_db_pool()  # routers extras: pool vivo a partir de agora
 
             # AUD-G(M): expire_pending_confirmations() (migration 004:63-71)
             # existia mas nunca era chamada. Confirmações vencidas ficavam
@@ -590,6 +615,8 @@ async def shutdown():
         retention_scheduler.shutdown(wait=False)
     if db_pool:
         await db_pool.close()
+        db_pool = None
+        _propagate_db_pool()  # routers extras: pool fechado, volta a None
 
 # =============================================================
 # MÉTODOS AUXILIARES DE DISPOSITIVOS E FCM — ver core/devices.py
