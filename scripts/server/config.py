@@ -101,6 +101,15 @@ SERVICE_ACCOUNT_PATH = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
 PUBLIC_API_BASE_URL = (os.getenv("PUBLIC_API_BASE_URL") or "").rstrip("/")
 
 # ------------------------------------------------------------------
+# Modo desenvolvimento. Desliga as protecoes de "superficie zero" que
+# so fazem sentido em producao: hoje, /docs, /redoc e /openapi.json
+# (AUD-SEC/P2, contrarrrelatorio doc 07 §4 V5). Default fechado —
+# producao nunca deve exporta-los; localmente, DEVELOPMENT_MODE=1 os
+# reabilita para depuracao.
+# ------------------------------------------------------------------
+DEVELOPMENT_MODE = os.getenv("DEVELOPMENT_MODE", "0").strip() in ("1", "true", "True", "yes")
+
+# ------------------------------------------------------------------
 # Avisos de configuracao obrigatoria ausente. Falha alto e visivel no
 # startup para que um ambiente mal configurado seja detectado na hora,
 # em vez de virar um bug silencioso em runtime.

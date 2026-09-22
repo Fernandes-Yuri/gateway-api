@@ -117,6 +117,7 @@ from config import (
     PIPER_BIN, PIPER_MODELS_DIR,
     SERVICE_ACCOUNT_PATH,
     PUBLIC_API_BASE_URL,
+    DEVELOPMENT_MODE,
 )
 
 # Suporte defensivo a E-mail de Segurança & OTP
@@ -225,7 +226,18 @@ SEM_CHAT = asyncio.Semaphore(3)
 SEM_REST = asyncio.Semaphore(2)
 SEM_WA = asyncio.Semaphore(3)
 
-app = FastAPI(title="Braga Saúde Gateway, TTS, Sync & Notification Hub", version="5.0")
+# AUD-SEC/P2 (contrarrrelatório doc 07 §4 V5, 21/09/2026): /docs, /redoc e
+# /openapi.json expostos em produção entregavam um mapa gratuito de 74 rotas
+# (incluindo /api/admin/* e o design interno do broadcast) a qualquer atacante
+# — recon zero custo. Em produção ficam desligados; localmente, DEVELOPMENT_MODE=1
+# os reabilita para depuração. Não afeta os testes (não dependem do OpenAPI público).
+app = FastAPI(
+    title="Braga Saúde Gateway, TTS, Sync & Notification Hub",
+    version="5.0",
+    docs_url="/docs" if DEVELOPMENT_MODE else None,
+    redoc_url="/redoc" if DEVELOPMENT_MODE else None,
+    openapi_url="/openapi.json" if DEVELOPMENT_MODE else None,
+)
 
 # Routers extraidos (Fase A passo 2): o estado global fica aqui no server e e
 # passado para o router via configure_state; os endpoints leem sem acoplar.

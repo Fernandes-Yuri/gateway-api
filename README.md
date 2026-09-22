@@ -55,6 +55,23 @@ curl http://localhost:8080/health
 # {"status":"online","model":"qwen/qwen3.8-27b",...}
 ```
 
+### Documentação interativa (`/docs`, `/redoc`, `/openapi.json`)
+
+**Desligada em produção por padrão** (AUD-SEC/P2 — contrarrrelatório de
+segurança, doc `07_SEGURANCA.../07_CONTRARRELATORIO_BORDA_E_INFRA.md` §4 V5).
+O OpenAPI público entregava um mapa de 74 rotas — incluindo `/api/admin/*` —
+como reconhecimento gratuito.
+
+Localmente, reabilite com uma variável de ambiente:
+
+```bash
+DEVELOPMENT_MODE=1 uvicorn server:app --host 0.0.0.0 --port 8080
+# agora /docs, /redoc e /openapi.json respondem
+```
+
+O default é fechado: se `DEVELOPMENT_MODE` não estiver definido, os três
+endpoints retornam 404. **Nunca defina `DEVELOPMENT_MODE=1` na EC2.**
+
 ## 📁 Estrutura
 
 Monolito modularizado por domínio (Fase A, set/2026 — ver doc
