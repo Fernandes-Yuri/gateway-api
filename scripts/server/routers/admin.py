@@ -589,3 +589,91 @@ async def admin_login(
         },
     }
 
+
+class AdminRegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    master_totp_code: str
+
+
+@router.post("/api/admin/register")
+async def admin_register(
+    req: AdminRegisterRequest,
+    _auth=Depends(require_service_token),
+):
+    """Cadastra um admin novo (proxy — doc 12).
+
+    O codigo TOTP MASTER (ADMIN_TOTP_SECRET) e validado AQUI no gateway:
+    e a prova de que quem chama tem autorizacao de criar admins. Sem isso,
+    qualquer um com o SERVICE_TOKEN criaria contas. O hash bcrypt e gerado
+    nesta ponta — o portal nunca envia texto-plano que precise ser
+    confiavel, e o hash nunca cruza de volta.
+    """
+    import bcrypt as _bcrypt
+    import hmac as _hmac
+    import base64 as _base64
+    import struct as _struct
+    import time as _time
+
+    pool = _require_pool()
+    email = (req.email or "").strip().lower()
+    name = (req.name or "").strip()
+    password = req.password or ""
+
+    # 1. Validacoes de formato (espelham o register original)
+    if len(name) < 2:
+        raise HTTPException(400, "O nome deve ter no mínimo 2 caracteres.")
+    if not email or "@" not in email:
+        raise HTTPException(400, "Informe um endereço de e-mail válido.")
+    if len(password) < 8:
+        raise HTTPException(400, "A senha deve ter no mínimo 8 caracteres.")
+
+    # 2. TOTP master — prova de autorizacao (RFC 6238, mesma logica do portal)
+    secret_b32 = os.getenv("ADMIN_TOTP_SECRET", "").strip().replace(" ", "").upper()
+    if not secret_b32:
+        raise HTTPException(503, "ADMIN_TOTP_SECRET não configurado no gateway.")
+    try:
+        key = _base64.b32decode(secret_b32, casefold=True)
+    except Exception:
+        raise HTTPException(503, "ADMIN_TOTP_SECRET inválido no gateway (base32).")
+
+    code = (req.master_totp_code or "").replace(" ", "").replace("-", "")
+    if len(code) != 6 or not code.isdigit():
+        raise HTTPException(400, "O código de autorização deve conter 6 dígitos numéricos.")
+
+    # Janela de +/-1 passo de 30s (tolerancia de relogio, igual ao portal)
+    now = int(_time.time())
+    ok = False
+    for counter in (now // 30 - 1, now // 30, now // 30 + 1):
+        msg = _struct.pack(">Q", counter)
+        h = _hmac.new(key, msg, "sha1").digest()
+        offset = h[-1] & 0x0F
+        binary = _struct.unpack(">I", h[offset:offset + 4])[0] & 0x7FFFFFFF
+        if f"{binary % 1000000:06d}" == code:
+            ok = True
+            break
+    if not ok:
+        raise HTTPException(401, "Código de autorização do Google Authenticator inválido ou expirado.")
+
+    # 3. Duplicidade
+    async with pool.acquire() as conn:
+        existing = await conn.fetchval(
+            "SELECT id FROM admin_users WHERE email = $1 LIMIT 1", email)
+        if existing:
+            raise HTTPException(409, "Já existe um usuário cadastrado com este e-mail.")
+
+        # 4. Hash bcrypt custo 12 (mesmo do portal) + insert
+        password_hash = _bcrypt.hashpw(
+            password.encode("utf-8"), _bcrypt.gensalt(rounds=12)).decode("utf-8")
+        user_id = f"usr_{__import__('uuid').uuid4()}"
+        await conn.execute(
+            """INSERT INTO admin_users (id, email, password_hash, name, role, created_at, last_login_at)
+               VALUES ($1, $2, $3, $4, 'admin', NOW(), NOW())""",
+            user_id, email, password_hash, name)
+
+    return {
+        "success": True,
+        "user": {"id": user_id, "email": email, "name": name, "role": "admin"},
+    }
+
