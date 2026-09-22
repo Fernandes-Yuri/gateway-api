@@ -506,3 +506,86 @@ async def list_blocked_ips_admin(
             "createdAt": r["created_at"].isoformat() if r["created_at"] else None,
         } for r in rows],
     }
+
+
+# ---- Proxy de autenticacao (login) -------------------------------------
+#
+# Contexto (doc 12): o portal roda no Render, FORA da VPC, e o RDS e
+# privado — o pool do Next.js nao consegue conectar (500 no login). O
+# gateway, na EC2, e quem tem conectividade. Este proxy recebe as
+# credenciais que o portal ja validou contra o Turnstile, verifica no
+# RDS e devolve o VEREDTO. O token de sessao (HMAC com
+# ADMIN_SESSION_SECRET) continua sendo cunhado SO no portal — a secret
+# nao cruza a rede, e o gateway nunca aprende um token valido.
+#
+# Seguranca:
+#  - compare_digest no bcrypt (nao ha timing leak do hash)
+#  - resposta identica para "usuario inexistente" e "senha errada"
+#    (fail-closed, sem vazamento de existencia)
+#  - nao devolve o hash, segredos TOTP nem codigos de recuperacao
+
+# Hash bcrypt pre-calculado (nao corresponde a nenhuma conta). Usado so
+# no caminho "usuario inexistente" para igualar o tempo de resposta ao
+# caminho de sucesso (timing side-channel na enumeracao de e-mails).
+# Precisa ser um hash VALIDO — senao checkpw estoura ValueError e vira
+# 500. Gerado com: bcrypt.hashpw(b"dummy", bcrypt.gensalt(12)).
+_DUMMY_BCRYPT_HASH = (
+    b"$2b$12$nmsnfVue9dXQxV6g3ENMt.q1Mxd5WdBYCuVg4FtA6FvUtLdXrWDve"
+)
+
+
+class AdminLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/api/admin/login")
+async def admin_login(
+    req: AdminLoginRequest,
+    _auth=Depends(require_service_token),
+):
+    import bcrypt
+
+    pool = _require_pool()
+    email = (req.email or "").strip().lower()
+    if not email or not req.password:
+        # Mesma mensagem do fail-closed abaixo — nao vaza qual faltou.
+        raise HTTPException(401, "Credenciais inválidas.")
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT id, email, password_hash, role, totp_enabled
+               FROM admin_users WHERE email = $1 LIMIT 1""",
+            email)
+
+    if row is None:
+        # Roda um bcrypt dummy para o tempo de resposta ser igual ao do
+        # caminho de sucesso (mitigacao de timing side-channel na
+        # enumeracao de e-mails). O hash precisa ser valido, senao o
+        # checkpw estoura ValueError e vira 500 — fail-closed silencioso.
+        bcrypt.checkpw(b"dummy", _DUMMY_BCRYPT_HASH)
+        raise HTTPException(401, "Credenciais inválidas.")
+
+    try:
+        password_ok = bcrypt.checkpw(
+            req.password.encode("utf-8"),
+            row["password_hash"].encode("utf-8"),
+        )
+    except (ValueError, TypeError):
+        # Hash malformado: trata como credencial invalida, sem estourar 500
+        # (um bug de dados nao vira um bypass nem um info-leak).
+        password_ok = False
+
+    if not password_ok:
+        raise HTTPException(401, "Credenciais inválidas.")
+
+    return {
+        "success": True,
+        "user": {
+            "id": row["id"],
+            "email": row["email"],
+            "role": row["role"] or "admin",
+            "totp_enabled": bool(row["totp_enabled"]) if "totp_enabled" in row.keys() else False,
+        },
+    }
+

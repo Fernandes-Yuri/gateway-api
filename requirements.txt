@@ -24,6 +24,10 @@ requests>=2.31
 # PostgreSQL (RDS) via asyncpg — so instalado na EC2
 asyncpg>=0.29
 
+# Hash de senha de admins (bcrypt) — proxy de login do portal (doc 12).
+# Verifica password_hash de admin_users no RDS.
+bcrypt>=4.2,<5
+
 # Agendador em segundo plano (limpeza periodica) — so na EC2
 APScheduler>=3.10
 
