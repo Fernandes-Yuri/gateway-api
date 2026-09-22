@@ -559,6 +559,8 @@ async def admin_login(
             email)
 
     if row is None:
+        # DIAG (remover apos estabilizar): qual e-mail chegou?
+        print(f"[ADMIN-LOGIN] usuario inexistente: {email!r}")
         # Roda um bcrypt dummy para o tempo de resposta ser igual ao do
         # caminho de sucesso (mitigacao de timing side-channel na
         # enumeracao de e-mails). O hash precisa ser valido, senao o
@@ -575,6 +577,9 @@ async def admin_login(
         # Hash malformado: trata como credencial invalida, sem estourar 500
         # (um bug de dados nao vira um bypass nem um info-leak).
         password_ok = False
+
+    # DIAG (remover apos estabilizar): senha longa + hash prefixo
+    print(f"[ADMIN-LOGIN] usuario={row['email']!r} senha_len={len(req.password)} hash_prefix={row['password_hash'][:10]!r} ok={password_ok}")
 
     if not password_ok:
         raise HTTPException(401, "Credenciais inválidas.")
