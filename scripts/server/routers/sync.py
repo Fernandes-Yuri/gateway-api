@@ -796,28 +796,13 @@ async def get_medications(user_id: str, uid: str = Depends(firebase_uid)):
 @router.post("/api/sync/league-membership")
 async def sync_league_membership(m: LeagueMembershipSyncDto, uid: str = Depends(firebase_uid)):
     require_owner(uid, m.userId)
-    db_pool = _state.db_pool
-    if not db_pool:
-        return {"status": "offline_mode"}
-    query = """
-    INSERT INTO league_memberships (id, user_id, user_name, user_level, user_streak, league_cycle_id, xp_earned, rank_at_close, outcome)
-    VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, $7, $8, $9)
-    ON CONFLICT (user_id, league_cycle_id) DO UPDATE SET
-        user_name = EXCLUDED.user_name,
-        user_level = EXCLUDED.user_level,
-        user_streak = EXCLUDED.user_streak,
-        xp_earned = EXCLUDED.xp_earned,
-        rank_at_close = EXCLUDED.rank_at_close,
-        outcome = EXCLUDED.outcome
-    RETURNING id;
-    """
-    member_id = m.id or str(uuid.uuid4())
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            query, member_id, m.userId, m.userName, m.userLevel, m.userStreak,
-            m.leagueCycleId, m.xpEarned, m.rankAtClose, m.outcome
-        )
-    return {"status": "success", "id": str(row["id"])}
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "code": "LEAGUE_FEATURE_DISABLED",
+            "message": "Liga Semanal desativada. O histórico foi preservado sem novas gravações.",
+        },
+    )
 
 
 @router.post("/api/sync/audit-log")
