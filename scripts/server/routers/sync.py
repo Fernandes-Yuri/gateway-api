@@ -153,34 +153,6 @@ class FeedbackSyncDto(BaseModel):
     deviceInfo: Optional[str] = None
 
 
-class ExamSyncDto(BaseModel):
-    id: Optional[str] = None
-    userId: str
-    title: str
-    category: Optional[str] = "geral"
-    examDate: str
-    resultSummary: Optional[str] = None
-    fileUrl: Optional[str] = None
-    status: Optional[str] = "uploaded"
-    aiExtractedData: Optional[str] = None
-    validatedBy: Optional[str] = None
-    validationNotes: Optional[str] = None
-
-
-class ExamItemSyncDto(BaseModel):
-    id: Optional[str] = None
-    examId: str
-    userId: str
-    itemKey: str
-    itemName: str
-    valueNumeric: Optional[float] = None
-    valueText: Optional[str] = None
-    unit: Optional[str] = None
-    referenceText: Optional[str] = None
-    status: Optional[str] = "uploaded"
-    measuredAt: Optional[str] = None
-
-
 class AuditLogSyncDto(BaseModel):
     id: Optional[str] = None
     userId: str
@@ -674,96 +646,6 @@ async def list_feedback_replies(uid: str = Depends(firebase_uid)):
         "body": r["body"],
         "createdAt": r["created_at"].isoformat(),
     } for r in rows]
-
-
-# =============================================================
-# EXAMES
-# =============================================================
-@router.post("/api/sync/exam")
-async def sync_exam(e: ExamSyncDto, uid: str = Depends(firebase_uid)):
-    require_owner(uid, e.userId)
-    db_pool = _state.db_pool
-    if not db_pool:
-        return {"status": "offline_mode"}
-
-    # AUD-G(M): DUAS implementacoes de exame com contratos diferentes.
-    # exams_api.py (upload/manual) FIXA status='confirmed'; esta rota legada
-    # aceitava QUALQUER string — o app so envia "uploaded" (com arquivo) ou
-    # "confirmed" (sem), mas nada impedia gravar lixo/valores inventados na
-    # mesma tabela exams. Filtros downstream (NutritionViewModel, ExamsScreen)
-    # testam status == 'confirmed', entao status arbitrario tornava o exame
-    # invisivel na UI. Agora a lista e fechada; valor fora dela e rejeitado
-    # com 400 em vez de ser gravado silenciosamente.
-    EXAM_STATUS_ALLOWED = ("uploaded", "confirmed", "failed")
-    if e.status not in EXAM_STATUS_ALLOWED:
-        raise HTTPException(
-            400,
-            f"status de exame inválido: {e.status!r}. Valores aceitos: {', '.join(EXAM_STATUS_ALLOWED)}."
-        )
-
-    query = """
-    INSERT INTO exams (id, user_id, title, category, exam_date, result_summary, file_url, status, ai_extracted_data, validated_by, validation_notes)
-    VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-    ON CONFLICT (id) DO UPDATE SET
-        title = EXCLUDED.title,
-        category = EXCLUDED.category,
-        exam_date = EXCLUDED.exam_date,
-        result_summary = EXCLUDED.result_summary,
-        file_url = EXCLUDED.file_url,
-        status = EXCLUDED.status,
-        ai_extracted_data = EXCLUDED.ai_extracted_data,
-        validated_by = EXCLUDED.validated_by,
-        validation_notes = EXCLUDED.validation_notes
-    RETURNING id;
-    """
-    exam_id = e.id or str(uuid.uuid4())
-    try:
-        e_date = datetime.strptime(e.examDate, "%Y-%m-%d").date()
-    except Exception:
-        e_date = date.today()
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            query, exam_id, e.userId, e.title, e.category, e_date,
-            e.resultSummary, e.fileUrl, e.status, e.aiExtractedData,
-            e.validatedBy, e.validationNotes
-        )
-    return {"status": "success", "id": str(row["id"])}
-
-
-@router.post("/api/sync/exam-item")
-async def sync_exam_item(item: ExamItemSyncDto, uid: str = Depends(firebase_uid)):
-    require_owner(uid, item.userId)
-    db_pool = _state.db_pool
-    if not db_pool:
-        return {"status": "offline_mode"}
-    query = """
-    INSERT INTO exam_items (id, exam_id, user_id, item_key, item_name, value_numeric, value_text, unit, reference_text, status, measured_at)
-    VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-    ON CONFLICT (id) DO UPDATE SET
-        item_key = EXCLUDED.item_key,
-        item_name = EXCLUDED.item_name,
-        value_numeric = EXCLUDED.value_numeric,
-        value_text = EXCLUDED.value_text,
-        unit = EXCLUDED.unit,
-        reference_text = EXCLUDED.reference_text,
-        status = EXCLUDED.status,
-        measured_at = EXCLUDED.measured_at
-    RETURNING id;
-    """
-    item_id = item.id or str(uuid.uuid4())
-    m_at = None
-    if item.measuredAt:
-        try:
-            m_at = datetime.fromisoformat(item.measuredAt.replace("Z", "+00:00"))
-        except Exception:
-            pass
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            query, item_id, item.examId, item.userId, item.itemKey,
-            item.itemName, item.valueNumeric, item.valueText, item.unit,
-            item.referenceText, item.status, m_at
-        )
-    return {"status": "success", "id": str(row["id"])}
 
 
 @router.post("/api/upload/exam/{user_id}")

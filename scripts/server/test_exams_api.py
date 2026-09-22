@@ -34,6 +34,42 @@ class ExamsApiTests(unittest.TestCase):
         self.app.dependency_overrides[firebase_uid] = lambda: self.user_id
         self.client = TestClient(self.app)
 
+    def test_legacy_sync_accepts_canonical_statuses(self):
+        """Endpoints Android legados usam a mesma allowlist do módulo canônico."""
+        for exam_status in ("uploaded", "analyzed", "confirmed", "failed"):
+            exam_id = uuid.uuid4()
+            self.conn.fetchrow.return_value = {"id": exam_id}
+            response = self.client.post("/api/sync/exam", json={
+                "id": str(exam_id),
+                "userId": self.user_id,
+                "title": "Hemograma",
+                "category": "Laboratorial",
+                "examDate": "2026-09-22",
+                "status": exam_status,
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["status"], "success")
+
+    def test_legacy_sync_rejects_unknown_status(self):
+        response = self.client.post("/api/sync/exam", json={
+            "userId": self.user_id,
+            "title": "Hemograma",
+            "examDate": "2026-09-22",
+            "status": "inventado",
+        })
+        self.assertEqual(response.status_code, 422)
+        self.conn.fetchrow.assert_not_awaited()
+
+    def test_legacy_sync_requires_owner(self):
+        response = self.client.post("/api/sync/exam", json={
+            "userId": "outra-conta",
+            "title": "Hemograma",
+            "examDate": "2026-09-22",
+            "status": "uploaded",
+        })
+        self.assertEqual(response.status_code, 403)
+        self.conn.fetchrow.assert_not_awaited()
+
     def test_post_manual_exam_success(self):
         """Valida inserção de exame digitado manualmente sem arquivo físico."""
         exam_id = str(uuid.uuid4())

@@ -24,6 +24,9 @@ from config import STORAGE_EXAMS_DIR, PUBLIC_API_BASE_URL
 # MODELOS PYDANTIC (CONTRACT-FIRST)
 # =============================================================
 
+ExamStatus = Literal["uploaded", "analyzed", "confirmed", "failed"]
+
+
 class ExamItemInput(BaseModel):
     item_key: str = Field(..., max_length=100)
     item_name: str = Field(..., max_length=255)
@@ -31,11 +34,8 @@ class ExamItemInput(BaseModel):
     value_text: str = Field(..., max_length=100)
     unit: str = Field(..., max_length=50)
     reference_text: Optional[str] = Field(None, max_length=255)
-    # AUD-G(B): antes aceitava QUAISQUER 50 chars. O INSERT sempre grava
-    # 'confirmed' (o campo e vestigial na escrita), mas a rota legada de
-    # sync (server.py, EXAM_STATUS_ALLOWED) ja so aceita estes 3 — alinhar
-    # os dois contratos. App Android so envia "uploaded"/"confirmed".
-    status: Literal["uploaded", "confirmed", "failed"] = Field("confirmed")
+    # O mesmo contrato fechado atende rotas modernas e compatibilidade Android.
+    status: ExamStatus = Field("confirmed")
 
 
 class ManualExamCreateRequest(BaseModel):
@@ -44,6 +44,34 @@ class ManualExamCreateRequest(BaseModel):
     category: str = Field("Laboratorial", max_length=100)
     exam_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     items: List[ExamItemInput] = Field(default_factory=list)
+
+
+class LegacyExamSyncRequest(BaseModel):
+    id: Optional[str] = None
+    userId: str
+    title: str
+    category: Optional[str] = "geral"
+    examDate: str
+    resultSummary: Optional[str] = None
+    fileUrl: Optional[str] = None
+    status: ExamStatus = "uploaded"
+    aiExtractedData: Optional[str] = None
+    validatedBy: Optional[str] = None
+    validationNotes: Optional[str] = None
+
+
+class LegacyExamItemSyncRequest(BaseModel):
+    id: Optional[str] = None
+    examId: str
+    userId: str
+    itemKey: str
+    itemName: str
+    valueNumeric: Optional[float] = None
+    valueText: Optional[str] = None
+    unit: Optional[str] = None
+    referenceText: Optional[str] = None
+    status: ExamStatus = "uploaded"
+    measuredAt: Optional[str] = None
 
 
 def serialize_exam_row(row, items=None):
@@ -82,6 +110,92 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
                 detail="Banco de dados indisponível no momento."
             )
         return p
+
+    # Compatibilidade Android: os endpoints /api/sync permanecem, mas usam o
+    # mesmo módulo, identidade e allowlist das rotas modernas de exames.
+    @app.post("/api/sync/exam")
+    async def sync_exam(payload: LegacyExamSyncRequest, uid: str = Depends(firebase_uid)):
+        require_owner(uid, payload.userId)
+        try:
+            exam_id = uuid.UUID(payload.id) if payload.id else uuid.uuid4()
+        except ValueError:
+            exam_id = uuid.uuid4()
+        try:
+            exam_date = datetime.strptime(payload.examDate, "%Y-%m-%d").date()
+        except ValueError:
+            exam_date = date.today()
+
+        query = """
+        INSERT INTO exams
+            (id, user_id, title, category, exam_date, result_summary, file_url,
+             status, ai_extracted_data, validated_by, validation_notes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (id) DO UPDATE SET
+            title = EXCLUDED.title,
+            category = EXCLUDED.category,
+            exam_date = EXCLUDED.exam_date,
+            result_summary = EXCLUDED.result_summary,
+            file_url = EXCLUDED.file_url,
+            status = EXCLUDED.status,
+            ai_extracted_data = EXCLUDED.ai_extracted_data,
+            validated_by = EXCLUDED.validated_by,
+            validation_notes = EXCLUDED.validation_notes
+        WHERE exams.user_id = EXCLUDED.user_id
+        RETURNING id;
+        """
+        async with pool().acquire() as conn:
+            row = await conn.fetchrow(
+                query, exam_id, payload.userId, payload.title, payload.category,
+                exam_date, payload.resultSummary, payload.fileUrl, payload.status,
+                payload.aiExtractedData, payload.validatedBy, payload.validationNotes,
+            )
+        if row is None:
+            raise HTTPException(status_code=403, detail="Exame pertence a outra conta.")
+        return {"status": "success", "id": str(row["id"])}
+
+    @app.post("/api/sync/exam-item")
+    async def sync_exam_item(payload: LegacyExamItemSyncRequest, uid: str = Depends(firebase_uid)):
+        require_owner(uid, payload.userId)
+        try:
+            item_id = uuid.UUID(payload.id) if payload.id else uuid.uuid4()
+            exam_id = uuid.UUID(payload.examId)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="ID de exame ou item inválido.")
+        measured_at = None
+        if payload.measuredAt:
+            try:
+                measured_at = datetime.fromisoformat(payload.measuredAt.replace("Z", "+00:00"))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Data de medição inválida.")
+
+        query = """
+        INSERT INTO exam_items
+            (id, exam_id, user_id, item_key, item_name, value_numeric,
+             value_text, unit, reference_text, status, measured_at)
+        SELECT $1, e.id, $3, $4, $5, $6, $7, $8, $9, $10, $11
+          FROM exams e
+         WHERE e.id = $2 AND e.user_id = $3
+        ON CONFLICT (id) DO UPDATE SET
+            item_key = EXCLUDED.item_key,
+            item_name = EXCLUDED.item_name,
+            value_numeric = EXCLUDED.value_numeric,
+            value_text = EXCLUDED.value_text,
+            unit = EXCLUDED.unit,
+            reference_text = EXCLUDED.reference_text,
+            status = EXCLUDED.status,
+            measured_at = EXCLUDED.measured_at
+        WHERE exam_items.user_id = EXCLUDED.user_id
+        RETURNING id;
+        """
+        async with pool().acquire() as conn:
+            row = await conn.fetchrow(
+                query, item_id, exam_id, payload.userId, payload.itemKey,
+                payload.itemName, payload.valueNumeric, payload.valueText,
+                payload.unit, payload.referenceText, payload.status, measured_at,
+            )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Exame não encontrado para esta conta.")
+        return {"status": "success", "id": str(row["id"])}
 
     # -------------------------------------------------------------
     # 7.1 POST /api/exams/upload — Upload de Arquivo com Consentimento LGPD
