@@ -129,7 +129,11 @@ CREATE TABLE IF NOT EXISTS clinical_references (
     max_target DOUBLE PRECISION,
     min_critical DOUBLE PRECISION,
     max_critical DOUBLE PRECISION,
-    interpretation_hint TEXT
+    interpretation_hint TEXT,
+    institution VARCHAR(255),
+    document_version VARCHAR(255),
+    parameter VARCHAR(255),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 8. BIOMETRIA (Peso, Altura, IMC)

@@ -243,6 +243,14 @@ wget https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/med
 
 ## 🧪 Testes
 
+### Referências clínicas
+
+`GET /api/clinical/references` entrega as dez faixas canônicas de SBC, SBD,
+ADA e OMS para usuários autenticados. A resposta inclui instituição, versão do
+documento e parâmetro clínico; os filtros opcionais são `category` e `item_key`.
+A migration `016_clinical_references_sources.sql` atualiza registros existentes
+de forma idempotente e mantém a fonte rastreável para Android, portal e WhatsApp.
+
 ```bash
 cd scripts/server
 python -m pytest -q
