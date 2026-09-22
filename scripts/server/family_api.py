@@ -203,7 +203,9 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
         require_owner(uid, user_id)
         async with pool().acquire() as conn:
             await conn.execute("UPDATE family_bindings SET status='EXPIRED' WHERE status='PENDING' AND expires_at<=now() AND patient_id=$1", uid)
-            rows = await conn.fetch('SELECT * FROM family_bindings WHERE patient_id=$1 OR caregiver_id=$1', uid)
+            rows = await conn.fetch('''SELECT b.*, p.full_name AS patient_name
+                FROM family_bindings b LEFT JOIN profiles p ON p.id=b.patient_id
+                WHERE b.patient_id=$1 OR b.caregiver_id=$1''', uid)
             return [serialize_binding(row) for row in rows]
 
     @app.post('/api/sync/family-message')
@@ -237,15 +239,13 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             # re-notifica.
             notify_recipients: list[str] = []
             if row is not None:
-                if uid == m.patientId:
-                    # Quem escreveu é o próprio paciente: avisa os cuidadores ativos.
-                    care_rows = await conn.fetch(
-                        "SELECT caregiver_id FROM family_bindings WHERE patient_id=$1 AND status='ACTIVE'",
-                        m.patientId)
-                    notify_recipients = [r['caregiver_id'] for r in care_rows if r['caregiver_id']]
-                else:
-                    # Cuidador escreveu: avisa o aparelho do paciente.
-                    notify_recipients = [m.patientId]
+                # A conversa pertence ao titular, não a um par de usuários.
+                # Notifica cada membro ativo uma vez, exceto o autor.
+                care_rows = await conn.fetch(
+                    "SELECT caregiver_id FROM family_bindings WHERE patient_id=$1 AND status='ACTIVE'",
+                    m.patientId)
+                members = [m.patientId] + [r['caregiver_id'] for r in care_rows]
+                notify_recipients = sorted({member for member in members if member and member != uid})
 
         # Push fora da transação: falha de FCM nunca pode quebrar o envio da mensagem.
         if row is not None and dispatch_push and load_devices and notify_recipients:

@@ -64,6 +64,46 @@ class FamilyMessagePushTest(unittest.TestCase):
         self.assertEqual(200, result.status_code)
         self.dispatch.assert_not_called()
 
+    def test_caregiver_notifies_whole_group_once_except_self(self):
+        self.conn.fetch.return_value = [
+            {'caregiver_id': 'caregiver'}, {'caregiver_id': 'other-caregiver'},
+            {'caregiver_id': 'other-caregiver'}, {'caregiver_id': None}]
+        result = self.client.post('/api/sync/family-message', json=self._message('caregiver'))
+        self.assertEqual(200, result.status_code)
+        self.assertCountEqual(['patient-token', 'never-use'],
+                              [call.kwargs['token'] for call in self.dispatch.call_args_list])
+        query, patient = self.conn.fetch.call_args.args
+        self.assertIn("status='ACTIVE'", query)
+        self.assertEqual('patient', patient)
+        for call in self.dispatch.call_args_list:
+            self.assertEqual('patient', call.kwargs['data']['patientId'])
+
+    def test_revoked_or_unrelated_member_cannot_read_or_send(self):
+        self.conn.fetchval.return_value = False
+        self.assertEqual(403, self.client.get('/api/family/messages/patient').status_code)
+        self.assertEqual(403, self.client.post('/api/sync/family-message',
+                         json=self._message('caregiver')).status_code)
+        self.conn.fetchrow.assert_not_awaited()
+        self.dispatch.assert_not_called()
+
+    def test_spoofed_sender_is_rejected(self):
+        self.assertEqual(403, self.client.post('/api/sync/family-message',
+                         json=self._message('other-caregiver')).status_code)
+        self.conn.fetchrow.assert_not_awaited()
+
+    def test_all_three_members_read_same_patient_scope(self):
+        self.conn.fetch.return_value = []
+        for member in ['patient', 'caregiver', 'other-caregiver']:
+            with self.subTest(member=member):
+                self.app.dependency_overrides[firebase_uid] = lambda: member
+                self.conn.fetchval.return_value = True
+                result = self.client.get('/api/family/messages/patient')
+                self.assertEqual(200, result.status_code)
+                query, patient, _, _ = self.conn.fetch.call_args.args
+                self.assertEqual('patient', patient)
+                self.assertIn('patient_id=$1', query)
+                self.assertNotIn('sender_id=', query)
+
     def test_push_failure_never_breaks_the_send(self):
         self.dispatch.side_effect = RuntimeError('FCM indisponível')
         result = self.client.post('/api/sync/family-message', json=self._message('caregiver'))
