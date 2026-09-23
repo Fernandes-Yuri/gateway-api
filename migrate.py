@@ -152,7 +152,8 @@ async def run_migrate():
             version = f.stem
             print(f"[Migrations] Aplicando: {f.name}...")
             
-            import shutil, subprocess
+            import shutil
+            import subprocess
             applied_successfully = False
             if shutil.which("psql"):
                 # AUD-G(M): antes a senha do RDS vinha na linha de comando do
