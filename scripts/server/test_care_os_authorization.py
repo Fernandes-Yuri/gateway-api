@@ -64,3 +64,37 @@ class CareOsAuthorizationTests(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_medication_photo_rejects_unbound_caregiver(self):
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(return_value=None)
+        response = app_with(conn, "intruder").post(
+            "/api/family/patients/patient-1/medications/photo",
+            files={"file": ("caixa.jpg", b"image", "image/jpeg")},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_restock_rejects_reused_key_with_different_payload(self):
+        medication_id = "00000000-0000-0000-0000-000000000001"
+        conn = MagicMock()
+        conn.transaction.return_value.__aenter__ = AsyncMock(return_value=None)
+        conn.transaction.return_value.__aexit__ = AsyncMock(return_value=None)
+        conn.fetchrow = AsyncMock(side_effect=[
+            {"id": medication_id, "user_id": "patient-1", "name": "Losartana"},
+            {
+                "id": "00000000-0000-0000-0000-000000000010",
+                "medication_id": "00000000-0000-0000-0000-000000000002",
+                "new_total_units": 60,
+            },
+        ])
+        response = app_with(conn, "patient-1").post(
+            f"/api/medications/{medication_id}/restock",
+            json={"new_total_units": 30, "idempotency_key": "restock-12345678"},
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+
+    def test_new_gateway_routes_are_present_in_openapi(self):
+        paths = app_with(MagicMock(), "patient-1").get("/openapi.json").json()["paths"]
+        self.assertIn("/api/medications/{medication_id}/restock", paths)
+        self.assertIn("/api/family/patients/{patient_id}/medications/photo", paths)
+        self.assertIn("/api/files/medications/{patient_id}/{filename}", paths)

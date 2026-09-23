@@ -6,24 +6,36 @@ recomendação de tratamento. Fotos de medicamentos são apenas referência huma
 import html
 import json
 import math
+import os
+import re
+import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from api_identity import firebase_uid
 from schemas.clinical import SymptomCheckInCreate
 from schemas.emergency import EmergencyTokenGrant
 from schemas.medical_access import MedicalAccessGenerateRequest, MedicalAccessGrant
-from schemas.medications import BarcodeMedication, BleTelemetryRequest, MedicationCreate, MedicationTakeRequest
+from config import STORAGE_DIR
+from schemas.medications import (
+    BarcodeMedication,
+    BleTelemetryRequest,
+    MedicationCreate,
+    MedicationRestockRequest,
+    MedicationTakeRequest,
+)
 from services.care_os import new_public_token, require_patient_permission, row_dict, token_hash
 
 
 router = APIRouter(tags=["Care OS"])
 _state = SimpleNamespace(db_pool=None, public_base_url="https://api.bragasaude.online")
 BRT = ZoneInfo("America/Sao_Paulo")
+MEDICATION_IMAGE_DIR = os.path.join(STORAGE_DIR, "medications")
+os.makedirs(MEDICATION_IMAGE_DIR, exist_ok=True)
 
 
 def configure_state(*, db_pool=None, public_base_url=None):
@@ -166,6 +178,112 @@ async def take_medication(medication_id: str, payload: MedicationTakeRequest, ui
                             "scheduled_for": payload.scheduled_for.isoformat(), "units_taken": payload.units_taken}),
             )
     return {"status": "recorded", "log_id": str(log["id"]), "current_units": remaining, "stock_decremented": True}
+
+
+@router.post("/api/medications/{medication_id}/restock")
+async def restock_medication(
+    medication_id: str,
+    payload: MedicationRestockRequest,
+    uid: str = Depends(firebase_uid),
+):
+    """Substitui atomicamente o saldo pela quantidade conferida na nova caixa."""
+    async with _pool().acquire() as conn:
+        async with conn.transaction():
+            med = await conn.fetchrow(
+                "SELECT * FROM medications WHERE id=$1::uuid FOR UPDATE", medication_id
+            )
+            if not med:
+                raise HTTPException(404, "Medicamento não encontrado.")
+            patient_id = med["user_id"]
+            await require_patient_permission(conn, uid, patient_id, "medication:write")
+            existing = await conn.fetchrow(
+                """SELECT id,medication_id,new_total_units FROM medication_stock_adjustments
+                   WHERE patient_id=$1 AND idempotency_key=$2""",
+                patient_id, payload.idempotency_key,
+            )
+            if existing:
+                if (str(existing["medication_id"]) != str(medication_id)
+                        or existing["new_total_units"] != payload.new_total_units):
+                    raise HTTPException(
+                        409,
+                        "A chave idempotente já foi usada em outra reposição.",
+                    )
+                current = await conn.fetchval(
+                    "SELECT current_units FROM medications WHERE id=$1::uuid", medication_id
+                )
+                return {"status": "already_recorded", "adjustment_id": str(existing["id"]),
+                        "current_units": current, "stock_updated": False}
+            adjustment = await conn.fetchrow(
+                """INSERT INTO medication_stock_adjustments
+                   (medication_id,patient_id,actor_id,new_total_units,idempotency_key)
+                   VALUES ($1::uuid,$2,$3,$4,$5) RETURNING id,adjusted_at""",
+                medication_id, patient_id, uid, payload.new_total_units, payload.idempotency_key,
+            )
+            current = await conn.fetchval(
+                """UPDATE medications SET total_units=$2,current_units=$2,
+                   last_restock_date=now(),updated_at=now()
+                   WHERE id=$1::uuid RETURNING current_units""",
+                medication_id, payload.new_total_units,
+            )
+            actor_name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid) or "Usuário autorizado"
+            await conn.execute(
+                """INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type,details)
+                   VALUES ($1,$2,$3,'MEDICATION_RESTOCKED',$4::jsonb)""",
+                patient_id, uid, actor_name,
+                json.dumps({"medication_id": medication_id, "medication_name": med["name"],
+                            "new_total_units": payload.new_total_units}),
+            )
+    return {"status": "recorded", "adjustment_id": str(adjustment["id"]),
+            "current_units": current, "stock_updated": True}
+
+
+@router.post("/api/family/patients/{patient_id}/medications/photo", status_code=201)
+async def upload_medication_photo(
+    patient_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    uid: str = Depends(firebase_uid),
+):
+    """Upload autenticado de foto da caixa ou receita (referência humana)."""
+    async with _pool().acquire() as conn:
+        await require_patient_permission(conn, uid, patient_id, "medication:write")
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > 8 * 1024 * 1024:
+                raise HTTPException(413, "A foto excede o limite de 8 MB.")
+        except ValueError as exc:
+            raise HTTPException(400, "Content-Length inválido.") from exc
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "A foto enviada está vazia.")
+    if len(content) > 8 * 1024 * 1024:
+        raise HTTPException(413, "A foto excede o limite de 8 MB.")
+    allowed = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+    extension = allowed.get((file.content_type or "").lower())
+    if extension is None:
+        raise HTTPException(415, "Formato de foto não suportado.")
+    safe_patient = re.sub(r"[^a-zA-Z0-9_-]", "", patient_id)
+    image_id = str(uuid.uuid4())
+    directory = os.path.join(MEDICATION_IMAGE_DIR, safe_patient)
+    os.makedirs(directory, exist_ok=True)
+    filename = image_id + extension
+    with open(os.path.join(directory, filename), "wb") as target:
+        target.write(content)
+    url = f"{_state.public_base_url}/api/files/medications/{safe_patient}/{filename}"
+    return {"file_url": url}
+
+
+@router.get("/api/files/medications/{patient_id}/{filename}")
+async def medication_photo(patient_id: str, filename: str, uid: str = Depends(firebase_uid)):
+    async with _pool().acquire() as conn:
+        await require_patient_permission(conn, uid, patient_id, "care:read")
+    safe_patient = re.sub(r"[^a-zA-Z0-9_-]", "", patient_id)
+    safe_filename = os.path.basename(filename)
+    path = os.path.join(MEDICATION_IMAGE_DIR, safe_patient, safe_filename)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "Foto não encontrada.")
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/api/family/patients/{patient_id}/activity-feed")

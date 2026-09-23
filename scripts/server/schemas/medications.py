@@ -40,6 +40,16 @@ class MedicationTakeRequest(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=100)
 
 
+class MedicationRestockRequest(BaseModel):
+    """Reposição autoritativa de uma nova caixa/lote.
+
+    ``new_total_units`` substitui o saldo atual pelo total conferido na caixa;
+    a chave torna reenvios offline seguros entre Android, PWA e gateway.
+    """
+    new_total_units: int = Field(ge=1, le=10000)
+    idempotency_key: str = Field(min_length=8, max_length=100)
+
+
 class BarcodeMedication(BaseModel):
     ean_barcode: str
     name: str

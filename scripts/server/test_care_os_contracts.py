@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 from fastapi import HTTPException
 
-from schemas.medications import BleTelemetryRequest, MedicationCreate
+from schemas.medications import BleTelemetryRequest, MedicationCreate, MedicationRestockRequest
 from services.care_os import new_public_token, require_patient_permission, token_hash
 
 
@@ -28,6 +28,13 @@ class CareOsContractTests(unittest.TestCase):
             measured_at=datetime.now(timezone.utc), systolic_pressure=120, diastolic_pressure=80,
         )
         self.assertEqual(model.protocol, "GATT")
+
+    def test_restock_contract_bounds_authoritative_quantity(self):
+        model = MedicationRestockRequest(new_total_units=30, idempotency_key="restock-12345678")
+        self.assertEqual(model.new_total_units, 30)
+
+        with self.assertRaises(ValueError):
+            MedicationRestockRequest(new_total_units=0, idempotency_key="restock-12345678")
 
 
 class CareOsPermissionTests(unittest.IsolatedAsyncioTestCase):

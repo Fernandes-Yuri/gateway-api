@@ -80,6 +80,19 @@ ALTER TABLE medication_logs
 CREATE UNIQUE INDEX IF NOT EXISTS medication_logs_idempotency
     ON medication_logs(user_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS medication_stock_adjustments (
+    id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    medication_id uuid NOT NULL REFERENCES medications(id) ON DELETE CASCADE,
+    patient_id varchar(128) NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    actor_id varchar(128) NOT NULL REFERENCES profiles(id),
+    new_total_units integer NOT NULL CHECK (new_total_units BETWEEN 1 AND 10000),
+    idempotency_key varchar(100) NOT NULL,
+    adjusted_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(patient_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_adjustments_medication_time
+    ON medication_stock_adjustments(medication_id, adjusted_at DESC);
+
 CREATE TABLE IF NOT EXISTS symptoms_diary (
     id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     patient_id varchar(128) NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
