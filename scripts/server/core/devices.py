@@ -1,17 +1,17 @@
-"""Metodos auxiliares de dispositivos e FCM.
+"""Metodos de gerenciamento de dispositivos, tokens push (PostgreSQL) e FCM.
 
-Extraidos do monolito server.py (linhas 771-823) na Fase A passo 2.
-Sem dependencia do FastAPI; usam config.DEVICES_PATH e o estado HAS_FCM
-do modulo importador (passado por parametro para dispatch_push).
+Higiene Fase B: persistencia relacional via tabela device_push_tokens, com suporte
+a transicao suave a partir do legado registered_devices.json e compatibilidade in-memory.
 """
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from config import DEVICES_PATH
 
 
 def load_devices() -> Dict[str, Any]:
+    """Fallback in-memory/arquivo para compatibilidade com testes legados."""
     if not os.path.exists(DEVICES_PATH):
         return {}
     try:
@@ -22,11 +22,133 @@ def load_devices() -> Dict[str, Any]:
 
 
 def save_devices(data: Dict[str, Any]):
+    """Fallback de persistencia em arquivo para compatibilidade com testes legados."""
     try:
         with open(DEVICES_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+
+async def register_device_token(
+    pool,
+    user_id: str,
+    token: str,
+    role: str = "caregiver",
+    platform: str = "fcm",
+) -> bool:
+    """Registra ou atualiza um token push relacionalmente via UPSERT."""
+    if not pool:
+        return False
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO device_push_tokens (token, user_id, role, platform, is_active, last_seen_at)
+            VALUES ($1, $2, $3, $4, true, NOW())
+            ON CONFLICT (token) DO UPDATE SET
+                user_id = EXCLUDED.user_id,
+                role = EXCLUDED.role,
+                platform = EXCLUDED.platform,
+                is_active = true,
+                last_seen_at = NOW();
+            """,
+            token,
+            user_id,
+            role,
+            platform,
+        )
+    return True
+
+
+async def get_active_tokens_for_caregivers(pool, exclude_user_id: Optional[str] = None) -> List[str]:
+    """Retorna lista de tokens FCM ativos de cuidadores."""
+    if not pool:
+        return []
+    async with pool.acquire() as conn:
+        if exclude_user_id:
+            rows = await conn.fetch(
+                """
+                SELECT token FROM device_push_tokens
+                WHERE LOWER(role) = 'caregiver' AND is_active = true AND user_id != $1;
+                """,
+                exclude_user_id,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT token FROM device_push_tokens
+                WHERE LOWER(role) = 'caregiver' AND is_active = true;
+                """
+            )
+        if rows and isinstance(rows, (list, tuple)):
+            return [r["token"] for r in rows]
+        return []
+
+
+async def get_active_devices_for_users(pool) -> List[Dict[str, Any]]:
+    """Retorna lista de dispositivos ativos registrados no sistema."""
+    if not pool:
+        return []
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT token, user_id, role, platform FROM device_push_tokens
+            WHERE is_active = true;
+            """
+        )
+        if rows and isinstance(rows, (list, tuple)):
+            return [dict(r) for r in rows]
+        return []
+
+
+async def migrate_legacy_json_devices(pool) -> int:
+    """Migra registros legados de registered_devices.json para PostgreSQL.
+
+    Ao concluir com sucesso, renomeia o arquivo para registered_devices.json.migrated
+    (nunca deleta silenciosamente sem backup).
+    """
+    if not pool or not os.path.exists(DEVICES_PATH):
+        return 0
+    try:
+        with open(DEVICES_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"[Device Migration Error] Falha ao ler {DEVICES_PATH}: {e}")
+        return 0
+
+    if not isinstance(data, dict) or not data:
+        return 0
+
+    count = 0
+    for key, info in data.items():
+        if isinstance(info, dict):
+            token = info.get("token") or key
+            user_id = info.get("userId") or info.get("user_id") or key
+            role = info.get("role") or "caregiver"
+            platform = info.get("platform") or "fcm"
+        else:
+            token = str(info)
+            user_id = str(key)
+            role = "caregiver"
+            platform = "fcm"
+
+        if not token:
+            continue
+
+        try:
+            await register_device_token(pool, user_id=user_id, token=token, role=role, platform=platform)
+            count += 1
+        except Exception as e:
+            print(f"[Device Migration Error] Falha ao migrar token {token[:10]}...: {e}")
+
+    try:
+        backup_path = f"{DEVICES_PATH}.migrated"
+        os.replace(DEVICES_PATH, backup_path)
+        print(f"[Device Migration] {count} dispositivos migrados para o banco. Arquivo renomeado para {backup_path}")
+    except Exception as e:
+        print(f"[Device Migration Error] Falha ao renomear {DEVICES_PATH}: {e}")
+
+    return count
 
 
 def dispatch_push(token: str, title: str, body: str, data: Dict[str, str] = None,

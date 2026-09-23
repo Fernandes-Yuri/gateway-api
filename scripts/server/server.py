@@ -32,7 +32,7 @@ except ImportError:
 
     async def sender_has_linked_account(*args, **kwargs):  # type: ignore
         return None
-from assistant_preferences import SCHEMA as PREFERENCE_SCHEMA, install_preference_routes, process_preferences
+from assistant_preferences import install_preference_routes, process_preferences
 from piper_service import PiperService
 from family_api import install_family_routes, purge_expired_family_messages
 from caregiver_alerts import install_caregiver_alert_routes
@@ -46,8 +46,13 @@ from security_defense import (
 )
 
 # Nucleo extraido (Fase A passo 1): sanitizacao de TTS e PII (LGPD).
-# Nucleo extraido (Fase A passo 2): helpers de dispositivos e FCM.
-from core.devices import load_devices, dispatch_push
+# Nucleo extraido (Fase A passo 2, Fase B): helpers de dispositivos, tokens FCM e push.
+from core.devices import (
+    dispatch_push,
+    get_active_tokens_for_caregivers,
+    load_devices,
+    migrate_legacy_json_devices,
+)
 # Routers extraidos (Fase A passo 2): health, dataset, devices, notify, emergency.
 from routers import health as health_router
 # Routers extraidos (Fase A passo 3): app/OTA/landing + audio/TTS.
@@ -371,64 +376,8 @@ async def startup():
                 db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10, timeout=10)
                 print(f"[PostgreSQL] Pool de conexões assíncrono estabelecido com sucesso na tentativa {attempt}!")
                 async with db_pool.acquire() as conn:
-                    await conn.execute(PREFERENCE_SCHEMA)
-                    await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS auth_verification_codes (
-                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                        identifier VARCHAR(255) NOT NULL,
-                        code VARCHAR(10) NOT NULL,
-                        purpose VARCHAR(50) NOT NULL,
-                        channel VARCHAR(20) NOT NULL,
-                        attempts INT DEFAULT 0,
-                        is_used BOOLEAN DEFAULT FALSE,
-                        reset_token VARCHAR(255),
-                        expires_at TIMESTAMPTZ NOT NULL,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_auth_codes_lookup ON auth_verification_codes(identifier, purpose, is_used);
-                    CREATE INDEX IF NOT EXISTS idx_auth_codes_token ON auth_verification_codes(reset_token);
-                    """)
-                    print("[PostgreSQL] Tabela auth_verification_codes inicializada com sucesso!")
-                    await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS audit_logs (
-                        id           VARCHAR(64)  PRIMARY KEY,
-                        user_id      VARCHAR(128) NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-                        event_type   VARCHAR(100) NOT NULL,
-                        action       VARCHAR(100) NOT NULL,
-                        metadata     JSONB,
-                        created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id, created_at DESC);
-                    """)
-                    print("[PostgreSQL] Tabela audit_logs inicializada com sucesso!")
-                    await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS agent_actions (
-                        id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                        user_id         VARCHAR(128) NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-                        channel         VARCHAR(20) NOT NULL,
-                        action          VARCHAR(50) NOT NULL,
-                        params          JSONB NOT NULL DEFAULT '{}',
-                        idempotency_key VARCHAR(64) NOT NULL,
-                        status          VARCHAR(20) NOT NULL DEFAULT 'proposed',
-                        result          JSONB NOT NULL DEFAULT '{}',
-                        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        UNIQUE (user_id, idempotency_key)
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_agent_actions_user ON agent_actions(user_id, created_at DESC);
-                    """)
-                    print("[PostgreSQL] Tabela agent_actions inicializada com sucesso!")
-                    await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS security_blocked_ips (
-                        ip VARCHAR(45) PRIMARY KEY,
-                        reason TEXT NOT NULL,
-                        violations INT NOT NULL DEFAULT 1,
-                        blocked_until TIMESTAMPTZ NOT NULL,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_security_blocked_ips_until ON security_blocked_ips(blocked_until);
-                    """)
-                    print("[PostgreSQL] Tabela security_blocked_ips inicializada com sucesso!")
+                    await conn.execute("SELECT 1;")
+                await migrate_legacy_json_devices(db_pool)
                 break
             except Exception as e:
                 print(f"[PostgreSQL Error] Tentativa {attempt}/5 falhou ao conectar ao banco: {e}")
@@ -568,46 +517,46 @@ async def scheduled_proactive_job(periodo: str):
     if not db_pool:
         return
     try:
-        # devices_json é um arquivo, não uma tabela — a fila de dispositivos
-        # vive em load_devices(). Usa ela para saber quem existe.
-        devices = load_devices()
-        for uid, dev in devices.items():
-            if dev.get('role') != 'USER':
-                continue
-            async with db_pool.acquire() as conn:
-                today = await conn.fetchval(
-                    "SELECT EXISTS(SELECT 1 FROM vital_signs WHERE user_id=$1 AND measured_at >= CURRENT_DATE)",
-                    uid)
-            if today:
-                continue
-            name = await _proactive_display_name(uid)
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT d.token, d.user_id, p.full_name
+                FROM device_push_tokens d
+                JOIN profiles p ON p.id = d.user_id
+                WHERE d.is_active = true
+                  AND NOT EXISTS (
+                    SELECT 1 FROM vital_signs v
+                    WHERE v.user_id = d.user_id
+                      AND v.created_at >= NOW() - INTERVAL '4 hours'
+                  );
+                """
+            )
+
+        if not rows or not isinstance(rows, (list, tuple)):
+            return
+
+        for r in rows:
+            token = r["token"]
+            uid = r["user_id"]
+            full_name = r["full_name"]
+            first_name = f", {full_name.split()[0]}" if full_name and full_name.strip() else ""
             msg = {
-                'manha': f'Bom dia{name}! Que tal registrar sua pressão agora, logo depois do café?',
-                'hidratacao': f'Boa tarde{name}! Já bebeu um copo d\'água? Vale anotar para fechar o dia bem.',
-                'noite': f'Boa noite{name}! Fechou o dia? Que tal registrar como você está se sentindo?',
-            }.get(periodo, 'Hora de cuidar de você.')
+                "manha": f"Bom dia{first_name}! Que tal registrar sua pressão agora, logo depois do café?",
+                "hidratacao": f"Boa tarde{first_name}! Já bebeu um copo d'água? Vale anotar para fechar o dia bem.",
+                "noite": f"Boa noite{first_name}! Fechou o dia? Que tal registrar como você está se sentindo?",
+            }.get(periodo, "Hora de cuidar de você.")
             try:
                 await asyncio.to_thread(
                     dispatch_push,
-                    token=dev.get('token'),
-                    title='Lembrete do Braga Saúde',
+                    token=token,
+                    title="Lembrete do Braga Saúde",
                     body=msg,
-                    data={'type': 'PROACTIVE_BRAGA', 'period': periodo},
+                    data={"type": "PROACTIVE_BRAGA", "period": periodo},
                 )
             except Exception as push_err:
                 print(f"[Scheduler] Falha no push pró-ativo para {uid}: {push_err}")
     except Exception as e:
         print(f"[Scheduler] Erro na rotina pró-ativa {periodo}: {e}")
-
-
-async def _proactive_display_name(uid: str) -> str:
-    """Nome de exibição para a rotina pró-ativa; vazio se indisponível."""
-    try:
-        async with db_pool.acquire() as conn:
-            name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid)
-        return f', {name.split()[0]}' if name else ''
-    except Exception:
-        return ''
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -660,19 +609,25 @@ async def dispatch_clinical_alert(
 
     # 1. Notificação Push (FCM) para aparelhos de cuidador, exceto o próprio.
     try:
-        devices = load_devices()
-        for uid, dev in devices.items():
-            if dev.get("role") == "CAREGIVER" and uid != source_user_id:
-                try:
-                    await asyncio.to_thread(
-                        dispatch_push,
-                        dev["token"],
-                        "Alerta Clínico Braga Saúde",
-                        msg_body,
-                        {"type": "ALERT_CRITICAL", "sourceUserId": source_user_id},
-                    )
-                except Exception as push_err:
-                    print(f"[Clinical Alert] Falha no push para cuidador {uid}: {push_err}")
+        caregiver_tokens = []
+        if pool:
+            caregiver_tokens = await get_active_tokens_for_caregivers(pool, exclude_user_id=source_user_id)
+        if not caregiver_tokens:
+            devices = load_devices()
+            for uid, dev in devices.items():
+                if dev.get("role") in ("CAREGIVER", "caregiver") and uid != source_user_id and dev.get("token"):
+                    caregiver_tokens.append(dev["token"])
+        for token in caregiver_tokens:
+            try:
+                await asyncio.to_thread(
+                    dispatch_push,
+                    token,
+                    "Alerta Clínico Braga Saúde",
+                    msg_body,
+                    {"type": "ALERT_CRITICAL", "sourceUserId": source_user_id},
+                )
+            except Exception as push_err:
+                print(f"[Clinical Alert] Falha no push para cuidador: {push_err}")
     except Exception as e:
         print(f"[Clinical Alert] Falha no push: {e}")
 

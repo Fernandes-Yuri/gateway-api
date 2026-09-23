@@ -5,7 +5,33 @@ on:
     branches: [master]
 
 jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Lint with Ruff
+        run: |
+          ruff check scripts/server/
+
+      - name: Run unit tests
+        run: |
+          python -m unittest discover scripts/server/ "test_*.py"
+
   deploy:
+    needs: lint-and-test
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
@@ -21,4 +47,3 @@ jobs:
             git reset --hard origin/master
             git remote set-url origin git@github.com:Fernandes-Yuri/gateway-api.git
             bash deploy.sh
-
