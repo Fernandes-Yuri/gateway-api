@@ -16,7 +16,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
 
 from api_identity import firebase_uid
-from security_defense import get_client_ip, StrictRateLimiter
+from security_defense import get_client_ip
 
 router = APIRouter()
 

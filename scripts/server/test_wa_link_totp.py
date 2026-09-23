@@ -20,7 +20,6 @@ from wa_link_totp import (
 from wa_link_service import (
     LINK_ATTEMPT_LIMIT,
     handle_link_attempt,
-    looks_like_link_attempt,
 )
 
 

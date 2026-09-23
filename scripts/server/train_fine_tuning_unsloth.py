@@ -104,7 +104,7 @@ def run_fine_tuning(
                     ]
                     text = tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
                     raw_data.append({"text": text})
-            except Exception as e:
+            except Exception:
                 continue
 
     print(f"Total de conversas válidas carregadas: {len(raw_data)}")
@@ -165,7 +165,7 @@ def run_fine_tuning(
                 tokenizer,
                 quantization_method=gguf_quantization
             )
-            print(f"🎉 GGUF gerado com sucesso! Arquivo pronto para rodar no llama.cpp / homelab.")
+            print("🎉 GGUF gerado com sucesso! Arquivo pronto para rodar no llama.cpp / homelab.")
         except Exception as e:
             print(f"⚠️ Aviso na exportação GGUF direta: {e}")
             print("Você pode mesclar os pesos em 16-bit com:")

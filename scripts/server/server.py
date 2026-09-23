@@ -1,22 +1,11 @@
 import os
-import re
-import json
-import hashlib
 import asyncio
-import secrets
-import random
-import uuid
-import time
-# AUD-G(B): deque/Deque e RedirectResponse mortos — so o import, sem uso.
-from datetime import datetime, date, timedelta
-from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, Query, status
+from typing import List, Optional, Any
+from fastapi import BackgroundTasks, FastAPI, HTTPException as HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from profile_contract import profile_upsert
-from orb_router import route_chat, detect_all, recall, remember, resolve_followup, whatsapp_next, dedupe_fala, symptom_repeat, SYMPTOM_KINDS, ESCALATION_SUFFIX
 
 # Vínculo de WhatsApp por TOTP (arquitetura temporária, até a Meta liberar template).
 try:
@@ -43,12 +32,8 @@ except ImportError:
 
     async def sender_has_linked_account(*args, **kwargs):  # type: ignore
         return None
-from trace_llm import trace_llm
-from api_identity import firebase_uid, require_owner, require_family_access
-from voice_scheduling import quer_agendar, agendar_por_voz
 from assistant_preferences import SCHEMA as PREFERENCE_SCHEMA, install_preference_routes, process_preferences
 from piper_service import PiperService
-from conversation_policy import build_conversation_system
 from family_api import install_family_routes, purge_expired_family_messages
 from caregiver_alerts import install_caregiver_alert_routes
 from vip_api import install_vip_routes
@@ -58,16 +43,11 @@ from security_defense import (
     StrictRateLimiter,
     get_client_ip,
     is_prompt_injection,
-    sanitize_zero_trust_text,
-    INJECTION_PATTERNS,
 )
-import requests
-import httpx
 
 # Nucleo extraido (Fase A passo 1): sanitizacao de TTS e PII (LGPD).
-from core.text import clean_text_for_tts, sanitize_pii, EMOJI_REGEX, PHONE_REGEX, CPF_REGEX, EMAIL_REGEX, CEP_REGEX, OTP_REGEX
 # Nucleo extraido (Fase A passo 2): helpers de dispositivos e FCM.
-from core.devices import load_devices, save_devices, dispatch_push
+from core.devices import load_devices, dispatch_push
 # Routers extraidos (Fase A passo 2): health, dataset, devices, notify, emergency.
 from routers import health as health_router
 # Routers extraidos (Fase A passo 3): app/OTA/landing + audio/TTS.
@@ -97,31 +77,17 @@ from services.care_automations import (
 # (maquina de pendencias + validacao clinica + botes do WhatsApp) e
 # curadoria do dataset de fine-tuning.
 import core.confirmation as confirmation_module
-from core.confirmation import (
-    HEALTH_VALIDATION_RULES,
-    validate_health_data,
-    generate_confirmation_code,
-    create_pending_confirmation,
-    confirm_pending_confirmation,
-    cancel_pending_confirmation,
-    build_confirmation_message,
-    send_confirmation_buttons,
-)
 import core.dataset as dataset_module
 from core.dataset import (
-    detect_clinical_category,
     log_fine_tuning_sample,
 )
 
 
 # Configuração central (Fase B, passo 1 — doc 36): env vars, defaults e paths.
 from config import (
-    APP_DIR, PROJECT_ROOT, USES_ORGANIZED_LAYOUT,
-    DATASET_PATH, AUDIO_CACHE_DIR, STORAGE_DIR, STORAGE_EXAMS_DIR, DEVICES_PATH, RELEASES_DIR,
+    DATASET_PATH, RELEASES_DIR,
     DATABASE_URL,
-    GROQ_API_KEY, GROQ_API_URL, MODEL_ID, MODEL_CHAT, MODEL_REST, MODEL_WHATSAPP,
-    GROQ_API_KEY_CHAT, GROQ_API_KEY_WHATSAPP,
-    PIPER_BIN, PIPER_MODELS_DIR,
+    GROQ_API_URL, MODEL_ID, MODEL_REST, GROQ_API_KEY_CHAT, PIPER_BIN, PIPER_MODELS_DIR,
     SERVICE_ACCOUNT_PATH,
     PUBLIC_API_BASE_URL,
     DEVELOPMENT_MODE,
@@ -133,6 +99,7 @@ try:
     HAS_EMAIL = True
 except ImportError:
     HAS_EMAIL = False
+    send_welcome_email = None
 
 # Validacao server-side do Google reCAPTCHA (zero-trust no auth)
 try:
@@ -157,27 +124,22 @@ except ImportError:
 # Suporte defensivo a WhatsApp Business Cloud API
 try:
     from whatsapp_service import (
-        send_whatsapp_text,
-        send_whatsapp_template,
+        build_wa_link,
         send_clinical_alert_whatsapp,
         send_security_code_whatsapp,
-        download_whatsapp_media,
-        transcribe_audio_whisper,
-        sanitize_phone_number,
-        mark_whatsapp_message_read,
-        send_whatsapp_reaction,
-        send_whatsapp_audio,
         send_whatsapp_interactive,
-        send_whatsapp_list,
-        upload_whatsapp_media,
-        is_otp_request,
-        phones_match,
-        build_wa_link,
-        WHATSAPP_PHONE_NUMBER_ID
+        send_whatsapp_template,
+        send_whatsapp_text,
     )
     HAS_WHATSAPP = True
 except ImportError:
     HAS_WHATSAPP = False
+    build_wa_link = None
+    send_clinical_alert_whatsapp = None
+    send_security_code_whatsapp = None
+    send_whatsapp_interactive = None
+    send_whatsapp_template = None
+    send_whatsapp_text = None
 
 # ---------------------------------------------------------------------------
 # PAUSA TEMPORARIA DO CANAL WHATSAPP PARA OTP (18/09/2026)
@@ -254,6 +216,7 @@ health_router.configure_state(
     has_scheduler=HAS_SCHEDULER,
     has_fcm=HAS_FCM,
     has_whatsapp=HAS_WHATSAPP,
+    whatsapp_otp_paused=getattr(whatsapp_router, "WHATSAPP_OTP_PAUSED", False),
     messaging=messaging if HAS_FCM else None,
 )
 app.include_router(health_router.router)
@@ -288,50 +251,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.getenv(
-    "BRAGA_PROJECT_ROOT",
-    os.path.dirname(APP_DIR) if os.path.basename(APP_DIR) == "app" else APP_DIR,
-)
-USES_ORGANIZED_LAYOUT = os.path.basename(APP_DIR) == "app"
-
-if USES_ORGANIZED_LAYOUT:
-    DEFAULT_DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-    DEFAULT_CACHE_DIR = os.path.join(PROJECT_ROOT, "cache")
-    default_dataset_path = os.path.join(DEFAULT_DATA_DIR, "dataset", "dataset_braga.jsonl")
-    default_audio_cache_dir = os.path.join(DEFAULT_CACHE_DIR, "audio")
-    default_storage_dir = os.path.join(DEFAULT_DATA_DIR, "storage")
-    default_devices_path = os.path.join(DEFAULT_DATA_DIR, "devices", "registered_devices.json")
-else:
-    # Mantém o comportamento atual para execução local fora da pasta app/.
-    default_dataset_path = os.path.join(PROJECT_ROOT, "dataset_braga.jsonl")
-    default_audio_cache_dir = os.path.join(PROJECT_ROOT, "audio_cache")
-    default_storage_dir = os.path.join(PROJECT_ROOT, "storage")
-    default_devices_path = os.path.join(PROJECT_ROOT, "registered_devices.json")
-
-DATASET_PATH = os.getenv("DATASET_PATH", default_dataset_path)
-AUDIO_CACHE_DIR = os.getenv("AUDIO_CACHE_DIR", default_audio_cache_dir)
-STORAGE_DIR = os.getenv("STORAGE_DIR", default_storage_dir)
-STORAGE_EXAMS_DIR = os.path.join(STORAGE_DIR, "exams")
-DEVICES_PATH = os.getenv("DEVICES_PATH", default_devices_path)
-os.makedirs(os.path.dirname(DATASET_PATH), exist_ok=True)
-os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
-os.makedirs(STORAGE_EXAMS_DIR, exist_ok=True)
-os.makedirs(os.path.dirname(DEVICES_PATH), exist_ok=True)
-
 db_pool: Optional[Any] = None
 
 async def _vip_notify_admin(text: str):
     """doc 10 §4.4: avisa o admin no WhatsApp a cada inscrição VIP nova."""
-    if HAS_WHATSAPP and 'send_whatsapp_text' in globals():
-        admin_phone = (os.getenv('ADMIN_PHONE')
-                       or os.getenv('SECURITY_ALERT_PHONE')
-                       or '5511967808252')
-        await send_whatsapp_text(admin_phone, text)
+    if not HAS_WHATSAPP or not send_whatsapp_text:
+        return
+    admin_phone = os.getenv('ADMIN_PHONE') or os.getenv('SECURITY_ALERT_PHONE')
+    if not admin_phone:
+        print("[VIP] ADMIN_PHONE não configurado no .env; pulando notificação WhatsApp.")
+        return
+    await send_whatsapp_text(admin_phone, text)
 
 async def _vip_confirm_email(to_email: str, user_name: str):
     """doc 10 §4.4: confirma a inscrição VIP por e-mail (best-effort)."""
-    if HAS_EMAIL and 'send_welcome_email' in globals():
+    if HAS_EMAIL and send_welcome_email:
         await send_welcome_email(to_email, user_name)
 
 # doc 10 §4.4: inscrição VIP avisa o admin (WhatsApp) e confirma por e-mail ao inscrito.
@@ -516,9 +450,6 @@ async def startup():
             except Exception as e:
                 print(f"[Startup] Aviso: função expire_pending_confirmations() indisponível: {e}")
 
-        # Inicializa cache assíncrono de áudios engatilhados
-        asyncio.create_task(whatsapp_router.init_fast_lane_audio_cache())
-
         # Pass the coroutine directly: a sync lambda runs in an executor without an event loop.
         if db_pool and HAS_SCHEDULER:
             await purge_expired_family_messages(db_pool)
@@ -624,6 +555,9 @@ async def startup():
             print("[Scheduler] Rotinas pró-ativas registradas: 09h00, 14h30, 20h30.")
             retention_scheduler.start()
 
+    if HAS_WHATSAPP and hasattr(whatsapp_router, "init_fast_lane_audio_cache"):
+        asyncio.create_task(whatsapp_router.init_fast_lane_audio_cache())
+
 async def scheduled_proactive_job(periodo: str):
     """Rotina pró-ativa periódica (doc 10 §4.6).
 
@@ -638,30 +572,30 @@ async def scheduled_proactive_job(periodo: str):
         # vive em load_devices(). Usa ela para saber quem existe.
         devices = load_devices()
         for uid, dev in devices.items():
-                if dev.get('role') != 'USER':
-                    continue
-                async with db_pool.acquire() as conn:
-                    today = await conn.fetchval(
-                        "SELECT EXISTS(SELECT 1 FROM vital_signs WHERE user_id=$1 AND measured_at >= CURRENT_DATE)",
-                        uid)
-                if today:
-                    continue
-                name = await _proactive_display_name(uid)
-                msg = {
-                    'manha': f'Bom dia{name}! Que tal registrar sua pressão agora, logo depois do café?',
-                    'hidratacao': f'Boa tarde{name}! Já bebeu um copo d\'água? Vale anotar para fechar o dia bem.',
-                    'noite': f'Boa noite{name}! Fechou o dia? Que tal registrar como você está se sentindo?',
-                }.get(periodo, 'Hora de cuidar de você.')
-                try:
-                    await asyncio.to_thread(
-                        dispatch_push,
-                        token=dev.get('token'),
-                        title='Lembrete do Braga Saúde',
-                        body=msg,
-                        data={'type': 'PROACTIVE_BRAGA', 'period': periodo},
-                    )
-                except Exception as push_err:
-                    print(f"[Scheduler] Falha no push pró-ativo para {uid}: {push_err}")
+            if dev.get('role') != 'USER':
+                continue
+            async with db_pool.acquire() as conn:
+                today = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM vital_signs WHERE user_id=$1 AND measured_at >= CURRENT_DATE)",
+                    uid)
+            if today:
+                continue
+            name = await _proactive_display_name(uid)
+            msg = {
+                'manha': f'Bom dia{name}! Que tal registrar sua pressão agora, logo depois do café?',
+                'hidratacao': f'Boa tarde{name}! Já bebeu um copo d\'água? Vale anotar para fechar o dia bem.',
+                'noite': f'Boa noite{name}! Fechou o dia? Que tal registrar como você está se sentindo?',
+            }.get(periodo, 'Hora de cuidar de você.')
+            try:
+                await asyncio.to_thread(
+                    dispatch_push,
+                    token=dev.get('token'),
+                    title='Lembrete do Braga Saúde',
+                    body=msg,
+                    data={'type': 'PROACTIVE_BRAGA', 'period': periodo},
+                )
+            except Exception as push_err:
+                print(f"[Scheduler] Falha no push pró-ativo para {uid}: {push_err}")
     except Exception as e:
         print(f"[Scheduler] Erro na rotina pró-ativa {periodo}: {e}")
 
@@ -674,9 +608,6 @@ async def _proactive_display_name(uid: str) -> str:
         return f', {name.split()[0]}' if name else ''
     except Exception:
         return ''
-
-    # Inicializa cache assíncrono de áudios engatilhados
-    asyncio.create_task(whatsapp_router.init_fast_lane_audio_cache())
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -732,12 +663,16 @@ async def dispatch_clinical_alert(
         devices = load_devices()
         for uid, dev in devices.items():
             if dev.get("role") == "CAREGIVER" and uid != source_user_id:
-                dispatch_push(
-                    dev["token"],
-                    "Alerta Clínico Braga Saúde",
-                    msg_body,
-                    {"type": "ALERT_CRITICAL", "sourceUserId": source_user_id},
-                )
+                try:
+                    await asyncio.to_thread(
+                        dispatch_push,
+                        dev["token"],
+                        "Alerta Clínico Braga Saúde",
+                        msg_body,
+                        {"type": "ALERT_CRITICAL", "sourceUserId": source_user_id},
+                    )
+                except Exception as push_err:
+                    print(f"[Clinical Alert] Falha no push para cuidador {uid}: {push_err}")
     except Exception as e:
         print(f"[Clinical Alert] Falha no push: {e}")
 
@@ -818,10 +753,7 @@ def get_friendly_safety_response(text: str) -> dict:
         "parametros": {}
     }
 
-# AUD-G27: is_prompt_injection local REMOVIDO — usa o importado de
-# security_defense.py (7 padrões, com tokens especiais de modelo).
 
-from braga_persona import PERSONA
 # SYSTEM_PROMPT: definido em core/prompt.py (Fase A passo 4); persona +
 # travas clinicas compartilhadas entre routers.
 from core.prompt import SYSTEM_PROMPT

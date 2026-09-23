@@ -63,6 +63,7 @@ from orb_router import (
     recall,
     remember,
     resolve_followup,
+    symptom_repeat,
     whatsapp_next,
 )
 from security_defense import is_prompt_injection
@@ -440,7 +441,7 @@ async def handle_wa_health_confirmation(*, sender_phone: str, user_id: str, user
             action_params={**action_params, "pending_confirmation": True, "confirmation_code": confirmation_code}
         )
         return True
-    print(f"[WhatsApp Confirmation] Erro ao criar pendência, enviando resposta normal")
+    print("[WhatsApp Confirmation] Erro ao criar pendência, enviando resposta normal")
     return False
 
 
@@ -544,7 +545,6 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     # ainda está em uso para que a migração seja concluída.
                     user_id = None
                     user_name = None
-                    user_role = None
                     if db_pool:
                         try:
                             _wa_digits = "".join(filter(str.isdigit, sender_phone or ""))
@@ -577,7 +577,6 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                 if p_row:
                                     user_id = p_row["id"]
                                     user_name = p_row["full_name"]
-                                    user_role = p_row["user_role"]
                         except Exception as db_err:
                             print(f"[WhatsApp DB Lookup Error] {db_err}")
 
@@ -800,7 +799,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             if msg_type in ("audio", "voice"):
                                 audio_sent = False
                                 try:
-                                    print(f"[WhatsApp TTS] Sintetizando resposta de voz do Braga (Piper faber)...")
+                                    print("[WhatsApp TTS] Sintetizando resposta de voz do Braga (Piper faber)...")
                                     wav_temp = f"/tmp/wa_reply_{int(time.time()*1000)}.wav"
                                     ok = await synthesize_with_piper(spoken_text, "faber", wav_temp)
                                     audio_buffer = bytearray()
@@ -817,7 +816,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                         audio_res = await send_whatsapp_audio(sender_phone, audio_bytes=bytes(audio_buffer))
                                         if audio_res.get("success"):
                                             audio_sent = True
-                                            print(f"[WhatsApp Audio] Áudio do Braga entregue com sucesso!")
+                                            print("[WhatsApp Audio] Áudio do Braga entregue com sucesso!")
                                             for link in links_to_send:
                                                 await send_whatsapp_text(sender_phone, link)
                                 except Exception as tts_err:
@@ -1040,7 +1039,7 @@ def verify_whatsapp_webhook(
     if not VERIFY_TOKEN:
         raise HTTPException(status_code=500, detail="WHATSAPP_VERIFY_TOKEN não configurado")
     if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
-        print(f"[WhatsApp Webhook] Desafio de verificação validado com sucesso!")
+        print("[WhatsApp Webhook] Desafio de verificação validado com sucesso!")
         return PlainTextResponse(content=hub_challenge or "")
     raise HTTPException(status_code=403, detail="Token de verificação inválido")
 

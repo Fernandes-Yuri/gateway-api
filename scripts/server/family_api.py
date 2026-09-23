@@ -384,7 +384,7 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
         await _notify_consultation(row, uid, 'CONSULTATION_CREATED',
             'Nova consulta sugerida',
             f'Foi sugerida a consulta "{row["title"]}". Toque para acompanhar.')
-        return {'status': 'success', 'id': str(row['id']), 'title': row['title'], 'scheduledDate': row['scheduled_date'].isoformat(), 'status': row['status']}
+        return {'id': str(row['id']), 'title': row['title'], 'scheduledDate': row['scheduled_date'].isoformat(), 'status': row['status']}
 
     @app.post('/api/consultation/accept')
     async def accept_consultation(p: AcceptConsultation, uid: str = Depends(firebase_uid)):
@@ -406,7 +406,7 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
         await _notify_consultation(updated, uid, 'CONSULTATION_ACCEPTED',
             'Consulta aceita',
             f'{caregiver_name or "Seu familiar"} aceitou a consulta "{updated["title"]}".')
-        return {'status': 'success', 'id': str(updated['id']), 'status': updated['status']}
+        return {'id': str(updated['id']), 'status': updated['status']}
 
     @app.post('/api/consultation/reject')
     async def reject_consultation(p: RejectConsultation, uid: str = Depends(firebase_uid)):
@@ -425,7 +425,7 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
         await _notify_consultation(updated, uid, 'CONSULTATION_REJECTED',
             'Consulta recusada',
             f'Foi recusada a consulta "{updated["title"]}".')
-        return {'status': 'success', 'id': str(updated['id']), 'status': updated['status']}
+        return {'id': str(updated['id']), 'status': updated['status']}
 
     @app.post('/api/consultation/complete')
     async def complete_consultation(c: AcceptConsultation, uid: str = Depends(firebase_uid)):
@@ -439,7 +439,7 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
         await _notify_consultation(updated, uid, 'CONSULTATION_COMPLETED',
             'Consulta concluída',
             f'A consulta "{updated["title"]}" foi marcada como concluída.')
-        return {'status': 'success', 'id': str(updated['id']), 'status': updated['status']}
+        return {'id': str(updated['id']), 'status': updated['status']}
 
     @app.post('/api/consultation/cancel')
     async def cancel_consultation(c: AcceptConsultation, uid: str = Depends(firebase_uid)):
@@ -453,7 +453,7 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
         await _notify_consultation(updated, uid, 'CONSULTATION_CANCELLED',
             'Consulta cancelada',
             f'A consulta "{updated["title"]}" foi cancelada.')
-        return {'status': 'success', 'id': str(updated['id']), 'status': updated['status']}
+        return {'id': str(updated['id']), 'status': updated['status']}
 
     # --- D51: confirmacao por BOTAO do rascunho de agendamento por voz ---
 

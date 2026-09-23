@@ -264,7 +264,6 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
         count, pending_count = 0, 0
         first_ms = None
         usage = {}
-        envelope_action, envelope_params = 'CONVERSA', {}
         system_used = SPEAK_SYSTEM
         async with client_factory(timeout=httpx.Timeout(chunk_timeout, connect=first_timeout)) as client, \
                 _use(semaphore):
@@ -282,11 +281,9 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
                    latency_ms=round((time.monotonic() - _t0) * 1000))
             if label == 'CONSULTAR_METRICAS':
                 full = compose_envelope(metricas_fala(row), 'CONSULTAR_METRICAS', {})
-                envelope_action = 'CONSULTAR_METRICAS'
                 system_used = 'metricas-template'
             elif label in FIXED_FALAS:
                 full = compose_envelope(FIXED_FALAS[label], label, {})
-                envelope_action = label
                 system_used = 'fixed-template'
             else:
                 # Passo 2: só CONVERSA gera fala livre (texto puro, sem JSON).

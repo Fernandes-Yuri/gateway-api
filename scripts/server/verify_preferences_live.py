@@ -1,6 +1,5 @@
 """Explicit smoke check: synthetic prompts and connection-local temporary tables only."""
 import asyncio
-import json
 import os
 import shlex
 import sys
@@ -42,7 +41,7 @@ async def main():
         pool = SingleConnection(conn)
         store = PreferenceStore(pool)
         change = {'op': 'propose', 'key': 'cup_ml', 'value': 300}
-        question = await store.execute('test-a', change, None)
+        _ = await store.execute('test-a', change, None)
         prefs, pending = await store.read('test-a')
         assert prefs == {}, 'Proposal prematurely persisted'
         await store.execute('test-b', {'op': 'confirm', 'pending_id': pending['proposal_id']}, pending)

@@ -3,7 +3,6 @@ Braga Saude - Security Defense System
 Implementa Zero-Trust, Deteccao de Prompt Injection, Sanitizacao de Entrada,
 e StrictRateLimiter com Bloqueio de IP por 24 horas (apos 3 violacoes).
 """
-import os
 import re
 import time
 import asyncio

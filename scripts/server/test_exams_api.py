@@ -4,7 +4,6 @@ Verifica as rotas /api/exams/upload, /api/exams/manual, /api/exams/{user_id} e /
 de acordo com o 08_CADERNO_DE_CONTRATOS_EXAMES_E_DOSSIE.md.
 """
 import io
-import os
 import uuid
 import unittest
 from datetime import datetime, date, timezone

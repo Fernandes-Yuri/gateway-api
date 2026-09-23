@@ -9,7 +9,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
-from ws_orb import install_orb_routes, stream_content
+from ws_orb import install_orb_routes
 
 
 CONTENT = json.dumps(dict(fala='Olá, tudo bem?', acao='CONVERSA', parametros={}))

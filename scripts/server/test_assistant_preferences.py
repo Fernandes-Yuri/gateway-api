@@ -116,7 +116,6 @@ class ApiTests(unittest.TestCase):
 
 class RestWireTests(unittest.IsolatedAsyncioTestCase):
     async def test_authenticated_rest_routes_memory_without_executing_action(self):
-        import server
         from routers import chat as chat_router
         req = chat_router.ChatCompletionRequest(messages=[chat_router.Message(role='user', content='Pode me chamar de Léo')])
         request = SimpleNamespace(headers={'authorization': 'Bearer test'})
@@ -129,7 +128,6 @@ class RestWireTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(handler.await_args.args[0], 'owner')
 
     async def test_rest_rejects_another_account_before_memory(self):
-        import server
         from routers import chat as chat_router
         from fastapi import HTTPException
         req = chat_router.ChatCompletionRequest(userId='other', messages=[])

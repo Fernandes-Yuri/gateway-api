@@ -23,7 +23,7 @@ import unicodedata
 
 def normalize(text: str) -> str:
     """Minúsculas, sem acento, espaços colapsados."""
-    no_acc = unicoded_text = unicodedata.normalize("NFD", text or "")
+    unicoded_text = unicodedata.normalize("NFD", text or "")
     no_acc = "".join(c for c in unicoded_text if unicodedata.category(c) != "Mn")
     no_acc = no_acc.lower()
     no_acc = re.sub(r"\s+", " ", no_acc).strip()

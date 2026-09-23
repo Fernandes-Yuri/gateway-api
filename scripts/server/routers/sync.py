@@ -15,7 +15,7 @@ import json
 import os
 import re
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status

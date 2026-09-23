@@ -331,8 +331,6 @@ async def agendar_por_voz(conn, uid_cuidador: str, patient_id: str,
     from api_identity import require_family_access
     await require_family_access(conn, uid_cuidador, patient_id)
 
-    baixa = _sem_acento(texto_falado)
-
     # 1. Cancelamento explicito — descarta qualquer rascunho
     if quer_cancelar(texto_falado):
         descartar_rascunho(uid_cuidador, patient_id)

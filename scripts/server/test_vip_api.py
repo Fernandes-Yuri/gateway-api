@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from vip_api import install_vip_routes, normalize_signup
+from vip_api import install_vip_routes
 
 
 class Acquire:

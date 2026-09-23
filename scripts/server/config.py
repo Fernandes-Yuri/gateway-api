@@ -29,13 +29,13 @@ USES_ORGANIZED_LAYOUT = os.path.basename(APP_DIR) == "app"
 if USES_ORGANIZED_LAYOUT:
     DEFAULT_DATA_DIR = os.path.join(PROJECT_ROOT, "data")
     DEFAULT_CACHE_DIR = os.path.join(PROJECT_ROOT, "cache")
-    default_dataset_path = os.path.join(DEFAULT_DATA_DIR, "dataset", "dataset_bragasaude.jsonl")
+    default_dataset_path = os.path.join(DEFAULT_DATA_DIR, "dataset", "dataset_braga.jsonl")
     default_audio_cache_dir = os.path.join(DEFAULT_CACHE_DIR, "audio")
     default_storage_dir = os.path.join(DEFAULT_DATA_DIR, "storage")
     default_devices_path = os.path.join(DEFAULT_DATA_DIR, "devices", "registered_devices.json")
 else:
     # Mantém o comportamento atual para execução local fora da pasta app/.
-    default_dataset_path = os.path.join(PROJECT_ROOT, "dataset_bragasaude.jsonl")
+    default_dataset_path = os.path.join(PROJECT_ROOT, "dataset_braga.jsonl")
     default_audio_cache_dir = os.path.join(PROJECT_ROOT, "audio_cache")
     default_storage_dir = os.path.join(PROJECT_ROOT, "storage")
     default_devices_path = os.path.join(PROJECT_ROOT, "registered_devices.json")

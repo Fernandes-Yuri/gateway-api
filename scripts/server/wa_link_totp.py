@@ -12,7 +12,6 @@ janela de distancia continuam rejeitados (o usuario volta no app e pega um novo)
 import base64
 import hmac
 import hashlib
-import os
 import secrets
 import time
 

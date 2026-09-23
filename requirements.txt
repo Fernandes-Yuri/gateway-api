@@ -36,3 +36,6 @@ firebase-admin>=6.5
 
 # Google reCAPTCHA server-side: validado via POST para a API do Google com
 # requests; nao exige SDK adicional.
+
+# Cerca elétrica / Linter (Fase A)
+ruff>=0.8.0

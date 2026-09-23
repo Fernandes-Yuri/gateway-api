@@ -4,7 +4,6 @@ import os
 import tempfile
 import unittest
 
-import trace_llm
 from trace_llm import new_trace_id, trace_llm
 
 

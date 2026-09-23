@@ -17,7 +17,6 @@ import sys
 import subprocess
 import smtplib
 import ssl
-import socket
 from datetime import datetime
 from email.message import EmailMessage
 from typing import Dict, List, Tuple
@@ -513,7 +512,7 @@ def generate_report(checks: List[Dict], top_procs: str = "") -> Tuple[str, str, 
 
     # Texto plano
     plain_lines = [
-        f"RELATORIO DE MONITORAMENTO - BRAGA SAUDE",
+        "RELATORIO DE MONITORAMENTO - BRAGA SAUDE",
         f"Data: {now}",
         f"Uptime: {uptime}",
         "",
