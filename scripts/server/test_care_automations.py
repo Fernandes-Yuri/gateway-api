@@ -1,5 +1,11 @@
+from pathlib import Path
+import sys
 import unittest
 from unittest.mock import AsyncMock
+
+SERVER_DIR = Path(__file__).resolve().parent
+if str(SERVER_DIR) not in sys.path:
+    sys.path.insert(0, str(SERVER_DIR))
 
 from services.care_automations import _deliver_or_release
 
