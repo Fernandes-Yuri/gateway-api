@@ -91,7 +91,10 @@ scripts/server/
 │   ├── chat.py            #   /v1/chat/completions (canal REST)
 │   ├── auth.py            #   /api/auth/* (OTP, cadastro, sessão)
 │   ├── sync.py            #   /api/sync/* (22 endpoints, gravar/sincronizar)
+│   ├── care_os.py         #   contratos D62: família, farmácia, médico e resgate
 │   └── whatsapp.py        #   /api/whatsapp/* (webhook, send, events)
+├── schemas/               # Contratos Pydantic canônicos do Care OS
+├── services/              # Regras de autorização e workers do Care OS
 ├── routers/admin.py       #   /api/admin/* — portal do webservice (D-WS1):
 │                          #     token de serviço + métricas aggregate-only
 ├── core/                  # Lógica de domínio compartilhada
@@ -140,7 +143,38 @@ scripts/server/
 | GET/POST | `/api/whatsapp/webhook` | `whatsapp` | Webhook da WhatsApp Cloud API |
 | POST | `/api/feedback/reply` | `sync` | Resposta a feedback (suporte) |
 
-> 48 rotas no total. Domínio completo de cada uma está no `routers/<dominio>.py`.
+### Care OS D62 — cuidado longitudinal
+
+O módulo `care_os` adiciona contratos para estoque e receita, coordenação
+multi-cuidador, check-in sintomático, correlações temporais explicáveis, acesso
+médico temporário, PDF de uma página, resgate e telemetria BLE/GATT. A
+especificação congelada para geração dos clientes Android/PWA está em
+`scripts/server/openapi_care_os.json`.
+
+As rotas familiares exigem vínculo `ACTIVE` e permissão granular por papel
+(`ADMIN_CHILD`, `CAREGIVER_VIEWER`, `PROFESSIONAL_NURSE`). Tokens públicos são
+aleatórios, persistidos somente por hash SHA-256 e têm expiração. O motor de
+correlação relata coincidências observacionais; não diagnostica nem autoriza
+medicação. O cadastro exige `confirmed_with_prescription=true`.
+
+| Método | Rota | Finalidade |
+|---|---|---|
+| GET | `/api/anvisa/medications/barcode/{ean}` | Consulta catálogo versionado e rastreável |
+| GET/POST | `/api/family/patients/{patient_id}/medications...` | Cadastro e estoque familiar |
+| POST | `/api/medications/{medication_id}/take` | Dose idempotente e baixa atômica de estoque |
+| GET | `/api/family/patients/{patient_id}/activity-feed` | Trilha compartilhada de cuidado |
+| GET | `/api/family/patients/{patient_id}/daily-bulletin` | Resumo consolidado, sem conteúdo íntimo |
+| POST | `/api/symptoms/check-in` | Check-in por voz ou texto |
+| GET | `/api/patients/{patient_id}/clinical-correlations` | Associações temporais não diagnósticas |
+| POST/GET | `/api/patients/{patient_id}/medical-access/generate` / `/api/public/medical-dashboard/{token}` | Magic Link médico de 2 horas |
+| GET | `/api/family/patients/{patient_id}/doctor-report/pdf` | “Leva pro Doutor” de uma página |
+| POST/GET | `/api/patients/{patient_id}/emergency-access/generate` / `/api/emergency/rescue-card/{token}` | Ficha de resgate temporária |
+| POST | `/api/telemetry/ble` | Ingestão idempotente de pressão/glicemia GATT |
+
+Os workers usam explicitamente `America/Sao_Paulo`: boletim às 20:00,
+verificação de quebra de padrão a cada 30 minutos e alerta de estoque/receita
+às 09:15. A migration correspondente é
+`migrations/017_care_os_global_contracts.sql`.
 
 ### 🔐 Domínio administrativo (D-WS1)
 

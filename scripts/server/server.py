@@ -87,6 +87,12 @@ from routers import whatsapp as whatsapp_router
 # operacoes admin protegidas por token de servico. O portal Next.js no
 # Render consome estes endpoints e deixa de acessar o RDS diretamente.
 from routers import admin as admin_router
+from routers import care_os as care_os_router
+from services.care_automations import (
+    send_nightly_bulletins,
+    send_pattern_break_alerts,
+    send_stock_alerts,
+)
 # Modulos core extraidos (Fase A passo 6): confirmacao de leituras vitais
 # (maquina de pendencias + validacao clinica + botes do WhatsApp) e
 # curadoria do dataset de fine-tuning.
@@ -380,6 +386,8 @@ class FamilyBindingSyncDto(BaseModel):
     caregiverRelation: str
     connectionCode: str
     status: Optional[str] = "PENDING"
+    caregiverRole: str = "CAREGIVER_VIEWER"
+    permissions: List[str] = Field(default_factory=list)
     createdAt: str
     expiresAt: str
 
@@ -405,7 +413,7 @@ class FamilyMessageSyncDto(BaseModel):
 # 503/offline_mode em producao. (Detectado na revisao pre-push: os testes
 # locais passavam justamente por esperarem pool None offline.)
 _POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
-                 sync_router, whatsapp_router, admin_router)
+                 sync_router, whatsapp_router, admin_router, care_os_router)
 
 
 def _propagate_db_pool():
@@ -531,6 +539,48 @@ async def startup():
             retention_scheduler.add_job(
                 purge_expired_blocked_ips, 'interval', minutes=5,
                 id="purge_security_blocked_ips", replace_existing=True, max_instances=1,
+            )
+
+            async def _care_sender(phone, message, notification_type):
+                if not HAS_WHATSAPP:
+                    print("[Care OS] WhatsApp indisponível; entrega não realizada.")
+                    return False
+                template_env = {
+                    "NIGHTLY_BULLETIN": "WHATSAPP_TEMPLATE_CARE_NIGHTLY",
+                    "PATTERN_BREAK": "WHATSAPP_TEMPLATE_CARE_PATTERN_BREAK",
+                    "STOCK_OR_PRESCRIPTION": "WHATSAPP_TEMPLATE_CARE_STOCK",
+                }.get(notification_type)
+                template_name = os.getenv(template_env, "") if template_env else ""
+                if template_name:
+                    result = await send_whatsapp_template(
+                        phone, template_name=template_name, language_code="pt_BR",
+                        body_parameters=[message],
+                    )
+                else:
+                    # Funciona somente se o usuário abriu a janela Meta de 24h.
+                    result = await send_whatsapp_text(phone, message)
+                return bool(result.get("success")) if isinstance(result, dict) else bool(result)
+
+            async def _nightly_care_job():
+                await send_nightly_bulletins(db_pool, _care_sender)
+
+            async def _pattern_care_job():
+                await send_pattern_break_alerts(db_pool, _care_sender)
+
+            async def _stock_care_job():
+                await send_stock_alerts(db_pool, _care_sender)
+
+            retention_scheduler.add_job(
+                _nightly_care_job, CronTrigger(hour=20, minute=0, timezone="America/Sao_Paulo"),
+                id="care_os_nightly_2000_brt", replace_existing=True, max_instances=1, coalesce=True,
+            )
+            retention_scheduler.add_job(
+                _pattern_care_job, 'interval', minutes=30,
+                id="care_os_pattern_break", replace_existing=True, max_instances=1, coalesce=True,
+            )
+            retention_scheduler.add_job(
+                _stock_care_job, CronTrigger(hour=9, minute=15, timezone="America/Sao_Paulo"),
+                id="care_os_stock_alert", replace_existing=True, max_instances=1, coalesce=True,
             )
             # D52: retencao de releases de APK (~36MB cada). Mantem so os 3
             # mais recentes; protege o release ativo e o arquivo servido.
@@ -877,6 +927,9 @@ admin_router.configure_state(
     rate_limiter=rate_limiter,
 )
 app.include_router(admin_router.router)
+
+care_os_router.configure_state(db_pool=None, public_base_url=PUBLIC_API_BASE_URL)
+app.include_router(care_os_router.router)
 
 # Configuracao dos modulos core extraidos (Fase A passo 6).
 # dispatch_clinical_alert continua definido neste arquivo (compartilhado

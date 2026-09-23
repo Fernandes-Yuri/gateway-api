@@ -130,6 +130,10 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             require_owner(uid, b.patientId)
             if b.status != 'PENDING' or b.caregiverId:
                 raise HTTPException(422, 'Use o convite para conectar o acompanhante.')
+            allowed_roles = {'ADMIN_CHILD', 'CAREGIVER_VIEWER', 'PROFESSIONAL_NURSE'}
+            allowed_permissions = {'care:read', 'medication:write', 'medication:take', 'medical:share', 'emergency:share'}
+            if b.caregiverRole not in allowed_roles or not set(b.permissions).issubset(allowed_permissions):
+                raise HTTPException(422, 'Papel ou permissões do cuidador inválidos.')
             code = b.connectionCode.strip().upper()
             if len(code) != 8 or any(c not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' for c in code):
                 raise HTTPException(422, 'Código inválido.')
@@ -141,10 +145,11 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             caregiver_name = sanitize_zero_trust_text(b.caregiverName, max_length=100, field_name="caregiverName", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
             caregiver_relation = sanitize_zero_trust_text(b.caregiverRelation, max_length=50, field_name="caregiverRelation", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
             row = await conn.fetchrow('''INSERT INTO family_bindings
-                (id, patient_id, caregiver_name, caregiver_relation, connection_code, status, created_at, expires_at)
-                VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7)
+                (id, patient_id, caregiver_name, caregiver_relation, connection_code, status, created_at, expires_at,
+                 caregiver_role, permissions)
+                VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7,$8,$9)
                 ON CONFLICT DO NOTHING RETURNING *''', binding_id, uid, caregiver_name,
-                caregiver_relation, code, now, now + timedelta(days=7))
+                caregiver_relation, code, now, now + timedelta(days=7), b.caregiverRole, b.permissions)
             if row is None:
                 row = await conn.fetchrow('SELECT * FROM family_bindings WHERE id=$1', binding_id)
                 if not row or row['patient_id'] != uid or row['connection_code'] != code or row['status'] != 'PENDING':
