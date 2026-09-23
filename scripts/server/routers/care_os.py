@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import unicodedata
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
@@ -354,36 +355,85 @@ async def clinical_correlations(patient_id: str, uid: str = Depends(firebase_uid
                  AND (systolic_pressure >= 160 OR diastolic_pressure >= 100 OR glucose_level >= 250)
                ORDER BY measured_at DESC LIMIT 30""", patient_id,
         )
+        if not vitals:
+            return {
+                "patient_id": patient_id,
+                "correlations": [],
+                "disclaimer": "Associações temporais para revisão humana; não constituem diagnóstico nem causalidade.",
+            }
+
+        start_window = min(v["measured_at"] for v in vitals) - timedelta(hours=24)
+        end_window = max(v["measured_at"] for v in vitals)
+
+        symptoms_all = await conn.fetch(
+            """SELECT symptoms_text,sleep_quality,reported_at FROM symptoms_diary
+               WHERE patient_id=$1 AND reported_at BETWEEN $2 AND $3
+               ORDER BY reported_at DESC""",
+            patient_id, start_window, end_window,
+        )
+
+        meds_and_logs = await conn.fetch(
+            """SELECT m.id AS med_id, m.name, l.taken_at
+               FROM medications m
+               LEFT JOIN medication_logs l
+                 ON l.medication_id = m.id AND l.taken_at BETWEEN $2 AND $3
+               WHERE m.user_id = $1
+               ORDER BY m.name""",
+            patient_id, start_window, end_window,
+        )
+
+        medications_dict = {}
+        for row in meds_and_logs:
+            med_id = row["med_id"]
+            if med_id not in medications_dict:
+                medications_dict[med_id] = {"name": row["name"], "logs": []}
+            if row["taken_at"] is not None:
+                medications_dict[med_id]["logs"].append(row["taken_at"])
+
         result = []
         for vital in vitals:
             at = vital["measured_at"]
-            symptoms = await conn.fetch(
-                """SELECT symptoms_text,sleep_quality,reported_at FROM symptoms_diary
-                   WHERE patient_id=$1 AND reported_at BETWEEN $2-interval '24 hours' AND $2 ORDER BY reported_at DESC LIMIT 3""",
-                patient_id, at,
-            )
-            missed = await conn.fetch(
-                """SELECT m.name FROM medications m WHERE m.user_id=$1
-                   AND NOT EXISTS (SELECT 1 FROM medication_logs l WHERE l.medication_id=m.id
-                     AND l.taken_at BETWEEN $2-interval '24 hours' AND $2) LIMIT 5""",
-                patient_id, at,
-            )
-            evidence = [f"Sintoma relatado: {s['symptoms_text']}" for s in symptoms]
-            evidence += [f"Sem dose registrada nas 24h anteriores: {m['name']}" for m in missed]
+            window_start = at - timedelta(hours=24)
+
+            vital_symptoms = [
+                s for s in symptoms_all
+                if window_start <= s["reported_at"] <= at
+            ][:3]
+
+            vital_missed = []
+            for med in medications_dict.values():
+                taken_in_window = any(window_start <= log_time <= at for log_time in med["logs"])
+                if not taken_in_window:
+                    vital_missed.append(med["name"])
+                    if len(vital_missed) >= 5:
+                        break
+
+            evidence = [f"Sintoma relatado: {s['symptoms_text']}" for s in vital_symptoms]
+            evidence += [f"Sem dose registrada nas 24h anteriores: {name}" for name in vital_missed]
             if not evidence:
                 continue
+
             if vital.get("systolic_pressure"):
                 event = f"Pressão {vital['systolic_pressure']}/{vital['diastolic_pressure']}"
                 kind = "BLOOD_PRESSURE_PEAK"
             else:
                 event = f"Glicemia {vital['glucose_level']} mg/dL"
                 kind = "GLUCOSE_PEAK"
-            result.append({"event_at": at.isoformat(), "event_type": kind,
-                           "observation": f"{event} coincidiu temporalmente com registros da rotina.",
-                           "evidence": evidence, "window_hours": 24,
-                           "interpretation": "TEMPORAL_ASSOCIATION_NOT_DIAGNOSIS"})
-    return {"patient_id": patient_id, "correlations": result,
-            "disclaimer": "Associações temporais para revisão humana; não constituem diagnóstico nem causalidade."}
+
+            result.append({
+                "event_at": at.isoformat(),
+                "event_type": kind,
+                "observation": f"{event} coincidiu temporalmente com registros da rotina.",
+                "evidence": evidence,
+                "window_hours": 24,
+                "interpretation": "TEMPORAL_ASSOCIATION_NOT_DIAGNOSIS",
+            })
+
+    return {
+        "patient_id": patient_id,
+        "correlations": result,
+        "disclaimer": "Associações temporais para revisão humana; não constituem diagnóstico nem causalidade.",
+    }
 
 
 @router.post("/api/patients/{patient_id}/medical-access/generate", status_code=201, response_model=MedicalAccessGrant)
@@ -444,12 +494,54 @@ async def medical_dashboard(access_token: str, request: Request):
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"})
 
 
+_UNICODE_PDF_REPLACEMENTS = {
+    "\u2013": "-",   # en-dash –
+    "\u2014": "--",  # em-dash —
+    "\u2015": "--",  # horizontal bar ―
+    "\u2018": "'",   # left single quote ‘
+    "\u2019": "'",   # right single quote ’
+    "\u201a": "'",   # single low-9 quote ‚
+    "\u201c": '"',   # left double quote “
+    "\u201d": '"',   # right double quote ”
+    "\u201e": '"',   # double low-9 quote „
+    "\u2026": "...", # ellipsis …
+    "\u2022": "*",   # bullet •
+    "\u00a0": " ",   # non-breaking space
+    "\u200b": "",    # zero-width space
+    "\u2122": "TM",  # trademark ™
+}
+
+
+def _sanitize_pdf_text(text: str) -> str:
+    """Normaliza tipografia Unicode para compatibilidade estrita com PDF / Latin-1.
+
+    Preserva acentuação padrão da língua portuguesa (á, é, í, ó, ú, ç, ã, etc.),
+    substitui aspas curvas, travessões e reticências por seus equivalentes ASCII,
+    e previne a emissão de interrogações brutas '?' decorrentes de encode('latin-1', 'replace').
+    """
+    if not text:
+        return ""
+    for char, repl in _UNICODE_PDF_REPLACEMENTS.items():
+        text = text.replace(char, repl)
+
+    cleaned_chars = []
+    for c in text:
+        if ord(c) <= 255:
+            cleaned_chars.append(c)
+        else:
+            decomposed = unicodedata.normalize("NFKD", c)
+            equiv = "".join(ch for ch in decomposed if ord(ch) <= 255 and not unicodedata.combining(ch))
+            cleaned_chars.append(equiv if equiv else " ")
+
+    clean = "".join(cleaned_chars)
+    return clean.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
 def _minimal_pdf(lines: list[str]) -> bytes:
-    def esc(text):
-        return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").encode("latin-1", "replace").decode("latin-1")
     content = ["BT /F1 12 Tf 50 790 Td"]
     for index, line in enumerate(lines):
-        content.append(("0 -20 Td " if index else "") + f"({esc(line)}) Tj")
+        escaped = _sanitize_pdf_text(line)
+        content.append(("0 -20 Td " if index else "") + f"({escaped}) Tj")
     stream = ("\n".join(content) + "\nET").encode("latin-1")
     objects = [b"1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n",
                b"2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n",
@@ -511,10 +603,18 @@ async def generate_emergency_access(patient_id: str, uid: str = Depends(firebase
 
 
 @router.get("/api/emergency/rescue-card/{emergency_token}", response_class=HTMLResponse)
-async def rescue_card(emergency_token: str):
+async def rescue_card(emergency_token: str, request: Request):
     async with _pool().acquire() as conn:
         grant = await conn.fetchrow("SELECT * FROM emergency_access_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()", token_hash(emergency_token))
-        if not grant: raise HTTPException(404, "Ficha inexistente, expirada ou revogada.")
+        if not grant:
+            raise HTTPException(404, "Ficha inexistente, expirada ou revogada.")
+        client_ip = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent", "")[:500]
+        await conn.execute(
+            "INSERT INTO emergency_access_audit(token_id,ip_address,user_agent) VALUES ($1,$2,$3)",
+            grant["id"], client_ip, user_agent,
+        )
+        await conn.execute("UPDATE emergency_access_tokens SET last_accessed_at=now() WHERE id=$1", grant["id"])
         p = await conn.fetchrow("SELECT full_name,blood_type,medication_allergies,implants,emergency_contact_name,emergency_contact_phone FROM profiles WHERE id=$1", grant["patient_id"])
         meds = await conn.fetch("SELECT name,dosage_mg FROM medications WHERE user_id=$1 ORDER BY name", grant["patient_id"])
         vital = await conn.fetchrow("SELECT * FROM vital_signs WHERE user_id=$1 ORDER BY measured_at DESC LIMIT 1", grant["patient_id"])
