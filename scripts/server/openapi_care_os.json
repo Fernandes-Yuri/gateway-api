@@ -1,0 +1,1577 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Braga Saúde Care OS Contracts",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/anvisa/medications/barcode/{ean}": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Medication By Barcode",
+        "operationId": "medication_by_barcode_api_anvisa_medications_barcode__ean__get",
+        "parameters": [
+          {
+            "name": "ean",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BarcodeMedication"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/medications": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Create Medication",
+        "operationId": "create_medication_api_family_patients__patient_id__medications_post",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MedicationCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/medications/stock": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Medication Stock",
+        "operationId": "medication_stock_api_family_patients__patient_id__medications_stock_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/medications/{medication_id}/take": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Take Medication",
+        "operationId": "take_medication_api_medications__medication_id__take_post",
+        "parameters": [
+          {
+            "name": "medication_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Medication Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MedicationTakeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/medications/{medication_id}/restock": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Restock Medication",
+        "description": "Substitui atomicamente o saldo pela quantidade conferida na nova caixa.",
+        "operationId": "restock_medication_api_medications__medication_id__restock_post",
+        "parameters": [
+          {
+            "name": "medication_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Medication Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MedicationRestockRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/medications/photo": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Upload Medication Photo",
+        "description": "Upload autenticado de foto da caixa ou receita (referência humana).",
+        "operationId": "upload_medication_photo_api_family_patients__patient_id__medications_photo_post",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_medication_photo_api_family_patients__patient_id__medications_photo_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/files/medications/{patient_id}/{filename}": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Medication Photo",
+        "operationId": "medication_photo_api_files_medications__patient_id___filename__get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/activity-feed": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Activity Feed",
+        "operationId": "activity_feed_api_family_patients__patient_id__activity_feed_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/daily-bulletin": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Daily Bulletin",
+        "operationId": "daily_bulletin_api_family_patients__patient_id__daily_bulletin_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "day",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Day"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/symptoms/check-in": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Symptom Check In",
+        "operationId": "symptom_check_in_api_symptoms_check_in_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SymptomCheckInCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/patients/{patient_id}/clinical-correlations": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Clinical Correlations",
+        "operationId": "clinical_correlations_api_patients__patient_id__clinical_correlations_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/patients/{patient_id}/medical-access/generate": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Generate Medical Access",
+        "operationId": "generate_medical_access_api_patients__patient_id__medical_access_generate_post",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MedicalAccessGenerateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MedicalAccessGrant"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/public/medical-dashboard/{access_token}": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Medical Dashboard",
+        "operationId": "medical_dashboard_api_public_medical_dashboard__access_token__get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Access Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/family/patients/{patient_id}/doctor-report/pdf": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Doctor Report",
+        "operationId": "doctor_report_api_family_patients__patient_id__doctor_report_pdf_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 90,
+              "minimum": 1,
+              "default": 30,
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/patients/{patient_id}/emergency-access/generate": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Generate Emergency Access",
+        "operationId": "generate_emergency_access_api_patients__patient_id__emergency_access_generate_post",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmergencyTokenGrant"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/emergency/rescue-card/{emergency_token}": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Rescue Card",
+        "operationId": "rescue_card_api_emergency_rescue_card__emergency_token__get",
+        "parameters": [
+          {
+            "name": "emergency_token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Emergency Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/telemetry/ble": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Ingest Ble",
+        "operationId": "ingest_ble_api_telemetry_ble_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BleTelemetryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BarcodeMedication": {
+        "properties": {
+          "ean_barcode": {
+            "type": "string",
+            "title": "Ean Barcode"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "active_principle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Principle"
+          },
+          "concentration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concentration"
+          },
+          "pharmaceutical_form": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pharmaceutical Form"
+          },
+          "manufacturer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manufacturer"
+          },
+          "farmacia_popular_eligible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Farmacia Popular Eligible"
+          },
+          "source_name": {
+            "type": "string",
+            "title": "Source Name"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "source_checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Source Checked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ean_barcode",
+          "name",
+          "source_name",
+          "source_checked_at"
+        ],
+        "title": "BarcodeMedication"
+      },
+      "BleTelemetryRequest": {
+        "properties": {
+          "patient_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Patient Id"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 3,
+            "title": "Device Id"
+          },
+          "device_type": {
+            "type": "string",
+            "pattern": "^(BLOOD_PRESSURE|GLUCOSE)$",
+            "title": "Device Type"
+          },
+          "measured_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Measured At"
+          },
+          "systolic_pressure": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 300.0,
+                "minimum": 40.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Systolic Pressure"
+          },
+          "diastolic_pressure": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 200.0,
+                "minimum": 20.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diastolic Pressure"
+          },
+          "glucose_level": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000.0,
+                "minimum": 20.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Glucose Level"
+          },
+          "protocol": {
+            "type": "string",
+            "pattern": "^GATT$",
+            "title": "Protocol",
+            "default": "GATT"
+          }
+        },
+        "type": "object",
+        "required": [
+          "patient_id",
+          "device_id",
+          "device_type",
+          "measured_at"
+        ],
+        "title": "BleTelemetryRequest"
+      },
+      "Body_upload_medication_photo_api_family_patients__patient_id__medications_photo_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_medication_photo_api_family_patients__patient_id__medications_photo_post"
+      },
+      "EmergencyTokenGrant": {
+        "properties": {
+          "emergency_token": {
+            "type": "string",
+            "title": "Emergency Token"
+          },
+          "rescue_link": {
+            "type": "string",
+            "title": "Rescue Link"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "emergency_token",
+          "rescue_link",
+          "expires_at"
+        ],
+        "title": "EmergencyTokenGrant"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "MedicalAccessGenerateRequest": {
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "pattern": "^CONSULTATION$",
+            "title": "Purpose",
+            "default": "CONSULTATION"
+          }
+        },
+        "type": "object",
+        "title": "MedicalAccessGenerateRequest"
+      },
+      "MedicalAccessGrant": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "magic_link": {
+            "type": "string",
+            "title": "Magic Link"
+          },
+          "qr_code_payload": {
+            "type": "string",
+            "title": "Qr Code Payload"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "expires_in_seconds": {
+            "type": "integer",
+            "title": "Expires In Seconds",
+            "default": 7200
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token",
+          "magic_link",
+          "qr_code_payload",
+          "expires_at"
+        ],
+        "title": "MedicalAccessGrant"
+      },
+      "MedicationCreate": {
+        "properties": {
+          "ean_barcode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{13}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean Barcode"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 2,
+            "title": "Name"
+          },
+          "active_principle": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 150
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Principle"
+          },
+          "manufacturer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manufacturer"
+          },
+          "dosage_mg": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dosage Mg"
+          },
+          "pharmaceutical_form": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pharmaceutical Form"
+          },
+          "schedule_times": {
+            "items": {
+              "type": "string",
+              "format": "time"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Schedule Times"
+          },
+          "total_units": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Total Units"
+          },
+          "alert_threshold_days": {
+            "type": "integer",
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Alert Threshold Days",
+            "default": 5
+          },
+          "photo_reference_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Photo Reference Url"
+          },
+          "confirmed_with_prescription": {
+            "type": "boolean",
+            "title": "Confirmed With Prescription"
+          },
+          "prescription": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrescriptionCreate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "schedule_times",
+          "total_units",
+          "confirmed_with_prescription"
+        ],
+        "title": "MedicationCreate"
+      },
+      "MedicationRestockRequest": {
+        "properties": {
+          "new_total_units": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "New Total Units"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 8,
+            "title": "Idempotency Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "new_total_units",
+          "idempotency_key"
+        ],
+        "title": "MedicationRestockRequest",
+        "description": "Reposição autoritativa de uma nova caixa/lote.\n\n``new_total_units`` substitui o saldo atual pelo total conferido na caixa;\na chave torna reenvios offline seguros entre Android, PWA e gateway."
+      },
+      "MedicationTakeRequest": {
+        "properties": {
+          "scheduled_for": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduled For"
+          },
+          "units_taken": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Units Taken",
+            "default": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 8,
+            "title": "Idempotency Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scheduled_for",
+          "idempotency_key"
+        ],
+        "title": "MedicationTakeRequest"
+      },
+      "PrescriptionCreate": {
+        "properties": {
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "issued_on": {
+            "type": "string",
+            "format": "date",
+            "title": "Issued On"
+          },
+          "validity_days": {
+            "type": "integer",
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Validity Days"
+          },
+          "prescriber_name": {
+            "type": "string",
+            "maxLength": 150,
+            "minLength": 2,
+            "title": "Prescriber Name"
+          },
+          "prescriber_crm": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 4,
+            "title": "Prescriber Crm"
+          }
+        },
+        "type": "object",
+        "required": [
+          "issued_on",
+          "validity_days",
+          "prescriber_name",
+          "prescriber_crm"
+        ],
+        "title": "PrescriptionCreate"
+      },
+      "SymptomCheckInCreate": {
+        "properties": {
+          "patient_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient Id"
+          },
+          "reported_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reported At"
+          },
+          "symptoms_text": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Symptoms Text"
+          },
+          "sleep_quality": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sleep Quality"
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disposition"
+          },
+          "input_method": {
+            "type": "string",
+            "pattern": "^(VOICE|TEXT)$",
+            "title": "Input Method",
+            "default": "VOICE"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reported_at",
+          "symptoms_text"
+        ],
+        "title": "SymptomCheckInCreate"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "FirebaseBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "Firebase ID token"
+      }
+    }
+  }
+}

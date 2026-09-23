@@ -7,7 +7,7 @@ import os
 import sys
 import json
 import asyncio
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import httpx
 
 # Credenciais Oficiais Meta WhatsApp Cloud API
@@ -43,7 +43,8 @@ def sanitize_phone_number(phone: str) -> str:
 async def send_whatsapp_template(
     to_number: str,
     template_name: str = "3p_direct_integration_test_template",
-    language_code: str = "en_US"
+    language_code: str = "en_US",
+    body_parameters: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Envia uma mensagem baseada em template aprovado pela Meta.
@@ -63,6 +64,11 @@ async def send_whatsapp_template(
             "language": {"code": language_code}
         }
     }
+    if body_parameters:
+        payload["template"]["components"] = [{
+            "type": "body",
+            "parameters": [{"type": "text", "text": str(value)[:1024]} for value in body_parameters],
+        }]
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(WHATSAPP_API_URL, headers=headers, json=payload)
