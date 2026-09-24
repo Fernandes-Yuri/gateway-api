@@ -20,7 +20,7 @@ import logging
 import math
 import re
 import unicodedata
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import httpx
 
@@ -35,6 +35,13 @@ from config import (
 from schemas.medications import AnalyzedMedicationItem
 
 logger = logging.getLogger(__name__)
+
+
+class ReconciliationResult(NamedTuple):
+    medications: list[AnalyzedMedicationItem]
+    total_pages_analyzed: int = 1
+    duplicates_merged_count: int = 0
+
 
 
 def normalize_text(text: str) -> str:
@@ -254,7 +261,8 @@ async def _call_vision_ocr(image_bytes: bytes) -> str:
 async def extract_raw_ocr_text(image_bytes: bytes, filename: str) -> str:
     """Extrai texto literal bruto da receita (Motor 1 - OCR Estrito).
 
-    Se for PDF: extrai texto direto via PyMuPDF (fitz).
+    Se for PDF: extrai texto direto de todas as páginas via PyMuPDF (fitz).
+    Se for PDF escaneado (sem camada textual): renderiza cada página (limitado a 10 páginas) como imagem e faz OCR.
     Se for imagem: faz transcrição literal estrita caractere a caractere.
     """
     is_pdf = filename.lower().endswith(".pdf") or image_bytes.startswith(b"%PDF")
@@ -265,36 +273,30 @@ async def extract_raw_ocr_text(image_bytes: bytes, filename: str) -> str:
             except ImportError:
                 import fitz
             doc = fitz.open(stream=image_bytes, filetype="pdf")
-            pages_text = [page.get_text() for page in doc]
-            extracted = "\n".join(pages_text).strip()
-            if extracted:
-                return extracted
-            # PDF escaneado (sem camada textual): renderiza primeira página para imagem
-            if len(doc) > 0:
-                pix = doc[0].get_pixmap()
-                image_bytes = pix.tobytes("png")
+            has_digital_text = any(bool(page.get_text().strip()) for page in doc)
+            if has_digital_text:
+                extracted = "\n".join(
+                    f"--- PÁGINA {i+1} ---\n{page.get_text()}" for i, page in enumerate(doc)
+                ).strip()
+                if extracted:
+                    return extracted
+            # PDF escaneado (sem camada textual): renderiza cada página (limitado a 10 páginas)
+            ocr_parts: list[str] = []
+            for i, page in enumerate(doc[:10]):
+                pix = page.get_pixmap()
+                page_bytes = pix.tobytes("png")
+                page_ocr = await _call_vision_ocr(page_bytes)
+                if page_ocr:
+                    ocr_parts.append(f"--- PÁGINA {i+1} ---\n{page_ocr}")
+            if ocr_parts:
+                return "\n".join(ocr_parts).strip()
         except Exception as exc:
             logger.warning("[extract_raw_ocr_text] Erro ao extrair texto de PDF via PyMuPDF: %s", exc)
 
     return await _call_vision_ocr(image_bytes)
 
 
-async def extract_structured_prescription(image_bytes: bytes, content_type: str = "image/jpeg") -> list[dict]:
-    """Interpreta a imagem e extrai estruturadamente medicamentos, doses e horários (Motor 2)."""
-    if content_type == "application/pdf" or image_bytes.startswith(b"%PDF"):
-        try:
-            try:
-                import pymupdf as fitz
-            except ImportError:
-                import fitz
-            doc = fitz.open(stream=image_bytes, filetype="pdf")
-            if len(doc) > 0:
-                pix = doc[0].get_pixmap()
-                image_bytes = pix.tobytes("png")
-                content_type = "image/png"
-        except Exception as exc:
-            logger.warning("[extract_structured_prescription] Falha ao renderizar PDF para visão: %s", exc)
-
+async def _extract_single_image_structured(image_bytes: bytes, content_type: str = "image/jpeg") -> list[dict]:
     prompt = (
         "Você é um assistente clínico de análise segura de receitas médicas geriátricas. "
         "Analise a imagem da receita e extraia cada medicamento prescrito de forma estruturada.\n"
@@ -362,24 +364,89 @@ async def extract_structured_prescription(image_bytes: bytes, content_type: str 
     return []
 
 
+async def extract_structured_prescription(image_bytes: bytes, content_type: str = "image/jpeg") -> list[dict]:
+    """Interpreta a imagem ou páginas de PDF e extrai estruturadamente medicamentos, doses e horários (Motor 2)."""
+    is_pdf = content_type == "application/pdf" or image_bytes.startswith(b"%PDF")
+    if is_pdf:
+        all_medications: list[dict] = []
+        try:
+            try:
+                import pymupdf as fitz
+            except ImportError:
+                import fitz
+            doc = fitz.open(stream=image_bytes, filetype="pdf")
+            for page_idx, page in enumerate(doc[:10]):
+                pix = page.get_pixmap()
+                page_png = pix.tobytes("png")
+                page_meds = await _extract_single_image_structured(page_png, "image/png")
+                for med in page_meds:
+                    med["source_page"] = page_idx + 1
+                    all_medications.append(med)
+            return all_medications
+        except Exception as exc:
+            logger.warning("[extract_structured_prescription] Falha ao renderizar PDF para visão: %s", exc)
+
+    meds = await _extract_single_image_structured(image_bytes, content_type)
+    for med in meds:
+        if "source_page" not in med:
+            med["source_page"] = 1
+    return meds
+
 
 async def reconcile_and_verify(
     structured_items: list[dict],
     raw_text: str,
     db_conn,
-) -> list[AnalyzedMedicationItem]:
-    """Árbitro e Dupla Checagem contra Texto Bruto e Catálogo ANVISA (Motor 3).
+    total_pages: Optional[int] = None,
+) -> ReconciliationResult:
+    """Árbitro e Dupla Checagem contra Texto Bruto e Catálogo ANVISA com Deduplicação Anti-Cópias (Motor 3).
 
-    Garante o princípio clínico de tolerância zero com ambiguidades.
+    Garante o princípio clínico de tolerância zero com ambiguidades e funde 1ª e 2ª vias idênticas.
     """
-    results: list[AnalyzedMedicationItem] = []
+    merged_items: list[dict] = []
+    seen_keys: dict[tuple[str, float], dict] = {}
+    duplicates_merged_count = 0
+    pages_seen: set[int] = set()
 
     for item in structured_items:
+        current_page = item.get("source_page") or (item.get("source_pages") and item["source_pages"][0]) or 1
+        pages_seen.add(current_page)
+
+        raw_name = (item.get("name") or "").strip()
+        raw_dosage = (item.get("dosage") or "").strip()
+
+        # Chave canônica de unicidade
+        canonical_name = re.sub(
+            r"(potassica|potássica|cloridrato|maleato|sodica|sódica|comprimido|comprimidos|capsula|capsulas|gotas)",
+            "",
+            normalize_text(raw_name),
+        ).strip()
+        canonical_name = " ".join(canonical_name.split())
+        canonical_dose = parse_dosage_mg(raw_dosage) or 0.0
+        key = (canonical_name, canonical_dose)
+
+        if canonical_name and key in seen_keys:
+            existing = seen_keys[key]
+            if current_page not in existing["source_pages"]:
+                existing["source_pages"].append(current_page)
+            duplicates_merged_count += 1
+        else:
+            item_copy = dict(item)
+            item_copy["source_pages"] = [current_page]
+            if canonical_name:
+                seen_keys[key] = item_copy
+            merged_items.append(item_copy)
+
+    total_pages_analyzed = total_pages if total_pages is not None else (max(pages_seen) if pages_seen else 1)
+    results: list[AnalyzedMedicationItem] = []
+
+    for item in merged_items:
         raw_name = (item.get("name") or "").strip()
         raw_dosage = (item.get("dosage") or "").strip()
         raw_freq = (item.get("frequency") or "").strip()
         raw_suggested = item.get("suggested_times") or []
         caligrafia_duvidosa = bool(item.get("caligrafia_duvidosa"))
+        source_pages = item.get("source_pages", [1])
 
         name_divergent = False
         dosage_divergent = False
@@ -526,7 +593,13 @@ async def reconcile_and_verify(
                 confidence_score=confidence_score,
                 requires_human_fill=requires_human_fill,
                 divergence_reason=divergence_reason,
+                source_pages=source_pages,
             )
         )
 
-    return results
+    return ReconciliationResult(
+        medications=results,
+        total_pages_analyzed=total_pages_analyzed,
+        duplicates_merged_count=duplicates_merged_count,
+    )
+

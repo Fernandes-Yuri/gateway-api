@@ -16,7 +16,10 @@ from fastapi.testclient import TestClient
 
 from api_identity import firebase_uid
 from routers import care_os
-from schemas.medications import PrescriptionAnalysisResponse
+from schemas.medications import (
+    MedicationBatchResponse,
+    PrescriptionAnalysisResponse,
+)
 from services.prescription_analyzer import (
     _call_gemini_vision,
     extract_raw_ocr_text,
@@ -70,10 +73,10 @@ class TestPrescriptionArbitrationUnit(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        results = await reconcile_and_verify(structured_items, raw_text, db_conn)
+        result = await reconcile_and_verify(structured_items, raw_text, db_conn)
 
-        self.assertEqual(len(results), 1)
-        item = results[0]
+        self.assertEqual(len(result.medications), 1)
+        item = result.medications[0]
         self.assertEqual(item.name, "Losartana")
         self.assertFalse(item.name_divergent)
         self.assertEqual(item.dosage, "50mg")
@@ -112,10 +115,10 @@ class TestPrescriptionArbitrationUnit(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        results = await reconcile_and_verify(structured_items, raw_text, db_conn)
+        result = await reconcile_and_verify(structured_items, raw_text, db_conn)
 
-        self.assertEqual(len(results), 1)
-        item = results[0]
+        self.assertEqual(len(result.medications), 1)
+        item = result.medications[0]
         self.assertEqual(item.dosage, "")
         self.assertTrue(item.dosage_divergent)
         self.assertTrue(item.requires_human_fill)
@@ -147,10 +150,10 @@ class TestPrescriptionArbitrationUnit(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        results = await reconcile_and_verify(structured_items, raw_text, db_conn)
+        result = await reconcile_and_verify(structured_items, raw_text, db_conn)
 
-        self.assertEqual(len(results), 1)
-        item = results[0]
+        self.assertEqual(len(result.medications), 1)
+        item = result.medications[0]
         self.assertEqual(item.dosage, "")
         self.assertTrue(item.dosage_divergent)
         self.assertTrue(item.requires_human_fill)
@@ -172,16 +175,122 @@ class TestPrescriptionArbitrationUnit(unittest.IsolatedAsyncioTestCase):
         db_conn = MagicMock()
         db_conn.fetch = AsyncMock(return_value=[])
 
-        results = await reconcile_and_verify(structured_items, raw_text, db_conn)
+        result = await reconcile_and_verify(structured_items, raw_text, db_conn)
 
-        self.assertEqual(len(results), 1)
-        item = results[0]
+        self.assertEqual(len(result.medications), 1)
+        item = result.medications[0]
         self.assertEqual(item.name, "")
         self.assertTrue(item.name_divergent)
         self.assertEqual(item.dosage, "")
         self.assertTrue(item.dosage_divergent)
         self.assertTrue(item.requires_human_fill)
         self.assertEqual(item.confidence_score, 0.0)
+
+    async def test_deduplicacao_primeira_e_segunda_via(self):
+        """Itens repetidos em páginas diferentes (1ª e 2ª via) são fundidos em um único cadastro."""
+        structured_items = [
+            {
+                "name": "Losartana Potássica",
+                "dosage": "50mg",
+                "frequency": "1x ao dia",
+                "source_page": 1,
+            },
+            {
+                "name": "Losartana",
+                "dosage": "50 mg",
+                "frequency": "1x ao dia",
+                "source_page": 2,
+            },
+        ]
+        raw_text = "Página 1:\nLosartana Potássica 50mg 1x ao dia\n\nPágina 2:\nLosartana 50mg 1x ao dia"
+
+        db_conn = MagicMock()
+        db_conn.fetch = AsyncMock(
+            return_value=[
+                {
+                    "ean_barcode": "7896004715506",
+                    "name": "Losartana Potássica 50mg",
+                    "concentration": "50 mg",
+                    "active_principle": "Losartana Potássica",
+                }
+            ]
+        )
+
+        result = await reconcile_and_verify(structured_items, raw_text, db_conn, total_pages=2)
+
+        self.assertEqual(len(result.medications), 1)
+        item = result.medications[0]
+        self.assertEqual(item.name, "Losartana Potássica")
+        self.assertEqual(item.dosage, "50mg")
+        self.assertEqual(item.source_pages, [1, 2])
+        self.assertEqual(result.duplicates_merged_count, 1)
+        self.assertEqual(result.total_pages_analyzed, 2)
+
+    async def test_multi_medicamentos_unicos_paginas_diferentes(self):
+        """Prescrições com múltiplos medicamentos diferentes em páginas distintas não devem ser fundidos."""
+        structured_items = [
+            {
+                "name": "Losartana Potássica",
+                "dosage": "50mg",
+                "frequency": "1x ao dia",
+                "source_page": 1,
+            },
+            {
+                "name": "Atenolol",
+                "dosage": "25mg",
+                "frequency": "1x ao dia",
+                "source_page": 2,
+            },
+            {
+                "name": "Metformina",
+                "dosage": "850mg",
+                "frequency": "2x ao dia",
+                "source_page": 2,
+            },
+        ]
+        raw_text = (
+            "Página 1: Losartana Potássica 50mg 1x ao dia.\n"
+            "Página 2: Atenolol 25mg 1x ao dia. Metformina 850mg 2x ao dia."
+        )
+
+        db_conn = MagicMock()
+        db_conn.fetch = AsyncMock(
+            side_effect=[
+                [
+                    {
+                        "ean_barcode": "7896004715506",
+                        "name": "Losartana Potássica 50mg",
+                        "concentration": "50 mg",
+                        "active_principle": "Losartana Potássica",
+                    }
+                ],
+                [
+                    {
+                        "ean_barcode": "7896004715507",
+                        "name": "Atenolol 25mg",
+                        "concentration": "25 mg",
+                        "active_principle": "Atenolol",
+                    }
+                ],
+                [
+                    {
+                        "ean_barcode": "7896004715508",
+                        "name": "Cloridrato de Metformina 850mg",
+                        "concentration": "850 mg",
+                        "active_principle": "Metformina",
+                    }
+                ],
+            ]
+        )
+
+        result = await reconcile_and_verify(structured_items, raw_text, db_conn, total_pages=2)
+
+        self.assertEqual(len(result.medications), 3)
+        self.assertEqual(result.duplicates_merged_count, 0)
+        self.assertEqual(result.total_pages_analyzed, 2)
+        self.assertEqual(result.medications[0].source_pages, [1])
+        self.assertEqual(result.medications[1].source_pages, [2])
+        self.assertEqual(result.medications[2].source_pages, [2])
 
     async def test_pdf_ocr_extraction_via_fitz(self):
         """Valida que extract_raw_ocr_text extrai texto diretamente de PDF com PyMuPDF."""
@@ -395,6 +504,90 @@ class TestPrescriptionAnalysisEndpoint(unittest.TestCase):
             files={"file": ("vazio.png", b"", "image/png")},
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_create_medications_batch_atomico_sucesso(self):
+        """Valida criação atômica em lote de medicamentos após confirmação da receita."""
+        conn = MagicMock()
+        conn.transaction = MagicMock()
+        conn.transaction.return_value.__aenter__ = AsyncMock()
+        conn.transaction.return_value.__aexit__ = AsyncMock(return_value=False)
+        conn.fetchval = AsyncMock(return_value="Dra. Maria Cuidadora")
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"id": "med-uuid-1"},
+                {"id": "med-uuid-2"},
+                {"id": "med-uuid-3"},
+            ]
+        )
+        conn.execute = AsyncMock(return_value="INSERT 0 1")
+
+        client = _create_test_client(conn, uid="patient-001")
+
+        payload = {
+            "medications": [
+                {
+                    "name": "Losartana Potássica",
+                    "dosage_mg": 50.0,
+                    "schedule_times": ["08:00"],
+                    "ean_barcode": "7896004715506",
+                    "active_principle": "Losartana Potássica",
+                    "total_units": 30,
+                    "alert_threshold_days": 5,
+                    "confirmed_with_prescription": True,
+                },
+                {
+                    "name": "Atenolol",
+                    "dosage_mg": 25.0,
+                    "schedule_times": ["08:00"],
+                    "ean_barcode": "7896004715507",
+                    "active_principle": "Atenolol",
+                    "total_units": 30,
+                    "alert_threshold_days": 5,
+                    "confirmed_with_prescription": True,
+                },
+                {
+                    "name": "Metformina",
+                    "dosage_mg": 850.0,
+                    "schedule_times": ["12:00"],
+                    "ean_barcode": "7896004715508",
+                    "active_principle": "Metformina",
+                    "total_units": 60,
+                    "alert_threshold_days": 5,
+                    "confirmed_with_prescription": True,
+                },
+            ]
+        }
+
+        response = client.post(
+            "/api/family/patients/patient-001/medications/batch",
+            json=payload,
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        data = response.json()
+        validated = MedicationBatchResponse.model_validate(data)
+        self.assertEqual(validated.status, "success")
+        self.assertEqual(validated.patient_id, "patient-001")
+        self.assertEqual(validated.created_count, 3)
+        self.assertEqual(len(validated.medications), 3)
+        self.assertEqual(validated.medications[0].name, "Losartana Potássica")
+        self.assertEqual(validated.medications[1].name, "Atenolol")
+        self.assertEqual(validated.medications[2].name, "Metformina")
+
+        # Verifica auditoria LGPD MEDICATION_BATCH_CREATED
+        executed_calls = conn.execute.await_args_list
+        audit_call = None
+        for call in executed_calls:
+            query = call.args[0] if call.args else ""
+            if "care_audit_trail" in query and "MEDICATION_BATCH_CREATED" in query:
+                audit_call = call
+                break
+
+        self.assertIsNotNone(audit_call, "care_audit_trail com MEDICATION_BATCH_CREATED não foi registrado!")
+        details = json.loads(audit_call.args[4])
+        self.assertEqual(details["batch_size"], 3)
+        self.assertEqual(details["medications"], ["Losartana Potássica", "Atenolol", "Metformina"])
+
 
 
 class TestGeminiVisionPriorityAndFallback(unittest.IsolatedAsyncioTestCase):

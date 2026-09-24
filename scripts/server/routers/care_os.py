@@ -25,6 +25,9 @@ from config import STORAGE_DIR
 from schemas.medications import (
     BarcodeMedication,
     BleTelemetryRequest,
+    MedicationBatchCreate,
+    MedicationBatchItemResult,
+    MedicationBatchResponse,
     MedicationCreate,
     MedicationRestockRequest,
     MedicationTakeRequest,
@@ -116,6 +119,59 @@ async def create_medication(patient_id: str, payload: MedicationCreate, uid: str
                 patient_id, uid, actor_name, json.dumps({"medication_id": str(med_id), "name": payload.name}),
             )
     return {"id": str(med_id), "patient_id": patient_id, "confirmed_with_prescription": True}
+
+
+@router.post("/api/family/patients/{patient_id}/medications/batch", response_model=MedicationBatchResponse, status_code=201)
+async def create_medications_batch(
+    patient_id: str,
+    payload: MedicationBatchCreate,
+    uid: str = Depends(firebase_uid),
+):
+    pool = _pool()
+    async with pool.acquire() as conn:
+        await require_patient_permission(conn, uid, patient_id, "medication:write")
+        results = []
+        async with conn.transaction():
+            actor_name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid) or "Usuário autorizado"
+            for item in payload.medications:
+                med = await conn.fetchrow(
+                    """INSERT INTO medications
+                       (user_id,name,dosage_mg,schedule_time,schedule_times,ean_barcode,active_principle,
+                        manufacturer,pharmaceutical_form,total_units,current_units,alert_threshold_days,
+                        photo_reference_url,confirmed_with_prescription,last_restock_date,updated_at)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11,$12,TRUE,now(),now()) RETURNING id""",
+                    patient_id, item.name, item.dosage_mg,
+                    item.schedule_times[0].strftime("%H:%M"),
+                    ",".join(t.strftime("%H:%M") for t in item.schedule_times),
+                    item.ean_barcode, item.active_principle, item.manufacturer,
+                    item.pharmaceutical_form, item.total_units, item.alert_threshold_days,
+                    item.photo_reference_url,
+                )
+                med_id = med["id"]
+                if item.prescription:
+                    p = item.prescription
+                    await conn.execute(
+                        """INSERT INTO prescriptions
+                           (medication_id,patient_id,image_url,issued_on,validity_days,prescriber_name,prescriber_crm,confirmed_by)
+                           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
+                        med_id, patient_id, p.image_url, p.issued_on, p.validity_days,
+                        p.prescriber_name, p.prescriber_crm, uid,
+                    )
+                results.append(MedicationBatchItemResult(id=str(med_id), name=item.name))
+            await conn.execute(
+                """INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type,details)
+                   VALUES ($1,$2,$3,'MEDICATION_BATCH_CREATED',$4::jsonb)""",
+                patient_id, uid, actor_name, json.dumps({
+                    "batch_size": len(results),
+                    "medications": [r.name for r in results]
+                }),
+            )
+    return MedicationBatchResponse(
+        status="success",
+        patient_id=patient_id,
+        created_count=len(results),
+        medications=results,
+    )
 
 
 @router.get("/api/family/patients/{patient_id}/medications/stock")
@@ -362,7 +418,9 @@ async def analyze_prescription(
             "content_type": content_type,
             "size_bytes": len(content),
             "file_url": url,
-            "medications_count": len(reconciled),
+            "medications_count": len(reconciled.medications),
+            "total_pages_analyzed": reconciled.total_pages_analyzed,
+            "duplicates_merged_count": reconciled.duplicates_merged_count,
         }
         await conn.execute(
             """INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type,details)
@@ -373,8 +431,10 @@ async def analyze_prescription(
         return PrescriptionAnalysisResponse(
             status="success",
             prescription_image_url=url,
-            medications=reconciled,
+            medications=reconciled.medications,
             raw_ocr_snippet=raw_ocr[:500] if raw_ocr else None,
+            total_pages_analyzed=reconciled.total_pages_analyzed,
+            duplicates_merged_count=reconciled.duplicates_merged_count,
         )
 
 

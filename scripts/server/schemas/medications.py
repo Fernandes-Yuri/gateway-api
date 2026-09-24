@@ -88,6 +88,7 @@ class AnalyzedMedicationItem(BaseModel):
     confidence_score: float = Field(default=0.0, ge=0.0, le=1.0)
     requires_human_fill: bool = False
     divergence_reason: Optional[str] = None
+    source_pages: list[int] = Field(default_factory=list)
 
 
 class PrescriptionAnalysisResponse(BaseModel):
@@ -95,4 +96,25 @@ class PrescriptionAnalysisResponse(BaseModel):
     prescription_image_url: Optional[str] = None
     medications: list[AnalyzedMedicationItem] = Field(default_factory=list)
     raw_ocr_snippet: Optional[str] = None
+    total_pages_analyzed: int = 1
+    duplicates_merged_count: int = 0
+
+
+class MedicationBatchCreate(BaseModel):
+    """Remessa de múltiplos medicamentos para gravação atômica."""
+    medications: list[MedicationCreate] = Field(min_length=1, max_length=20)
+
+
+class MedicationBatchItemResult(BaseModel):
+    id: str
+    name: str
+    confirmed_with_prescription: bool = True
+
+
+class MedicationBatchResponse(BaseModel):
+    status: str = "success"
+    patient_id: str
+    created_count: int
+    medications: list[MedicationBatchItemResult]
+
 
