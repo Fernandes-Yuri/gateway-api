@@ -25,8 +25,10 @@ from schemas.medications import (
 )
 from services.prescription_analyzer import (
     _call_gemini_vision,
+    analyze_pdf_prescription,
     extract_raw_ocr_text,
     extract_structured_prescription,
+    infer_meal_context,
     infer_posology,
     infer_treatment_duration,
     reconcile_and_verify,
@@ -423,7 +425,7 @@ class TestPrescriptionAnalysisEndpoint(unittest.TestCase):
         ):
             response = client.post(
                 "/api/family/patients/patient-001/prescriptions/analyze",
-                files={"file": ("receita.pdf", b"%PDF-fake-header", "application/pdf")},
+                files={"file": ("receita.png", b"\x89PNG\r\n\x1a\nfake-header", "image/png")},
             )
 
         self.assertEqual(response.status_code, 200, response.text)
@@ -832,61 +834,94 @@ class TestSmartPosologyAndSanitization(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(med.source_url)
 
     def test_infer_posology_padroes_estritos(self):
-        """Valida detecção de intervalo de horas, doses diárias e horários sugeridos."""
+        """Valida detecção de intervalo de horas, doses diárias, horários sugeridos e meal context."""
         # 12 em 12 horas / 2x ao dia
-        int_h, doses, times = infer_posology("Tomar de 12 em 12 horas")
+        int_h, doses, times, meal = infer_posology("Tomar de 12 em 12 horas")
         self.assertEqual(int_h, 12)
         self.assertEqual(doses, 2)
         self.assertEqual(times, ["08:00", "20:00"])
+        self.assertIsNone(meal)
 
-        int_h, doses, times = infer_posology("1 comp 12/12h")
+        int_h, doses, times, meal = infer_posology("1 comp 12/12h")
         self.assertEqual(int_h, 12)
         self.assertEqual(doses, 2)
         self.assertEqual(times, ["08:00", "20:00"])
+        self.assertIsNone(meal)
 
-        int_h, doses, times = infer_posology("2x ao dia")
+        int_h, doses, times, meal = infer_posology("2x ao dia")
         self.assertEqual(int_h, 12)
         self.assertEqual(doses, 2)
         self.assertEqual(times, ["08:00", "20:00"])
+        self.assertIsNone(meal)
 
         # 8 em 8 horas / 3x ao dia
-        int_h, doses, times = infer_posology("8 em 8 horas")
+        int_h, doses, times, meal = infer_posology("8 em 8 horas")
         self.assertEqual(int_h, 8)
         self.assertEqual(doses, 3)
         self.assertEqual(times, ["08:00", "16:00", "00:00"])
+        self.assertIsNone(meal)
 
-        int_h, doses, times = infer_posology("3x ao dia")
+        int_h, doses, times, meal = infer_posology("3x ao dia")
         self.assertEqual(int_h, 8)
         self.assertEqual(doses, 3)
         self.assertEqual(times, ["08:00", "16:00", "00:00"])
+        self.assertIsNone(meal)
 
         # 6 em 6 horas / 4x ao dia
-        int_h, doses, times = infer_posology("6/6h")
+        int_h, doses, times, meal = infer_posology("6/6h")
         self.assertEqual(int_h, 6)
         self.assertEqual(doses, 4)
         self.assertEqual(times, ["06:00", "12:00", "18:00", "00:00"])
+        self.assertIsNone(meal)
 
-        int_h, doses, times = infer_posology("4 vezes ao dia")
+        int_h, doses, times, meal = infer_posology("4 vezes ao dia")
         self.assertEqual(int_h, 6)
         self.assertEqual(doses, 4)
         self.assertEqual(times, ["06:00", "12:00", "18:00", "00:00"])
+        self.assertIsNone(meal)
 
         # 24/24h / 1x ao dia / manhã
-        int_h, doses, times = infer_posology("1x ao dia pela manhã")
+        int_h, doses, times, meal = infer_posology("1x ao dia pela manhã")
         self.assertEqual(int_h, 24)
         self.assertEqual(doses, 1)
         self.assertEqual(times, ["08:00"])
+        self.assertIsNone(meal)
 
-        int_h, doses, times = infer_posology("24/24h")
+        int_h, doses, times, meal = infer_posology("24/24h")
         self.assertEqual(int_h, 24)
         self.assertEqual(doses, 1)
         self.assertEqual(times, ["08:00"])
+        self.assertIsNone(meal)
 
         # Noturno / ao deitar
-        int_h, doses, times = infer_posology("Tomar 1 comprimido ao deitar")
+        int_h, doses, times, meal = infer_posology("Tomar 1 comprimido ao deitar")
         self.assertEqual(int_h, 24)
         self.assertEqual(doses, 1)
-        self.assertEqual(times, ["21:00"])
+        self.assertEqual(times, ["22:00"])
+        self.assertEqual(meal, "AO_DEITAR")
+
+    def test_infer_meal_context_and_schedules(self):
+        """Valida mapeamento das refeições para códigos e horários padrão."""
+        self.assertEqual(infer_meal_context("Tomar 1 comp em jejum"), "JEJUM")
+        self.assertEqual(infer_meal_context("Tomar após o café da manhã"), "APOS_CAFE")
+        self.assertEqual(infer_meal_context("15 minutos antes do almoço"), "ANTES_ALMOCO")
+        self.assertEqual(infer_meal_context("Tomar logo após o almoço"), "APOS_ALMOCO")
+        self.assertEqual(infer_meal_context("Tomar antes do jantar"), "ANTES_JANTAR")
+        self.assertEqual(infer_meal_context("1 comprimido após o jantar"), "APOS_JANTAR")
+        self.assertEqual(infer_meal_context("À noite antes de dormir"), "AO_DEITAR")
+
+        # Teste das posologias completas com refeição
+        _, _, times, meal = infer_posology("1 comp em jejum")
+        self.assertEqual(meal, "JEJUM")
+        self.assertEqual(times, ["07:00"])
+
+        _, _, times, meal = infer_posology("Tomar após almoço")
+        self.assertEqual(meal, "APOS_ALMOCO")
+        self.assertEqual(times, ["12:30"])
+
+        _, _, times, meal = infer_posology("Tomar antes do jantar")
+        self.assertEqual(meal, "ANTES_JANTAR")
+        self.assertEqual(times, ["18:30"])
 
     def test_infer_treatment_duration(self):
         """Valida extração de duração de tratamento em dias."""
@@ -933,6 +968,152 @@ class TestSmartPosologyAndSanitization(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(item.treatment_duration_days, 7)
         self.assertEqual(item.anvisa_registration_number, "1023508490011")
 
+    async def test_analyze_pdf_prescription_multi_medication_and_non_destructive(self):
+        """Valida que o Fluxo A (PDF Digital) extrai múltiplos remédios, preserva dados fora da ANVISA e detecta meal_context."""
+        mock_gemini_response = json.dumps([
+            {
+                "name": "Losartana Potássica",
+                "dosage": "50mg",
+                "frequency": "1x ao dia pela manhã",
+                "instructions": "Tomar após o café da manhã",
+            },
+            {
+                "name": "Medicamento Raro Manipulado",
+                "dosage": "12.5mg",
+                "frequency": "12/12h",
+                "instructions": "Tomar de 12 em 12 horas",
+            },
+        ])
+
+        db_conn = MagicMock()
+        # Primeiro remédio encontrado na ANVISA, segundo não encontrado
+        db_conn.fetch = AsyncMock(
+            side_effect=[
+                [
+                    {
+                        "ean_barcode": "7896004715506",
+                        "name": "Losartana Potássica 50mg",
+                        "concentration": "50 mg",
+                        "active_principle": "Losartana Potássica",
+                        "anvisa_registration_number": "1023508490011",
+                    }
+                ],
+                [],  # Medicamento Raro Manipulado não está na ANVISA
+            ]
+        )
+
+        with patch("services.prescription_analyzer.GEMINI_API_KEY", "test-key"), patch(
+            "services.prescription_analyzer._call_gemini_vision",
+            new_callable=AsyncMock,
+            return_value=mock_gemini_response,
+        ):
+            fake_pdf = b"%PDF-1.4 fake pdf binary content"
+            result = await analyze_pdf_prescription(fake_pdf, db_conn)
+
+        self.assertEqual(len(result.medications), 2)
+
+        # 1. Losartana enriquecida com ANVISA
+        med1 = result.medications[0]
+        self.assertEqual(med1.name, "Losartana Potássica")
+        self.assertEqual(med1.dosage, "50mg")
+        self.assertEqual(med1.dosage_mg, 50.0)
+        self.assertEqual(med1.ean_barcode, "7896004715506")
+        self.assertEqual(med1.meal_context, "APOS_CAFE")
+        self.assertFalse(med1.requires_human_fill)
+        self.assertEqual(med1.confidence_score, 1.0)
+
+        # 2. Medicamento fora do catálogo: NÃO DESTRUTIVO (mantém dados e não força requires_human_fill)
+        med2 = result.medications[1]
+        self.assertEqual(med2.name, "Medicamento Raro Manipulado")
+        self.assertEqual(med2.dosage, "12.5mg")
+        self.assertEqual(med2.dosage_mg, 12.5)
+        self.assertIsNone(med2.ean_barcode)
+        self.assertFalse(med2.requires_human_fill)
+        self.assertEqual(med2.confidence_score, 0.95)
+
+    async def test_analyze_pdf_prescription_deduplicates_copies(self):
+        """Valida fusão de 1ª via do paciente e 2ª via da farmácia no PDF digital."""
+        mock_gemini_response = json.dumps([
+            {
+                "name": "Atenolol",
+                "dosage": "25mg",
+                "frequency": "1x ao dia",
+                "instructions": "1ª via do paciente",
+            },
+            {
+                "name": "Atenolol",
+                "dosage": "25mg",
+                "frequency": "1x ao dia",
+                "instructions": "2ª via da farmácia",
+            },
+        ])
+
+        db_conn = MagicMock()
+        db_conn.fetch = AsyncMock(return_value=[])
+
+        with patch("services.prescription_analyzer.GEMINI_API_KEY", "test-key"), patch(
+            "services.prescription_analyzer._call_gemini_vision",
+            new_callable=AsyncMock,
+            return_value=mock_gemini_response,
+        ):
+            fake_pdf = b"%PDF-1.4 fake pdf binary content"
+            result = await analyze_pdf_prescription(fake_pdf, db_conn)
+
+        self.assertEqual(len(result.medications), 1)
+        self.assertEqual(result.duplicates_merged_count, 1)
+        self.assertEqual(result.medications[0].name, "Atenolol")
+
+    def test_pdf_endpoint_routes_to_pdf_pipeline(self):
+        """Endpoint roteia PDF digital diretamente para analyze_pdf_prescription (Fluxo A)."""
+        conn = MagicMock()
+        conn.fetchval = AsyncMock(return_value="Dra. Maria Cuidadora")
+        conn.execute = AsyncMock(return_value="INSERT 0 1")
+
+        client = _create_test_client(conn, uid="patient-001")
+
+        mock_reconciliation = MagicMock()
+        mock_reconciliation.medications = [
+            AnalyzedMedicationItem(
+                name="Sinvastatina",
+                dosage="20mg",
+                dosage_mg=20.0,
+                frequency="1x ao dia ao deitar",
+                instructions="Tomar ao deitar",
+                frequency_interval_hours=24,
+                daily_doses_count=1,
+                suggested_times=["22:00"],
+                meal_context="AO_DEITAR",
+                requires_human_fill=False,
+                confidence_score=1.0,
+            )
+        ]
+        mock_reconciliation.total_pages_analyzed = 1
+        mock_reconciliation.duplicates_merged_count = 0
+
+        with patch(
+            "routers.care_os.extract_raw_ocr_text",
+            new_callable=AsyncMock,
+            return_value="Sinvastatina 20mg ao deitar",
+        ), patch(
+            "routers.care_os.analyze_pdf_prescription",
+            new_callable=AsyncMock,
+            return_value=mock_reconciliation,
+        ) as mock_pdf_func:
+            response = client.post(
+                "/api/family/patients/patient-001/prescriptions/analyze",
+                files={"file": ("receita_digital.pdf", b"%PDF-1.4 fake", "application/pdf")},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        mock_pdf_func.assert_awaited_once()
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(len(data["medications"]), 1)
+        med = data["medications"][0]
+        self.assertEqual(med["name"], "Sinvastatina")
+        self.assertEqual(med["meal_context"], "AO_DEITAR")
+        self.assertEqual(med["suggested_times"], ["22:00"])
+
     def test_batch_endpoint_accepts_posology_and_sanitizes_nulls(self):
         """Endpoint de remessa aceita posologia estruturada e sanitiza strings 'null'."""
         conn = MagicMock()
@@ -955,6 +1136,7 @@ class TestSmartPosologyAndSanitization(unittest.IsolatedAsyncioTestCase):
                     "anvisa_registration_number": "1023508490011",
                     "frequency_interval_hours": 8,
                     "treatment_duration_days": 7,
+                    "meal_context": "APOS_ALMOCO",
                     "photo_reference_url": "null",
                     "manufacturer": "undefined",
                     "total_units": 21,
@@ -976,4 +1158,5 @@ class TestSmartPosologyAndSanitization(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

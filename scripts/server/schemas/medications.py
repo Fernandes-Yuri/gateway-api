@@ -39,6 +39,7 @@ class MedicationCreate(BaseModel):
     pharmaceutical_form: Optional[str] = Field(default=None, max_length=100)
     frequency_interval_hours: Optional[int] = Field(default=None, ge=1, le=48)
     treatment_duration_days: Optional[int] = Field(default=None, ge=1, le=365)
+    meal_context: Optional[str] = Field(default=None)
     schedule_times: list[time] = Field(min_length=1, max_length=12)
     total_units: int = Field(ge=0, le=10000)
     alert_threshold_days: int = Field(default=5, ge=1, le=30)
@@ -55,6 +56,7 @@ class MedicationCreate(BaseModel):
         "pharmaceutical_form",
         "frequency_interval_hours",
         "treatment_duration_days",
+        "meal_context",
         "photo_reference_url",
         mode="before",
     )
@@ -135,6 +137,7 @@ class AnalyzedMedicationItem(BaseModel):
     frequency_interval_hours: Optional[int] = Field(default=None, ge=1, le=48)
     daily_doses_count: int = Field(default=1, ge=1, le=12)
     treatment_duration_days: Optional[int] = Field(default=None, ge=1, le=365)
+    meal_context: Optional[str] = Field(default=None)
     suggested_times: list[str] = Field(default_factory=list)
     ean_barcode: Optional[str] = None
     anvisa_registration_number: Optional[str] = Field(default=None, max_length=32)
@@ -148,6 +151,7 @@ class AnalyzedMedicationItem(BaseModel):
         "dosage_mg",
         "frequency_interval_hours",
         "treatment_duration_days",
+        "meal_context",
         "ean_barcode",
         "anvisa_registration_number",
         "active_principle",

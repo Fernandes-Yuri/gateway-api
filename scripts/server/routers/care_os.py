@@ -35,6 +35,7 @@ from schemas.medications import (
 )
 from services.care_os import new_public_token, require_patient_permission, row_dict, token_hash
 from services.prescription_analyzer import (
+    analyze_pdf_prescription,
     extract_raw_ocr_text,
     extract_structured_prescription,
     reconcile_and_verify,
@@ -414,10 +415,15 @@ async def analyze_prescription(
             target.write(content)
         url = f"{_state.public_base_url}/api/files/prescriptions/{unique_filename}"
 
-        # Execução dos motores de OCR estrito, visão estruturada e árbitro ANVISA
-        raw_ocr = await extract_raw_ocr_text(content, safe_filename)
-        structured = await extract_structured_prescription(content, content_type)
-        reconciled = await reconcile_and_verify(structured, raw_ocr, conn)
+        # Roteamento de Pipeline: PDF Digital (Fluxo A) vs Foto Física (Fluxo B)
+        is_pdf = content_type == "application/pdf" or safe_filename.lower().endswith(".pdf") or content.startswith(b"%PDF")
+        if is_pdf:
+            raw_ocr = await extract_raw_ocr_text(content, safe_filename)
+            reconciled = await analyze_pdf_prescription(content, conn)
+        else:
+            raw_ocr = await extract_raw_ocr_text(content, safe_filename)
+            structured = await extract_structured_prescription(content, content_type)
+            reconciled = await reconcile_and_verify(structured, raw_ocr, conn)
 
         # Auditoria LGPD
         actor_name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid) or "Usuário autorizado"

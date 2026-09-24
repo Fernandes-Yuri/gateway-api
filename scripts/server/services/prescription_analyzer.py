@@ -70,42 +70,94 @@ def parse_dosage_mg(dosage_str: str) -> Optional[float]:
     return val
 
 
-def infer_posology(frequency: str) -> tuple[Optional[int], int, list[str]]:
-    """Infere (interval_hours, daily_doses_count, suggested_times) baseados na frequência/posologia.
+class PosologyResult(NamedTuple):
+    interval_hours: Optional[int]
+    daily_doses_count: int
+    suggested_times: list[str]
+    meal_context: Optional[str] = None
+
+
+def infer_meal_context(text: str) -> Optional[str]:
+    """Identifica o contexto de refeição a partir do texto."""
+    if not text:
+        return None
+    f = normalize_text(text)
+    if any(k in f for k in ["jejum", "antes do cafe", "antes de cafe", "antes cafe", "em jejum"]):
+        return "JEJUM"
+    if any(k in f for k in ["apos o cafe", "apos cafe", "depois do cafe", "depois cafe", "com o cafe", "com cafe"]):
+        return "APOS_CAFE"
+    if any(k in f for k in ["antes do almoco", "antes de almoco", "antes almoco"]):
+        return "ANTES_ALMOCO"
+    if any(k in f for k in ["apos o almoco", "apos almoco", "depois do almoco", "depois almoco", "com o almoco", "com almoco", "durante o almoco", "durante almoco"]):
+        return "APOS_ALMOCO"
+    if any(k in f for k in ["antes do jantar", "antes de jantar", "antes jantar"]):
+        return "ANTES_JANTAR"
+    if any(k in f for k in ["apos o jantar", "apos jantar", "depois do jantar", "depois jantar", "com o jantar", "com jantar", "durante o jantar", "durante jantar"]):
+        return "APOS_JANTAR"
+    if any(k in f for k in ["ao deitar", "a noite", "dormir", "noturno"]):
+        return "AO_DEITAR"
+    return None
+
+
+def infer_posology(frequency: str) -> PosologyResult:
+    """Infere (interval_hours, daily_doses_count, suggested_times, meal_context) baseados na frequência/posologia.
 
     Padrões estritos (SaMD RDC 657/2022):
     - 6/6h, 6 em 6 horas, a cada 6 horas, 4x ao dia -> interval=6, doses=4, times=["06:00", "12:00", "18:00", "00:00"]
     - 8/8h, 8 em 8 horas, a cada 8 horas, 3x ao dia -> interval=8, doses=3, times=["08:00", "16:00", "00:00"]
     - 12/12h, 12 em 12 horas, a cada 12 horas, 2x ao dia -> interval=12, doses=2, times=["08:00", "20:00"]
     - 24/24h, 1x ao dia, manhã -> interval=24, doses=1, times=["08:00"]
-    - noite, ao deitar -> interval=24, doses=1, times=["21:00"]
+    - Contextos de refeição dedicados:
+      * JEJUM / Antes do café -> ["07:00"]
+      * APOS_CAFE -> ["08:00"]
+      * ANTES_ALMOCO -> ["11:30"]
+      * APOS_ALMOCO -> ["12:30"]
+      * ANTES_JANTAR -> ["18:30"]
+      * APOS_JANTAR -> ["19:30"]
+      * AO_DEITAR / À noite -> ["22:00"]
     """
     f = normalize_text(frequency)
     if not f:
-        return None, 1, []
+        return PosologyResult(None, 1, [], None)
 
+    meal = infer_meal_context(f)
+
+    # 1. Intervalos de alta dosagem / frequência horária
     if any(k in f for k in ["6 em 6", "6/6", "a cada 6", "4x", "4 vezes", "4 comprimidos"]):
-        return 6, 4, ["06:00", "12:00", "18:00", "00:00"]
+        return PosologyResult(6, 4, ["06:00", "12:00", "18:00", "00:00"], meal)
 
     if any(k in f for k in ["8 em 8", "8/8", "a cada 8", "3x", "3 vezes", "3 comprimidos"]):
-        return 8, 3, ["08:00", "16:00", "00:00"]
+        return PosologyResult(8, 3, ["08:00", "16:00", "00:00"], meal)
 
     if any(k in f for k in ["12 em 12", "12/12", "a cada 12", "2x", "2 vezes", "2 comprimidos"]):
-        return 12, 2, ["08:00", "20:00"]
+        return PosologyResult(12, 2, ["08:00", "20:00"], meal)
 
-    if any(k in f for k in ["noite", "ao deitar", "dormir", "noturno"]):
-        return 24, 1, ["21:00"]
+    # 2. Contexto de refeição com horários dedicados
+    if meal == "JEJUM":
+        return PosologyResult(24, 1, ["07:00"], meal)
+    if meal == "APOS_CAFE":
+        return PosologyResult(24, 1, ["08:00"], meal)
+    if meal == "ANTES_ALMOCO":
+        return PosologyResult(24, 1, ["11:30"], meal)
+    if meal == "APOS_ALMOCO":
+        return PosologyResult(24, 1, ["12:30"], meal)
+    if meal == "ANTES_JANTAR":
+        return PosologyResult(24, 1, ["18:30"], meal)
+    if meal == "APOS_JANTAR":
+        return PosologyResult(24, 1, ["19:30"], meal)
+    if meal == "AO_DEITAR":
+        return PosologyResult(24, 1, ["22:00"], meal)
 
+    # 3. 24/24h / 1x ao dia / manhã
     if any(k in f for k in ["24 em 24", "24/24", "24h", "a cada 24", "1x", "1 vez", "dia", "manha", "manhã"]):
-        return 24, 1, ["08:00"]
+        return PosologyResult(24, 1, ["08:00"], meal)
 
-    return None, 1, ["08:00"]
+    return PosologyResult(None, 1, ["08:00"], meal)
 
 
 def infer_suggested_times(frequency: str) -> list[str]:
     """Infere horários sugeridos baseados na descrição de posologia/frequência."""
-    _, _, times = infer_posology(frequency)
-    return times
+    return infer_posology(frequency).suggested_times
 
 
 def infer_treatment_duration(text: str) -> Optional[int]:
@@ -205,7 +257,8 @@ async def _call_gemini_vision(image_bytes: bytes, prompt: str, content_type: str
     if not GEMINI_API_KEY:
         return None
     b64_data = base64.b64encode(image_bytes).decode("utf-8")
-    mime = content_type if content_type in ["image/jpeg", "image/png", "image/webp"] else "image/jpeg"
+    valid_mimes = ["image/jpeg", "image/png", "image/webp", "application/pdf"]
+    mime = content_type if content_type in valid_mimes else "image/jpeg"
     payload = {
         "contents": [
             {
@@ -536,7 +589,12 @@ async def reconcile_and_verify(
         else:
             frequency_divergent = False
             final_freq = raw_freq
-            inferred_interval, inferred_doses, inferred_times = infer_posology(raw_freq)
+            search_freq = f"{raw_freq} {item.get('instructions', '')}".strip()
+            posology = infer_posology(search_freq)
+            inferred_interval = posology.interval_hours
+            inferred_doses = posology.daily_doses_count
+            inferred_times = posology.suggested_times
+            inferred_meal = posology.meal_context
 
             # Intervalo em horas
             raw_interval = item.get("frequency_interval_hours")
@@ -557,6 +615,9 @@ async def reconcile_and_verify(
                     final_daily_doses = inferred_doses
             else:
                 final_daily_doses = inferred_doses
+
+            # Contexto de refeição
+            final_meal_context = item.get("meal_context") or inferred_meal or infer_meal_context(item.get("instructions", ""))
 
             # Horários sugeridos
             final_suggested_times = raw_suggested if raw_suggested else inferred_times
@@ -669,6 +730,7 @@ async def reconcile_and_verify(
             final_interval_hours = None
             final_daily_doses = 1
             final_duration_days = None
+            final_meal_context = None
             requires_human_fill = True
 
         if name_divergent or dosage_divergent:
@@ -693,6 +755,7 @@ async def reconcile_and_verify(
                 frequency_interval_hours=final_interval_hours,
                 daily_doses_count=final_daily_doses,
                 treatment_duration_days=final_duration_days,
+                meal_context=final_meal_context,
                 suggested_times=final_suggested_times,
                 ean_barcode=ean_barcode,
                 anvisa_registration_number=anvisa_registration_number,
@@ -707,6 +770,221 @@ async def reconcile_and_verify(
     return ReconciliationResult(
         medications=results,
         total_pages_analyzed=total_pages_analyzed,
+        duplicates_merged_count=duplicates_merged_count,
+    )
+
+
+async def analyze_pdf_prescription(pdf_bytes: bytes, db_conn) -> ReconciliationResult:
+    """Pipeline especializado para receitas médicas digitais em PDF (Single-call Gemini + Enriquecimento ANVISA).
+
+    Características clínicas e de arquitetura:
+    - Tipografia digital computacional (sem caligrafia manual).
+    - Envio do PDF nativo em uma única chamada (1 cota RPM).
+    - Extração de múltiplos medicamentos estruturados simultâneos.
+    - Deduplicação de cópias/vias (1ª via paciente e 2ª via farmácia).
+    - Enriquecimento não-destrutivo com ANVISA (preserva nome/dose mesmo sem catálogo).
+    """
+    total_pages = 1
+    try:
+        try:
+            import pymupdf as fitz
+        except ImportError:
+            import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        total_pages = len(doc)
+    except Exception as exc:
+        logger.warning("[analyze_pdf_prescription] Erro ao contar páginas do PDF: %s", exc)
+        total_pages = 1
+
+    prompt = (
+        "Você é um assistente clínico especializado em extrair receitas médicas digitais.\n"
+        "Analise o PDF e extraia TODOS os medicamentos prescritos.\n\n"
+        "REGRAS OBRIGATÓRIAS:\n"
+        "1. MÚLTIPLOS MEDICAMENTOS: Uma receita contém frequentemente múltiplos medicamentos (Item 1, 2, 3...). "
+        "Extraia TODOS os medicamentos no array 'medications'. Nunca pare no primeiro!\n"
+        "2. DEDUPLICAÇÃO DE VIAS: Se o PDF contiver cópias (ex: 1ª via paciente e 2ª via farmácia), "
+        "identifique os remédios idênticos e liste as páginas onde aparecem (ex: source_pages: [1, 2]).\n"
+        "3. CONTEXTO DE REFEIÇÃO: Identifique se o remédio deve ser tomado:\n"
+        "   - Em jejum / Antes do café -> meal_context: \"JEJUM\", horário sugerido: \"07:00\"\n"
+        "   - Após o café -> meal_context: \"APOS_CAFE\", horário sugerido: \"08:00\"\n"
+        "   - Antes do almoço -> meal_context: \"ANTES_ALMOCO\", horário sugerido: \"11:30\"\n"
+        "   - Com o almoço / Após o almoço -> meal_context: \"APOS_ALMOCO\", horário sugerido: \"12:30\"\n"
+        "   - Antes do jantar -> meal_context: \"ANTES_JANTAR\", horário sugerido: \"18:30\"\n"
+        "   - Após o jantar -> meal_context: \"APOS_JANTAR\", horário sugerido: \"19:30\"\n"
+        "   - Ao deitar / À noite -> meal_context: \"AO_DEITAR\", horário sugerido: \"22:00\"\n\n"
+        "Retorne EXCLUSIVAMENTE um objeto JSON no formato:\n"
+        "{\n"
+        '  "medications": [\n'
+        "    {\n"
+        '      "name": "Nome do medicamento",\n'
+        '      "dosage": "Dose (ex: 50mg, 10mg)",\n'
+        '      "frequency": "Posologia/frequência (ex: 1x ao dia, de 12 em 12 horas)",\n'
+        '      "frequency_interval_hours": 12,\n'
+        '      "daily_doses_count": 2,\n'
+        '      "treatment_duration_days": 7,\n'
+        '      "meal_context": "APOS_CAFE",\n'
+        '      "instructions": "Instruções adicionais se houver",\n'
+        '      "suggested_times": ["08:00", "20:00"],\n'
+        '      "source_pages": [1]\n'
+        "    }\n"
+        "  ]\n"
+        "}"
+    )
+
+    extracted_items = []
+    if GEMINI_API_KEY:
+        gemini_res = await _call_gemini_vision(pdf_bytes, prompt, content_type="application/pdf")
+        if gemini_res:
+            extracted_items = _parse_json_medications(gemini_res)
+
+    if not extracted_items:
+        # Fallback resiliente: extrai texto direto com PyMuPDF e consulta modelo de texto
+        raw_text = await extract_raw_ocr_text(pdf_bytes, "receita.pdf")
+        if GROQ_API_KEY and raw_text:
+            try:
+                headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+                payload = {
+                    "model": GROQ_MODEL_VISION,
+                    "messages": [
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": f"Texto da receita médica:\n{raw_text}"},
+                    ],
+                    "temperature": 0.0,
+                }
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(GROQ_API_URL, json=payload, headers=headers)
+                    if resp.status_code == 200:
+                        content = resp.json()["choices"][0]["message"]["content"]
+                        extracted_items = _parse_json_medications(content)
+            except Exception as exc:
+                logger.warning("[analyze_pdf_prescription] Falha no fallback Groq: %s", exc)
+
+    # Deduplicação de vias / cópias
+    merged_items: list[dict] = []
+    seen_keys: dict[tuple[str, float], dict] = {}
+    duplicates_merged_count = 0
+
+    for item in extracted_items:
+        current_pages = item.get("source_pages") or ([item.get("source_page")] if item.get("source_page") else [1])
+        raw_name = (item.get("name") or "").strip()
+        raw_dosage = (item.get("dosage") or "").strip()
+
+        canonical_name = re.sub(
+            r"(potassica|potássica|cloridrato|maleato|sodica|sódica|comprimido|comprimidos|capsula|capsulas|gotas)",
+            "",
+            normalize_text(raw_name),
+        ).strip()
+        canonical_name = " ".join(canonical_name.split())
+        canonical_dose = parse_dosage_mg(raw_dosage) or 0.0
+        key = (canonical_name, canonical_dose)
+
+        if canonical_name and key in seen_keys:
+            existing = seen_keys[key]
+            for p in current_pages:
+                if p not in existing["source_pages"]:
+                    existing["source_pages"].append(p)
+            duplicates_merged_count += 1
+        else:
+            item_copy = dict(item)
+            item_copy["source_pages"] = list(current_pages)
+            if canonical_name:
+                seen_keys[key] = item_copy
+            merged_items.append(item_copy)
+
+    results: list[AnalyzedMedicationItem] = []
+    for item in merged_items:
+        raw_name = (item.get("name") or "").strip()
+        raw_dosage = (item.get("dosage") or "").strip()
+        raw_freq = (item.get("frequency") or "").strip()
+        source_pages = item.get("source_pages") or [1]
+        dosage_mg = parse_dosage_mg(raw_dosage)
+
+        # Enriquecimento com ANVISA (opcional e não destrutivo: mantém nome e dosagem)
+        ean_barcode = None
+        active_principle = None
+        anvisa_registration_number = item.get("anvisa_registration_number")
+
+        clean_drug_name = re.sub(r"\d+(\.\d+)?\s*(mg|g|mcg|ml|ui|%)?", "", raw_name, flags=re.IGNORECASE).strip()
+        words = [w for w in re.split(r"[^\w]+", clean_drug_name) if len(w) >= 3]
+        search_term = f"%{words[0]}%" if words else f"%{raw_name}%"
+
+        catalog_rows = []
+        if db_conn is not None and words:
+            query = (
+                "SELECT ean_barcode, name, concentration, active_principle "
+                "FROM anvisa_medication_catalog "
+                "WHERE name ILIKE $1 OR active_principle ILIKE $1 LIMIT 5"
+            )
+            try:
+                res = db_conn.fetch(query, search_term)
+                if inspect.isawaitable(res):
+                    catalog_rows = await res
+                else:
+                    catalog_rows = res
+            except Exception as exc:
+                logger.warning("[analyze_pdf_prescription] Erro na consulta ANVISA: %s", exc)
+                catalog_rows = []
+
+        if catalog_rows:
+            for row in catalog_rows:
+                r_conc = row.get("concentration") or ""
+                r_mg = parse_dosage_mg(r_conc)
+                if dosage_mg is not None and r_mg is not None:
+                    if math.isclose(dosage_mg, r_mg, abs_tol=0.01):
+                        ean_barcode = row.get("ean_barcode")
+                        active_principle = row.get("active_principle")
+                        anvisa_registration_number = row.get("anvisa_registration_number") or anvisa_registration_number
+                        break
+                else:
+                    norm_c = normalize_text(r_conc).replace(" ", "")
+                    norm_d = normalize_text(raw_dosage).replace(" ", "")
+                    if norm_c and (norm_c in norm_d or norm_d in norm_c):
+                        ean_barcode = row.get("ean_barcode")
+                        active_principle = row.get("active_principle")
+                        anvisa_registration_number = row.get("anvisa_registration_number") or anvisa_registration_number
+                        break
+
+        # Posologia, Refeição e Duração
+        full_posology_text = f"{raw_freq} {item.get('instructions', '')}".strip()
+        posology = infer_posology(full_posology_text)
+        raw_interval = item.get("frequency_interval_hours")
+        final_interval = int(raw_interval) if raw_interval is not None else posology.interval_hours
+        raw_doses = item.get("daily_doses_count")
+        final_doses = int(raw_doses) if raw_doses is not None else posology.daily_doses_count
+        final_suggested_times = item.get("suggested_times") or posology.suggested_times
+        final_meal_context = item.get("meal_context") or posology.meal_context or infer_meal_context(item.get("instructions", ""))
+        raw_duration = item.get("treatment_duration_days")
+        final_duration = int(raw_duration) if raw_duration is not None else infer_treatment_duration(
+            full_posology_text
+        )
+
+        results.append(
+            AnalyzedMedicationItem(
+                name=raw_name,
+                name_divergent=False,
+                dosage=raw_dosage,
+                dosage_divergent=False,
+                dosage_mg=dosage_mg,
+                frequency=raw_freq,
+                frequency_divergent=False,
+                frequency_interval_hours=final_interval,
+                daily_doses_count=final_doses,
+                treatment_duration_days=final_duration,
+                meal_context=final_meal_context,
+                suggested_times=final_suggested_times,
+                ean_barcode=ean_barcode,
+                anvisa_registration_number=anvisa_registration_number,
+                active_principle=active_principle,
+                confidence_score=1.0 if ean_barcode else 0.95,
+                requires_human_fill=not bool(raw_name),
+                divergence_reason=None,
+                source_pages=source_pages,
+            )
+        )
+
+    return ReconciliationResult(
+        medications=results,
+        total_pages_analyzed=total_pages,
         duplicates_merged_count=duplicates_merged_count,
     )
 
