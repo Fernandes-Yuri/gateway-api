@@ -24,7 +24,14 @@ from typing import Optional
 
 import httpx
 
-from config import GROQ_API_KEY, GROQ_API_URL, GROQ_MODEL_VISION
+from config import (
+    GEMINI_API_KEY,
+    GEMINI_API_URL,
+    GEMINI_MODEL_VISION,
+    GROQ_API_KEY,
+    GROQ_API_URL,
+    GROQ_MODEL_VISION,
+)
 from schemas.medications import AnalyzedMedicationItem
 
 logger = logging.getLogger(__name__)
@@ -142,12 +149,54 @@ def _parse_json_medications(content: str) -> list[dict]:
     return []
 
 
+async def _call_gemini_vision(image_bytes: bytes, prompt: str, content_type: str = "image/jpeg") -> Optional[str]:
+    """Executa inferência de visão multimodal no Google Gemini 1.5 Flash via REST."""
+    if not GEMINI_API_KEY:
+        return None
+    b64_data = base64.b64encode(image_bytes).decode("utf-8")
+    mime = content_type if content_type in ["image/jpeg", "image/png", "image/webp"] else "image/jpeg"
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": mime,
+                            "data": b64_data,
+                        }
+                    },
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.0,
+        },
+    }
+    url = f"{GEMINI_API_URL}?key={GEMINI_API_KEY}"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
+            if resp.status_code == 200:
+                data = resp.json()
+                candidates = data.get("candidates", [])
+                if candidates and "content" in candidates[0]:
+                    parts = candidates[0]["content"].get("parts", [])
+                    if parts and "text" in parts[0]:
+                        return parts[0]["text"].strip()
+            logger.warning(
+                "[gemini_vision] Falha HTTP %s: %s (modelo: %s)",
+                resp.status_code,
+                resp.text,
+                GEMINI_MODEL_VISION,
+            )
+    except Exception as exc:
+        logger.warning("[gemini_vision] Exceção ao chamar Gemini (%s): %s", GEMINI_MODEL_VISION, exc)
+    return None
+
+
 async def _call_vision_ocr(image_bytes: bytes) -> str:
     """Motor 1 OCR: transcrição literal estrita caractere a caractere."""
-    if not GROQ_API_KEY:
-        logger.warning("[_call_vision_ocr] GROQ_API_KEY ausente.")
-        return ""
-
     prompt = (
         "Você é um motor de OCR médico estrito de altíssima precisão clínica. "
         "Sua ÚNICA função é transcrever literalmente caractere a caractere todo o texto legível nesta receita médica. "
@@ -157,6 +206,18 @@ async def _call_vision_ocr(image_bytes: bytes) -> str:
         "3. Se uma palavra ou número estiver ilegível, rasurado ou borrado, marque exatamente como [ILEGÍVEL].\n"
         "4. Retorne apenas o texto literal transcrito, sem introduções ou comentários."
     )
+
+    # Tenta Gemini 1.5 Flash primeiro (melhor caligrafia em português)
+    if GEMINI_API_KEY:
+        gemini_res = await _call_gemini_vision(image_bytes, prompt, "image/jpeg")
+        if gemini_res:
+            return gemini_res
+
+    # Fallback para Groq Vision se Gemini ausente ou falhar
+    if not GROQ_API_KEY:
+        logger.warning("[_call_vision_ocr] GROQ_API_KEY ausente.")
+        return ""
+
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     payload = {
         "model": GROQ_MODEL_VISION,
@@ -218,7 +279,7 @@ async def extract_raw_ocr_text(image_bytes: bytes, filename: str) -> str:
     return await _call_vision_ocr(image_bytes)
 
 
-async def extract_structured_prescription(image_bytes: bytes, content_type: str) -> list[dict]:
+async def extract_structured_prescription(image_bytes: bytes, content_type: str = "image/jpeg") -> list[dict]:
     """Interpreta a imagem e extrai estruturadamente medicamentos, doses e horários (Motor 2)."""
     if content_type == "application/pdf" or image_bytes.startswith(b"%PDF"):
         try:
@@ -233,10 +294,6 @@ async def extract_structured_prescription(image_bytes: bytes, content_type: str)
                 content_type = "image/png"
         except Exception as exc:
             logger.warning("[extract_structured_prescription] Falha ao renderizar PDF para visão: %s", exc)
-
-    if not GROQ_API_KEY:
-        logger.warning("[extract_structured_prescription] GROQ_API_KEY ausente.")
-        return []
 
     prompt = (
         "Você é um assistente clínico de análise segura de receitas médicas geriátricas. "
@@ -258,6 +315,20 @@ async def extract_structured_prescription(image_bytes: bytes, content_type: str)
         "  ]\n"
         "}"
     )
+
+    # Tenta Gemini 1.5 Flash primeiro
+    if GEMINI_API_KEY:
+        gemini_res = await _call_gemini_vision(image_bytes, prompt, content_type)
+        if gemini_res:
+            meds = _parse_json_medications(gemini_res)
+            if meds:
+                return meds
+
+    # Fallback para Groq Vision se Gemini ausente ou falhar
+    if not GROQ_API_KEY:
+        logger.warning("[extract_structured_prescription] GROQ_API_KEY ausente.")
+        return []
+
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     payload = {
         "model": GROQ_MODEL_VISION,
@@ -289,6 +360,7 @@ async def extract_structured_prescription(image_bytes: bytes, content_type: str)
     except Exception as exc:
         logger.warning("[extract_structured_prescription] Exceção ao chamar visão: %s", exc)
     return []
+
 
 
 async def reconcile_and_verify(

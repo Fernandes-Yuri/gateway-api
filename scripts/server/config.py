@@ -79,6 +79,15 @@ GROQ_API_KEY_CHAT = os.getenv("GROQ_API_KEY_CHAT") or GROQ_API_KEY
 GROQ_API_KEY_WHATSAPP = os.getenv("GROQ_API_KEY_WHATSAPP") or GROQ_API_KEY
 
 # ------------------------------------------------------------------
+# Google Gemini (Visão Multimodal para Receitas Médicas).
+# Endpoint REST oficial do Google AI Studio; usa Gemini 1.5 Flash.
+# ------------------------------------------------------------------
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL_VISION = os.getenv("GEMINI_MODEL_VISION", "gemini-1.5-flash")
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_VISION}:generateContent"
+
+
+# ------------------------------------------------------------------
 # Piper TTS (subprocesso local). SEM defaults hardcoded do homelab:
 # PIPER_BIN/PIPER_MODELS_DIR devem vir do .env do ambiente (na EC2 apontam
 # para /home/ec2-user/piper/...). Se ausentes, o aviso no startup explica

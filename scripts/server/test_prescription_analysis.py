@@ -18,7 +18,9 @@ from api_identity import firebase_uid
 from routers import care_os
 from schemas.medications import PrescriptionAnalysisResponse
 from services.prescription_analyzer import (
+    _call_gemini_vision,
     extract_raw_ocr_text,
+    extract_structured_prescription,
     reconcile_and_verify,
 )
 
@@ -395,5 +397,178 @@ class TestPrescriptionAnalysisEndpoint(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
 
 
+class TestGeminiVisionPriorityAndFallback(unittest.IsolatedAsyncioTestCase):
+    """Testes unitários de prioridade do Gemini 1.5 Flash e fallback resiliente para Groq Vision."""
+
+    async def test_gemini_prioritario_quando_chave_presente(self):
+        """Gemini 1.5 Flash deve ser chamado com prioridade quando GEMINI_API_KEY estiver configurada."""
+        gemini_ocr_text = "Losartana Potassica 50mg via Gemini"
+        gemini_structured_json = json.dumps(
+            {
+                "medications": [
+                    {
+                        "name": "Losartana",
+                        "dosage": "50mg",
+                        "frequency": "1x ao dia",
+                    }
+                ]
+            }
+        )
+
+        with patch("services.prescription_analyzer.GEMINI_API_KEY", "test-gemini-key"), patch(
+            "services.prescription_analyzer._call_gemini_vision",
+            new_callable=AsyncMock,
+            side_effect=[gemini_ocr_text, gemini_structured_json],
+        ) as mock_gemini, patch(
+            "services.prescription_analyzer.httpx.AsyncClient.post"
+        ) as mock_groq_http:
+            # Motor 1 (OCR Estrito)
+            ocr_res = await extract_raw_ocr_text(b"image_bytes", "receita.jpg")
+            self.assertEqual(ocr_res, gemini_ocr_text)
+
+            # Motor 2 (Extração Estruturada)
+            meds_res = await extract_structured_prescription(b"image_bytes", "image/jpeg")
+            self.assertEqual(len(meds_res), 1)
+            self.assertEqual(meds_res[0]["name"], "Losartana")
+            self.assertEqual(meds_res[0]["dosage"], "50mg")
+
+            # Garante que o Gemini foi chamado para ambos os motores
+            self.assertEqual(mock_gemini.await_count, 2)
+            # Garante que o Groq NÃO foi acionado (prioridade respeitada)
+            mock_groq_http.assert_not_called()
+
+    async def test_fallback_transparente_para_groq_em_falha_do_gemini(self):
+        """Se o Gemini retornar erro HTTP, timeout ou None, o serviço deve fazer fallback para o Groq."""
+        groq_ocr_resp = MagicMock()
+        groq_ocr_resp.status_code = 200
+        groq_ocr_resp.json.return_value = {
+            "choices": [{"message": {"content": "Losartana 50mg via Groq Fallback"}}]
+        }
+
+        groq_struct_resp = MagicMock()
+        groq_struct_resp.status_code = 200
+        groq_struct_resp.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "medications": [
+                                    {
+                                        "name": "Losartana",
+                                        "dosage": "50mg",
+                                        "frequency": "1x ao dia",
+                                    }
+                                ]
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch("services.prescription_analyzer.GEMINI_API_KEY", "test-gemini-key"), patch(
+            "services.prescription_analyzer._call_gemini_vision",
+            new_callable=AsyncMock,
+            return_value=None,  # Simula erro ou timeout do Gemini
+        ) as mock_gemini, patch(
+            "services.prescription_analyzer.GROQ_API_KEY", "test-groq-key"
+        ), patch(
+            "services.prescription_analyzer.httpx.AsyncClient.post",
+            new_callable=AsyncMock,
+            side_effect=[groq_ocr_resp, groq_struct_resp],
+        ) as mock_groq:
+            # Motor 1: Gemini falha -> cai no Groq
+            ocr_res = await extract_raw_ocr_text(b"image_bytes", "receita.png")
+            self.assertEqual(ocr_res, "Losartana 50mg via Groq Fallback")
+
+            # Motor 2: Gemini falha -> cai no Groq
+            meds_res = await extract_structured_prescription(b"image_bytes", "image/png")
+            self.assertEqual(len(meds_res), 1)
+            self.assertEqual(meds_res[0]["name"], "Losartana")
+
+            # Gemini foi tentado primeiro
+            self.assertEqual(mock_gemini.await_count, 2)
+            # Groq foi acionado como fallback transparente
+            self.assertEqual(mock_groq.await_count, 2)
+
+    async def test_operacao_normal_apenas_com_groq_quando_gemini_key_none(self):
+        """Quando GEMINI_API_KEY for None, Gemini não deve ser chamado e Groq deve operar diretamente."""
+        groq_resp = MagicMock()
+        groq_resp.status_code = 200
+        groq_resp.json.return_value = {
+            "choices": [{"message": {"content": "Losartana 50mg direto via Groq"}}]
+        }
+
+        with patch("services.prescription_analyzer.GEMINI_API_KEY", None), patch(
+            "services.prescription_analyzer._call_gemini_vision",
+            new_callable=AsyncMock,
+        ) as mock_gemini, patch(
+            "services.prescription_analyzer.GROQ_API_KEY", "test-groq-key"
+        ), patch(
+            "services.prescription_analyzer.httpx.AsyncClient.post",
+            new_callable=AsyncMock,
+            return_value=groq_resp,
+        ) as mock_groq:
+            res = await extract_raw_ocr_text(b"image_bytes", "receita.jpg")
+            self.assertEqual(res, "Losartana 50mg direto via Groq")
+            mock_gemini.assert_not_called()
+            self.assertEqual(mock_groq.await_count, 1)
+
+    async def test_call_gemini_vision_rest_sucesso(self):
+        """Valida que _call_gemini_vision formata o payload e faz o parse correto da resposta do Google AI Studio."""
+        fake_gemini_response = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": "Receita transcrita com sucesso pelo Gemini 1.5 Flash"}
+                        ]
+                    }
+                }
+            ]
+        }
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = fake_gemini_response
+
+        with patch("services.prescription_analyzer.GEMINI_API_KEY", "fake-api-key"), patch(
+            "services.prescription_analyzer.httpx.AsyncClient.post",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ) as mock_http:
+            result = await _call_gemini_vision(b"fake_bytes", "prompt de teste", "image/png")
+            self.assertEqual(result, "Receita transcrita com sucesso pelo Gemini 1.5 Flash")
+
+            # Verifica URL com query param key
+            called_url = mock_http.await_args[0][0]
+            self.assertIn("key=fake-api-key", called_url)
+            self.assertIn("gemini-1.5-flash:generateContent", called_url)
+
+    async def test_call_gemini_vision_rest_erro_retorna_none(self):
+        """Valida que falhas HTTP 500 ou exceções no Gemini retornam None sem quebrar o fluxo."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_resp.text = "Internal Server Error"
+
+        with patch("services.prescription_analyzer.GEMINI_API_KEY", "fake-api-key"), patch(
+            "services.prescription_analyzer.httpx.AsyncClient.post",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ):
+            result = await _call_gemini_vision(b"fake_bytes", "prompt de teste")
+            self.assertIsNone(result)
+
+        # Simula exceção de rede
+        with patch("services.prescription_analyzer.GEMINI_API_KEY", "fake-api-key"), patch(
+            "services.prescription_analyzer.httpx.AsyncClient.post",
+            new_callable=AsyncMock,
+            side_effect=Exception("Connection timeout"),
+        ):
+            result = await _call_gemini_vision(b"fake_bytes", "prompt de teste")
+            self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()
+
