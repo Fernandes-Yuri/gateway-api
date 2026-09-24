@@ -5,6 +5,7 @@ recomendação de tratamento. Fotos de medicamentos são apenas referência huma
 """
 import html
 import json
+import logging
 import math
 import os
 import re
@@ -12,6 +13,7 @@ import unicodedata
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
@@ -31,6 +33,7 @@ from schemas.medications import (
     MedicationCreate,
     MedicationRestockRequest,
     MedicationTakeRequest,
+    MedicationUpdateRequest,
     PrescriptionAnalysisResponse,
 )
 from services.care_os import new_public_token, require_patient_permission, row_dict, token_hash
@@ -40,6 +43,8 @@ from services.prescription_analyzer import (
     extract_structured_prescription,
     reconcile_and_verify,
 )
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(tags=["Care OS"])
@@ -205,6 +210,194 @@ async def medication_stock(patient_id: str, uid: str = Depends(firebase_uid)):
         item["id"] = _uuid_text(item["id"])
         result.append(item)
     return result
+
+
+def _try_remove_stored_file(file_url_or_path: Optional[str], patient_id: str) -> None:
+    """Remove com segurança o arquivo físico da receita/foto do disco (LGPD Art. 18)."""
+    if not file_url_or_path or not isinstance(file_url_or_path, str):
+        return
+    try:
+        raw_name = file_url_or_path.split("?")[0].strip()
+        fname = os.path.basename(raw_name)
+        if not fname or fname in (".", ".."):
+            return
+
+        # 1. Verifica em PRESCRIPTION_STORAGE_DIR
+        p_path = os.path.join(PRESCRIPTION_STORAGE_DIR, fname)
+        if os.path.isfile(p_path):
+            os.remove(p_path)
+            return
+
+        # 2. Verifica em MEDICATION_IMAGE_DIR/<safe_patient>/
+        safe_patient = re.sub(r"[^a-zA-Z0-9_-]", "", patient_id)
+        m_patient_path = os.path.join(MEDICATION_IMAGE_DIR, safe_patient, fname)
+        if os.path.isfile(m_patient_path):
+            os.remove(m_patient_path)
+            return
+
+        # 3. Verifica diretamente em MEDICATION_IMAGE_DIR/
+        m_path = os.path.join(MEDICATION_IMAGE_DIR, fname)
+        if os.path.isfile(m_path):
+            os.remove(m_path)
+            return
+    except Exception as exc:
+        logger.warning("[_try_remove_stored_file] Falha ao remover arquivo físico %s: %s", file_url_or_path, exc)
+
+
+@router.delete("/api/family/patients/{patient_id}/medications/{medication_id}", status_code=200)
+async def delete_medication(
+    patient_id: str,
+    medication_id: str,
+    uid: str = Depends(firebase_uid),
+):
+    """Exclusão de medicamento com direito ao esquecimento e descarte LGPD (Art. 18)."""
+    try:
+        uuid.UUID(medication_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(404, "Medicamento não encontrado.")
+
+    pool = _pool()
+    async with pool.acquire() as conn:
+        await require_patient_permission(conn, uid, patient_id, "care:write")
+        med = await conn.fetchrow(
+            "SELECT id, name, photo_reference_url FROM medications WHERE id = $1::uuid AND user_id = $2",
+            medication_id, patient_id,
+        )
+        if not med:
+            raise HTTPException(404, "Medicamento não encontrado.")
+
+        prescription_image = await conn.fetchval(
+            "SELECT image_url FROM prescriptions WHERE medication_id = $1::uuid",
+            medication_id,
+        )
+
+        async with conn.transaction():
+            await conn.execute("DELETE FROM medication_logs WHERE medication_id = $1::uuid", medication_id)
+            await conn.execute("DELETE FROM medications WHERE id = $1::uuid AND user_id = $2", medication_id, patient_id)
+
+            actor_name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid) or "Usuário autorizado"
+            audit_details = {
+                "medication_id": str(medication_id),
+                "name": med["name"],
+                "deleted_by": uid,
+            }
+            await conn.execute(
+                """INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type,details)
+                   VALUES ($1,$2,$3,'MEDICATION_DELETED',$4::jsonb)""",
+                patient_id, uid, actor_name, json.dumps(audit_details),
+            )
+
+        _try_remove_stored_file(med.get("photo_reference_url"), patient_id)
+        if prescription_image and prescription_image != med.get("photo_reference_url"):
+            _try_remove_stored_file(prescription_image, patient_id)
+
+    return {
+        "status": "success",
+        "deleted": True,
+        "medication_id": str(medication_id),
+        "patient_id": patient_id,
+    }
+
+
+@router.patch("/api/family/patients/{patient_id}/medications/{medication_id}", status_code=200)
+async def update_medication(
+    patient_id: str,
+    medication_id: str,
+    payload: MedicationUpdateRequest,
+    uid: str = Depends(firebase_uid),
+):
+    """Edição Parcial de Horários e Posologia (PATCH)."""
+    try:
+        uuid.UUID(medication_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(404, "Medicamento não encontrado.")
+
+    pool = _pool()
+    async with pool.acquire() as conn:
+        await require_patient_permission(conn, uid, patient_id, "care:write")
+        med = await conn.fetchrow(
+            "SELECT id, name FROM medications WHERE id = $1::uuid AND user_id = $2",
+            medication_id, patient_id,
+        )
+        if not med:
+            raise HTTPException(404, "Medicamento não encontrado.")
+
+        update_data = payload.model_dump(exclude_unset=True)
+        updated_fields = list(update_data.keys())
+
+        set_clauses = []
+        params = [medication_id, patient_id]
+        idx = 3
+
+        if "name" in update_data and update_data["name"] is not None:
+            set_clauses.append(f"name = ${idx}")
+            params.append(update_data["name"])
+            idx += 1
+
+        if "dosage_mg" in update_data and update_data["dosage_mg"] is not None:
+            set_clauses.append(f"dosage_mg = ${idx}")
+            params.append(update_data["dosage_mg"])
+            idx += 1
+
+        if "schedule_times" in update_data and update_data["schedule_times"] is not None:
+            times = payload.schedule_times
+            times_str = ",".join(t.strftime("%H:%M") for t in times)
+            first_time = times[0].strftime("%H:%M")
+            set_clauses.append(f"schedule_times = ${idx}")
+            params.append(times_str)
+            idx += 1
+            set_clauses.append(f"schedule_time = ${idx}")
+            params.append(first_time)
+            idx += 1
+
+        if "frequency_interval_hours" in update_data and update_data["frequency_interval_hours"] is not None:
+            set_clauses.append(f"frequency_interval_hours = ${idx}")
+            params.append(update_data["frequency_interval_hours"])
+            idx += 1
+
+        if "treatment_duration_days" in update_data and update_data["treatment_duration_days"] is not None:
+            set_clauses.append(f"treatment_duration_days = ${idx}")
+            params.append(update_data["treatment_duration_days"])
+            idx += 1
+
+        if "meal_context" in update_data:
+            set_clauses.append(f"meal_context = ${idx}")
+            params.append(update_data["meal_context"])
+            idx += 1
+
+        if "total_units" in update_data and update_data["total_units"] is not None:
+            set_clauses.append(f"total_units = ${idx}")
+            params.append(update_data["total_units"])
+            idx += 1
+
+        if "alert_threshold_days" in update_data and update_data["alert_threshold_days"] is not None:
+            set_clauses.append(f"alert_threshold_days = ${idx}")
+            params.append(update_data["alert_threshold_days"])
+            idx += 1
+
+        set_clauses.append("updated_at = now()")
+
+        async with conn.transaction():
+            query = f"UPDATE medications SET {', '.join(set_clauses)} WHERE id = $1::uuid AND user_id = $2"
+            await conn.execute(query, *params)
+
+            actor_name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid) or "Usuário autorizado"
+            audit_details = {
+                "medication_id": str(medication_id),
+                "updated_fields": updated_fields,
+            }
+            await conn.execute(
+                """INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type,details)
+                   VALUES ($1,$2,$3,'MEDICATION_UPDATED',$4::jsonb)""",
+                patient_id, uid, actor_name, json.dumps(audit_details),
+            )
+
+    return {
+        "status": "success",
+        "updated": True,
+        "medication_id": str(medication_id),
+        "patient_id": patient_id,
+    }
 
 
 @router.post("/api/medications/{medication_id}/take")

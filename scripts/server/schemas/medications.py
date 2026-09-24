@@ -195,3 +195,33 @@ class MedicationBatchResponse(BaseModel):
     medications: list[MedicationBatchItemResult]
 
 
+class MedicationUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=255)
+    schedule_times: Optional[list[time]] = Field(default=None, min_length=1, max_length=12)
+    frequency_interval_hours: Optional[int] = Field(default=None, ge=1, le=48)
+    treatment_duration_days: Optional[int] = Field(default=None, ge=1, le=365)
+    meal_context: Optional[str] = None
+    dosage_mg: Optional[float] = Field(default=None, gt=0, le=100000)
+    total_units: Optional[int] = Field(default=None, ge=0, le=10000)
+    alert_threshold_days: Optional[int] = Field(default=None, ge=1, le=30)
+
+    @field_validator(
+        "name",
+        "meal_context",
+        "frequency_interval_hours",
+        "treatment_duration_days",
+        "dosage_mg",
+        "total_units",
+        "alert_threshold_days",
+        mode="before",
+    )
+    @classmethod
+    def sanitize_null_strings(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip().lower() in ("null", "none", "", "undefined"):
+            return None
+        return v
+
+
+

@@ -7,9 +7,9 @@ from fastapi import HTTPException
 
 
 ROLE_PERMISSIONS = {
-    "ADMIN_CHILD": {"care:read", "medication:write", "medication:take", "medical:share", "emergency:share"},
+    "ADMIN_CHILD": {"care:read", "care:write", "medication:write", "medication:take", "medical:share", "emergency:share"},
     "CAREGIVER_VIEWER": {"care:read"},
-    "PROFESSIONAL_NURSE": {"care:read", "medication:write", "medication:take"},
+    "PROFESSIONAL_NURSE": {"care:read", "care:write", "medication:write", "medication:take"},
 }
 
 
