@@ -113,10 +113,18 @@ async def create_medication(patient_id: str, payload: MedicationCreate, uid: str
                     p.prescriber_name, p.prescriber_crm, uid,
                 )
             actor_name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid) or "Usuário autorizado"
+            audit_details = {
+                "medication_id": str(med_id),
+                "name": payload.name,
+                "ean_barcode": payload.ean_barcode,
+                "anvisa_registration_number": payload.anvisa_registration_number,
+                "frequency_interval_hours": payload.frequency_interval_hours,
+                "treatment_duration_days": payload.treatment_duration_days,
+            }
             await conn.execute(
                 """INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type,details)
                    VALUES ($1,$2,$3,'MEDICATION_CREATED',$4::jsonb)""",
-                patient_id, uid, actor_name, json.dumps({"medication_id": str(med_id), "name": payload.name}),
+                patient_id, uid, actor_name, json.dumps(audit_details),
             )
     return {"id": str(med_id), "patient_id": patient_id, "confirmed_with_prescription": True}
 

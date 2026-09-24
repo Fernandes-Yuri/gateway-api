@@ -17,13 +17,18 @@ from fastapi.testclient import TestClient
 from api_identity import firebase_uid
 from routers import care_os
 from schemas.medications import (
+    AnalyzedMedicationItem,
+    BarcodeMedication,
     MedicationBatchResponse,
+    MedicationCreate,
     PrescriptionAnalysisResponse,
 )
 from services.prescription_analyzer import (
     _call_gemini_vision,
     extract_raw_ocr_text,
     extract_structured_prescription,
+    infer_posology,
+    infer_treatment_duration,
     reconcile_and_verify,
 )
 
@@ -760,6 +765,213 @@ class TestGeminiVisionPriorityAndFallback(unittest.IsolatedAsyncioTestCase):
         ):
             result = await _call_gemini_vision(b"fake_bytes", "prompt de teste")
             self.assertIsNone(result)
+
+
+class TestSmartPosologyAndSanitization(unittest.IsolatedAsyncioTestCase):
+    """Testes da Posologia Inteligente, Anti-'null' Sanitization e Duração (SaMD RDC 657/2022)."""
+
+    def test_anti_null_sanitization_medication_create(self):
+        """Campos opcionais recebendo variações de 'null', 'none', 'undefined' ou vazio devem ser convertidos em None."""
+        payload = {
+            "name": "Losartana Potássica",
+            "dosage_mg": "null",
+            "schedule_times": ["08:00"],
+            "ean_barcode": "None",
+            "active_principle": "undefined",
+            "manufacturer": "",
+            "pharmaceutical_form": "   ",
+            "frequency_interval_hours": "null",
+            "treatment_duration_days": "",
+            "anvisa_registration_number": "NULL",
+            "photo_reference_url": "undefined",
+            "total_units": 30,
+            "confirmed_with_prescription": True,
+        }
+        item = MedicationCreate.model_validate(payload)
+        self.assertIsNone(item.dosage_mg)
+        self.assertIsNone(item.ean_barcode)
+        self.assertIsNone(item.active_principle)
+        self.assertIsNone(item.manufacturer)
+        self.assertIsNone(item.pharmaceutical_form)
+        self.assertIsNone(item.frequency_interval_hours)
+        self.assertIsNone(item.treatment_duration_days)
+        self.assertIsNone(item.anvisa_registration_number)
+        self.assertIsNone(item.photo_reference_url)
+
+    def test_anti_null_sanitization_analyzed_item(self):
+        """AnalyzedMedicationItem deve sanitizar campos opcionais contra string 'null' ou vazia."""
+        item = AnalyzedMedicationItem(
+            name="Losartana",
+            dosage="50mg",
+            frequency="1x ao dia",
+            ean_barcode="null",
+            anvisa_registration_number="undefined",
+            active_principle="None",
+            divergence_reason="",
+        )
+        self.assertIsNone(item.ean_barcode)
+        self.assertIsNone(item.anvisa_registration_number)
+        self.assertIsNone(item.active_principle)
+        self.assertIsNone(item.divergence_reason)
+
+    def test_anti_null_sanitization_barcode_medication(self):
+        """BarcodeMedication deve sanitizar strings nulas no catálogo ANVISA."""
+        med = BarcodeMedication(
+            ean_barcode="7896004715506",
+            name="Losartana Potássica 50mg",
+            active_principle="null",
+            concentration="undefined",
+            anvisa_registration_number="None",
+            source_url="",
+            source_name="ANVISA",
+            source_checked_at="2026-09-24T00:00:00Z",
+        )
+        self.assertIsNone(med.active_principle)
+        self.assertIsNone(med.concentration)
+        self.assertIsNone(med.anvisa_registration_number)
+        self.assertIsNone(med.source_url)
+
+    def test_infer_posology_padroes_estritos(self):
+        """Valida detecção de intervalo de horas, doses diárias e horários sugeridos."""
+        # 12 em 12 horas / 2x ao dia
+        int_h, doses, times = infer_posology("Tomar de 12 em 12 horas")
+        self.assertEqual(int_h, 12)
+        self.assertEqual(doses, 2)
+        self.assertEqual(times, ["08:00", "20:00"])
+
+        int_h, doses, times = infer_posology("1 comp 12/12h")
+        self.assertEqual(int_h, 12)
+        self.assertEqual(doses, 2)
+        self.assertEqual(times, ["08:00", "20:00"])
+
+        int_h, doses, times = infer_posology("2x ao dia")
+        self.assertEqual(int_h, 12)
+        self.assertEqual(doses, 2)
+        self.assertEqual(times, ["08:00", "20:00"])
+
+        # 8 em 8 horas / 3x ao dia
+        int_h, doses, times = infer_posology("8 em 8 horas")
+        self.assertEqual(int_h, 8)
+        self.assertEqual(doses, 3)
+        self.assertEqual(times, ["08:00", "16:00", "00:00"])
+
+        int_h, doses, times = infer_posology("3x ao dia")
+        self.assertEqual(int_h, 8)
+        self.assertEqual(doses, 3)
+        self.assertEqual(times, ["08:00", "16:00", "00:00"])
+
+        # 6 em 6 horas / 4x ao dia
+        int_h, doses, times = infer_posology("6/6h")
+        self.assertEqual(int_h, 6)
+        self.assertEqual(doses, 4)
+        self.assertEqual(times, ["06:00", "12:00", "18:00", "00:00"])
+
+        int_h, doses, times = infer_posology("4 vezes ao dia")
+        self.assertEqual(int_h, 6)
+        self.assertEqual(doses, 4)
+        self.assertEqual(times, ["06:00", "12:00", "18:00", "00:00"])
+
+        # 24/24h / 1x ao dia / manhã
+        int_h, doses, times = infer_posology("1x ao dia pela manhã")
+        self.assertEqual(int_h, 24)
+        self.assertEqual(doses, 1)
+        self.assertEqual(times, ["08:00"])
+
+        int_h, doses, times = infer_posology("24/24h")
+        self.assertEqual(int_h, 24)
+        self.assertEqual(doses, 1)
+        self.assertEqual(times, ["08:00"])
+
+        # Noturno / ao deitar
+        int_h, doses, times = infer_posology("Tomar 1 comprimido ao deitar")
+        self.assertEqual(int_h, 24)
+        self.assertEqual(doses, 1)
+        self.assertEqual(times, ["21:00"])
+
+    def test_infer_treatment_duration(self):
+        """Valida extração de duração de tratamento em dias."""
+        self.assertEqual(infer_treatment_duration("Tomar por 7 dias"), 7)
+        self.assertEqual(infer_treatment_duration("Uso durante 14 dias contínuos"), 14)
+        self.assertEqual(infer_treatment_duration("Tratamento por 30 dias"), 30)
+        self.assertEqual(infer_treatment_duration("Por 2 semanas"), 14)
+        self.assertEqual(infer_treatment_duration("Uso por 1 mês"), 30)
+        self.assertIsNone(infer_treatment_duration("Uso contínuo"))
+
+    async def test_reconcile_and_verify_with_posology_and_duration(self):
+        """Valida que reconcile_and_verify preenche frequency_interval_hours, daily_doses_count e treatment_duration_days."""
+        structured_items = [
+            {
+                "name": "Amoxicilina",
+                "dosage": "500mg",
+                "frequency": "8/8h por 7 dias",
+                "instructions": "Tomar por 7 dias",
+            }
+        ]
+        raw_text = "Receita Médica:\nAmoxicilina 500mg - 1 cápsula 8/8h por 7 dias."
+
+        db_conn = MagicMock()
+        db_conn.fetch = AsyncMock(
+            return_value=[
+                {
+                    "ean_barcode": "7891234567890",
+                    "name": "Amoxicilina 500mg",
+                    "concentration": "500 mg",
+                    "active_principle": "Amoxicilina",
+                    "anvisa_registration_number": "1023508490011",
+                }
+            ]
+        )
+
+        result = await reconcile_and_verify(structured_items, raw_text, db_conn)
+        self.assertEqual(len(result.medications), 1)
+        item = result.medications[0]
+        self.assertEqual(item.name, "Amoxicilina")
+        self.assertEqual(item.dosage_mg, 500.0)
+        self.assertEqual(item.frequency_interval_hours, 8)
+        self.assertEqual(item.daily_doses_count, 3)
+        self.assertEqual(item.suggested_times, ["08:00", "16:00", "00:00"])
+        self.assertEqual(item.treatment_duration_days, 7)
+        self.assertEqual(item.anvisa_registration_number, "1023508490011")
+
+    def test_batch_endpoint_accepts_posology_and_sanitizes_nulls(self):
+        """Endpoint de remessa aceita posologia estruturada e sanitiza strings 'null'."""
+        conn = MagicMock()
+        conn.transaction = MagicMock()
+        conn.transaction.return_value.__aenter__ = AsyncMock()
+        conn.transaction.return_value.__aexit__ = AsyncMock(return_value=False)
+        conn.fetchval = AsyncMock(return_value="Dra. Maria Cuidadora")
+        conn.fetchrow = AsyncMock(return_value={"id": "med-uuid-1"})
+        conn.execute = AsyncMock(return_value="INSERT 0 1")
+
+        client = _create_test_client(conn, uid="patient-001")
+
+        payload = {
+            "medications": [
+                {
+                    "name": "Amoxicilina",
+                    "dosage_mg": 500.0,
+                    "schedule_times": ["08:00", "16:00", "00:00"],
+                    "ean_barcode": "7891234567890",
+                    "anvisa_registration_number": "1023508490011",
+                    "frequency_interval_hours": 8,
+                    "treatment_duration_days": 7,
+                    "photo_reference_url": "null",
+                    "manufacturer": "undefined",
+                    "total_units": 21,
+                    "alert_threshold_days": 3,
+                    "confirmed_with_prescription": True,
+                }
+            ]
+        }
+
+        response = client.post(
+            "/api/family/patients/patient-001/medications/batch",
+            json=payload,
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["created_count"], 1)
 
 
 if __name__ == "__main__":

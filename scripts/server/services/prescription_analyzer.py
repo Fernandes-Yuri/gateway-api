@@ -70,22 +70,66 @@ def parse_dosage_mg(dosage_str: str) -> Optional[float]:
     return val
 
 
-def infer_suggested_times(frequency: str) -> list[str]:
-    """Infere horários sugeridos baseados na descrição de posologia/frequência."""
+def infer_posology(frequency: str) -> tuple[Optional[int], int, list[str]]:
+    """Infere (interval_hours, daily_doses_count, suggested_times) baseados na frequência/posologia.
+
+    Padrões estritos (SaMD RDC 657/2022):
+    - 6/6h, 6 em 6 horas, a cada 6 horas, 4x ao dia -> interval=6, doses=4, times=["06:00", "12:00", "18:00", "00:00"]
+    - 8/8h, 8 em 8 horas, a cada 8 horas, 3x ao dia -> interval=8, doses=3, times=["08:00", "16:00", "00:00"]
+    - 12/12h, 12 em 12 horas, a cada 12 horas, 2x ao dia -> interval=12, doses=2, times=["08:00", "20:00"]
+    - 24/24h, 1x ao dia, manhã -> interval=24, doses=1, times=["08:00"]
+    - noite, ao deitar -> interval=24, doses=1, times=["21:00"]
+    """
     f = normalize_text(frequency)
     if not f:
-        return []
-    if any(k in f for k in ["6 em 6", "6/6", "4x", "4 vezes", "4 comprimidos"]):
-        return ["06:00", "12:00", "18:00", "00:00"]
-    if any(k in f for k in ["8 em 8", "8/8", "3x", "3 vezes", "3 comprimidos"]):
-        return ["08:00", "14:00", "20:00"]
-    if any(k in f for k in ["12 em 12", "12/12", "2x", "2 vezes", "2 comprimidos"]):
-        return ["08:00", "20:00"]
+        return None, 1, []
+
+    if any(k in f for k in ["6 em 6", "6/6", "a cada 6", "4x", "4 vezes", "4 comprimidos"]):
+        return 6, 4, ["06:00", "12:00", "18:00", "00:00"]
+
+    if any(k in f for k in ["8 em 8", "8/8", "a cada 8", "3x", "3 vezes", "3 comprimidos"]):
+        return 8, 3, ["08:00", "16:00", "00:00"]
+
+    if any(k in f for k in ["12 em 12", "12/12", "a cada 12", "2x", "2 vezes", "2 comprimidos"]):
+        return 12, 2, ["08:00", "20:00"]
+
     if any(k in f for k in ["noite", "ao deitar", "dormir", "noturno"]):
-        return ["21:00"]
-    if any(k in f for k in ["1x", "1 vez", "dia", "manha", "manhã", "24h", "24/24"]):
-        return ["08:00"]
-    return ["08:00"]
+        return 24, 1, ["21:00"]
+
+    if any(k in f for k in ["24 em 24", "24/24", "24h", "a cada 24", "1x", "1 vez", "dia", "manha", "manhã"]):
+        return 24, 1, ["08:00"]
+
+    return None, 1, ["08:00"]
+
+
+def infer_suggested_times(frequency: str) -> list[str]:
+    """Infere horários sugeridos baseados na descrição de posologia/frequência."""
+    _, _, times = infer_posology(frequency)
+    return times
+
+
+def infer_treatment_duration(text: str) -> Optional[int]:
+    """Detecta duração do tratamento caso mencionada (ex: 'por 7 dias', 'durante 14 dias')."""
+    if not text:
+        return None
+    norm = normalize_text(text)
+
+    # Dias (ex: 'por 7 dias', 'durante 14 dias', 'uso por 10 dias')
+    m_days = re.search(r"(?:por|durante|uso\s+por|tratamento\s+por)\s+(\d+)\s*(?:dias|dia\b)", norm)
+    if m_days:
+        return int(m_days.group(1))
+
+    # Semanas (ex: 'por 1 semana', 'durante 2 semanas')
+    m_weeks = re.search(r"(?:por|durante|uso\s+por|tratamento\s+por)\s+(\d+)\s*(?:semanas|semana\b)", norm)
+    if m_weeks:
+        return int(m_weeks.group(1)) * 7
+
+    # Meses (ex: 'por 1 mes', 'durante 3 meses')
+    m_months = re.search(r"(?:por|durante|uso\s+por|tratamento\s+por)\s+(\d+)\s*(?:meses|mes\b)", norm)
+    if m_months:
+        return int(m_months.group(1)) * 30
+
+    return None
 
 
 def is_dosage_in_raw_text(dosage_str: str, raw_text: str) -> bool:
@@ -309,8 +353,11 @@ async def _extract_single_image_structured(image_bytes: bytes, content_type: str
         '      "name": "Nome do medicamento",\n'
         '      "dosage": "Dose (ex: 50mg, 10mg)",\n'
         '      "frequency": "Posologia/frequência (ex: 1x ao dia, de 12 em 12 horas)",\n'
+        '      "frequency_interval_hours": 12,\n'
+        '      "daily_doses_count": 2,\n'
+        '      "treatment_duration_days": 7,\n'
         '      "instructions": "Instruções adicionais se houver",\n'
-        '      "suggested_times": ["08:00"],\n'
+        '      "suggested_times": ["08:00", "20:00"],\n'
         '      "confidence": 0.95,\n'
         '      "caligrafia_duvidosa": false\n'
         "    }\n"
@@ -475,24 +522,69 @@ async def reconcile_and_verify(
             dosage_divergent = False
 
         # -------------------------------------------------------------
-        # 3. Verificação da Frequência / Posologia
+        # 3. Verificação da Frequência / Posologia e Duração
         # -------------------------------------------------------------
         if not raw_freq or caligrafia_duvidosa or any(w in normalize_text(raw_freq) for w in ["incert", "duvid", "ambig"]):
             frequency_divergent = True
             final_freq = ""
             final_suggested_times = []
+            final_interval_hours = None
+            final_daily_doses = 1
+            final_duration_days = None
             requires_human_fill = True
             reasons.append("Frequência/posologia ausente ou duvidosa.")
         else:
             frequency_divergent = False
             final_freq = raw_freq
-            final_suggested_times = raw_suggested if raw_suggested else infer_suggested_times(raw_freq)
+            inferred_interval, inferred_doses, inferred_times = infer_posology(raw_freq)
+
+            # Intervalo em horas
+            raw_interval = item.get("frequency_interval_hours")
+            if raw_interval is not None:
+                try:
+                    final_interval_hours = int(raw_interval)
+                except (ValueError, TypeError):
+                    final_interval_hours = inferred_interval
+            else:
+                final_interval_hours = inferred_interval
+
+            # Doses diárias
+            raw_doses = item.get("daily_doses_count")
+            if raw_doses is not None:
+                try:
+                    final_daily_doses = int(raw_doses)
+                except (ValueError, TypeError):
+                    final_daily_doses = inferred_doses
+            else:
+                final_daily_doses = inferred_doses
+
+            # Horários sugeridos
+            final_suggested_times = raw_suggested if raw_suggested else inferred_times
+
+            # Duração do tratamento (ex: por 7 dias, durante 14 dias)
+            raw_duration = item.get("treatment_duration_days")
+            if raw_duration is not None:
+                try:
+                    final_duration_days = int(raw_duration)
+                except (ValueError, TypeError):
+                    final_duration_days = None
+            else:
+                search_ctx = f"{raw_freq} {item.get('instructions', '')} {item.get('duration', '')}"
+                final_duration_days = infer_treatment_duration(search_ctx)
+                if not final_duration_days and raw_text and raw_name:
+                    for line in raw_text.splitlines():
+                        if is_name_in_raw_text(raw_name, line):
+                            dur = infer_treatment_duration(line)
+                            if dur:
+                                final_duration_days = dur
+                                break
 
         # -------------------------------------------------------------
         # 4. Verificação 2: Catálogo ANVISA
         # -------------------------------------------------------------
         ean_barcode: Optional[str] = None
         active_principle: Optional[str] = None
+        anvisa_registration_number: Optional[str] = None
         dosage_mg: Optional[float] = parse_dosage_mg(raw_dosage)
 
         # Busca por aproximação no catálogo ANVISA
@@ -537,6 +629,10 @@ async def reconcile_and_verify(
             if compatible_row:
                 ean_barcode = compatible_row.get("ean_barcode")
                 active_principle = compatible_row.get("active_principle")
+                anvisa_registration_number = (
+                    compatible_row.get("anvisa_registration_number")
+                    or item.get("anvisa_registration_number")
+                )
             else:
                 # Medicamento existe na ANVISA mas a concentração extraída é inexistente no mercado
                 dosage_divergent = True
@@ -547,6 +643,9 @@ async def reconcile_and_verify(
             # Medicamento não consta no catálogo referencial
             requires_human_fill = True
             reasons.append("Medicamento não localizado no catálogo ANVISA de referência.")
+
+        if not anvisa_registration_number and not name_divergent:
+            anvisa_registration_number = item.get("anvisa_registration_number")
 
         # -------------------------------------------------------------
         # REGRA DE OURO: Tolerância Zero com Divergências e Incertezas
@@ -561,11 +660,15 @@ async def reconcile_and_verify(
 
         if name_divergent:
             final_name = ""
+            anvisa_registration_number = None
             requires_human_fill = True
 
         if frequency_divergent:
             final_freq = ""
             final_suggested_times = []
+            final_interval_hours = None
+            final_daily_doses = 1
+            final_duration_days = None
             requires_human_fill = True
 
         if name_divergent or dosage_divergent:
@@ -587,8 +690,12 @@ async def reconcile_and_verify(
                 dosage_mg=dosage_mg,
                 frequency=final_freq,
                 frequency_divergent=frequency_divergent,
+                frequency_interval_hours=final_interval_hours,
+                daily_doses_count=final_daily_doses,
+                treatment_duration_days=final_duration_days,
                 suggested_times=final_suggested_times,
                 ean_barcode=ean_barcode,
+                anvisa_registration_number=anvisa_registration_number,
                 active_principle=active_principle,
                 confidence_score=confidence_score,
                 requires_human_fill=requires_human_fill,
