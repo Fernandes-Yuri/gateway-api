@@ -228,5 +228,90 @@ class TestCareOsMedicationCrud(unittest.TestCase):
         self.assertIsNone(payload.frequency_interval_hours)
 
 
+    def test_list_patient_medications_success(self):
+        """Listagem completa dos medicamentos do paciente retorna 200 e dados estruturados."""
+        meds = [
+            {
+                "id": self.med_id,
+                "user_id": self.patient_id,
+                "name": "Atenolol 25mg",
+                "active_principle": "Atenolol",
+                "manufacturer": "EMS",
+                "dosage_mg": 25.0,
+                "pharmaceutical_form": "Comprimido",
+                "schedule_times": "08:00",
+                "schedule_time": "08:00",
+                "total_units": 30,
+                "current_units": 20,
+                "alert_threshold_days": 5,
+                "photo_reference_url": None,
+                "confirmed_with_prescription": True,
+                "ean_barcode": "7896004715506",
+                "anvisa_registration_number": "1023508490011",
+                "meal_context": "APOS_CAFE",
+                "frequency_interval_hours": 24,
+                "treatment_duration_days": 60,
+                "last_restock_date": None,
+                "created_at": None,
+                "updated_at": None,
+            },
+            {
+                "id": "00000000-0000-0000-0000-000000000002",
+                "user_id": self.patient_id,
+                "name": "Losartana 50mg",
+                "active_principle": "Losartana Potássica",
+                "manufacturer": "Medley",
+                "dosage_mg": 50.0,
+                "pharmaceutical_form": "Comprimido",
+                "schedule_times": "08:00,20:00",
+                "schedule_time": "08:00",
+                "total_units": 60,
+                "current_units": 45,
+                "alert_threshold_days": 7,
+                "photo_reference_url": None,
+                "confirmed_with_prescription": True,
+                "ean_barcode": "7891234567890",
+                "anvisa_registration_number": "1023508490022",
+                "meal_context": None,
+                "frequency_interval_hours": 12,
+                "treatment_duration_days": 90,
+                "last_restock_date": None,
+                "created_at": None,
+                "updated_at": None,
+            },
+        ]
+        conn = self._setup_conn_mock(caregiver_role="ADMIN_CHILD")
+        conn.fetch = AsyncMock(return_value=meds)
+        client = _create_test_client(conn, uid=self.caregiver_id)
+
+        response = client.get(f"/api/family/patients/{self.patient_id}/medications")
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(len(data), 2)
+        self.assertEqual(data[0]["name"], "Atenolol 25mg")
+        self.assertEqual(data[0]["meal_context"], "APOS_CAFE")
+        self.assertEqual(data[1]["name"], "Losartana 50mg")
+        self.assertEqual(data[1]["frequency_interval_hours"], 12)
+
+    def test_list_patient_medications_empty(self):
+        """Listagem retorna lista vazia quando paciente não possui medicamentos cadastrados."""
+        conn = self._setup_conn_mock(caregiver_role="ADMIN_CHILD")
+        conn.fetch = AsyncMock(return_value=[])
+        client = _create_test_client(conn, uid=self.caregiver_id)
+
+        response = client.get(f"/api/family/patients/{self.patient_id}/medications")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), [])
+
+    def test_list_patient_medications_unauthorized(self):
+        """Retorno 403 se usuário sem vínculo tentar listar medicamentos."""
+        conn = self._setup_conn_mock(caregiver_role=None)
+        client = _create_test_client(conn, uid="intruder_user")
+
+        response = client.get(f"/api/family/patients/{self.patient_id}/medications")
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("não está autorizado", response.json()["detail"])
+
+
 if __name__ == "__main__":
     unittest.main()
