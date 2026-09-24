@@ -28,8 +28,14 @@ from schemas.medications import (
     MedicationCreate,
     MedicationRestockRequest,
     MedicationTakeRequest,
+    PrescriptionAnalysisResponse,
 )
 from services.care_os import new_public_token, require_patient_permission, row_dict, token_hash
+from services.prescription_analyzer import (
+    extract_raw_ocr_text,
+    extract_structured_prescription,
+    reconcile_and_verify,
+)
 
 
 router = APIRouter(tags=["Care OS"])
@@ -37,6 +43,9 @@ _state = SimpleNamespace(db_pool=None, public_base_url="https://api.bragasaude.o
 BRT = ZoneInfo("America/Sao_Paulo")
 MEDICATION_IMAGE_DIR = os.path.join(STORAGE_DIR, "medications")
 os.makedirs(MEDICATION_IMAGE_DIR, exist_ok=True)
+PRESCRIPTION_STORAGE_DIR = os.path.join(STORAGE_DIR, "prescriptions")
+os.makedirs(PRESCRIPTION_STORAGE_DIR, exist_ok=True)
+
 
 
 def configure_state(*, db_pool=None, public_base_url=None):
@@ -285,6 +294,98 @@ async def medication_photo(patient_id: str, filename: str, uid: str = Depends(fi
     if not os.path.isfile(path):
         raise HTTPException(404, "Foto não encontrada.")
     return FileResponse(path, headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
+
+
+@router.post("/api/family/patients/{patient_id}/prescriptions/analyze", response_model=PrescriptionAnalysisResponse)
+async def analyze_prescription(
+    patient_id: str,
+    file: UploadFile = File(...),
+    request: Request = None,
+    uid: str = Depends(firebase_uid),
+):
+    """Análise Segura de Receitas Médicas com Dupla Checagem e Árbitro ANVISA."""
+    pool = _pool()
+    async with pool.acquire() as conn:
+        await require_patient_permission(conn, uid, patient_id, "medication:write")
+
+        if request is not None:
+            declared = request.headers.get("content-length")
+            if declared:
+                try:
+                    if int(declared) > 10 * 1024 * 1024:
+                        raise HTTPException(413, "O arquivo excede o limite de 10 MB.")
+                except ValueError as exc:
+                    raise HTTPException(400, "Content-Length inválido.") from exc
+
+        content = await file.read()
+        if not content:
+            raise HTTPException(400, "O arquivo enviado está vazio.")
+        if len(content) > 10 * 1024 * 1024:
+            raise HTTPException(413, "O arquivo excede o limite de 10 MB.")
+
+        allowed_types = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
+        content_type = (file.content_type or "").lower()
+        if content_type not in allowed_types:
+            ext = os.path.splitext(file.filename or "")[1].lower()
+            ext_map = {
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".png": "image/png",
+                ".webp": "image/webp",
+                ".pdf": "application/pdf",
+            }
+            if ext in ext_map:
+                content_type = ext_map[ext]
+            elif content.startswith(b"%PDF"):
+                content_type = "application/pdf"
+            else:
+                raise HTTPException(415, "Formato de arquivo não suportado. Envie imagem (JPEG, PNG, WebP) ou PDF.")
+
+        raw_name = file.filename or "prescription"
+        base_name = os.path.basename(raw_name)
+        safe_filename = re.sub(r"[^a-zA-Z0-9_.-]", "_", base_name)
+        unique_filename = f"{uuid.uuid4()}_{safe_filename}"
+        target_path = os.path.join(PRESCRIPTION_STORAGE_DIR, unique_filename)
+        with open(target_path, "wb") as target:
+            target.write(content)
+        url = f"{_state.public_base_url}/api/files/prescriptions/{unique_filename}"
+
+        # Execução dos motores de OCR estrito, visão estruturada e árbitro ANVISA
+        raw_ocr = await extract_raw_ocr_text(content, safe_filename)
+        structured = await extract_structured_prescription(content, content_type)
+        reconciled = await reconcile_and_verify(structured, raw_ocr, conn)
+
+        # Auditoria LGPD
+        actor_name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid) or "Usuário autorizado"
+        audit_details = {
+            "filename": safe_filename,
+            "content_type": content_type,
+            "size_bytes": len(content),
+            "file_url": url,
+            "medications_count": len(reconciled),
+        }
+        await conn.execute(
+            """INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type,details)
+               VALUES ($1,$2,$3,'PRESCRIPTION_ANALYZED',$4::jsonb)""",
+            patient_id, uid, actor_name, json.dumps(audit_details),
+        )
+
+        return PrescriptionAnalysisResponse(
+            status="success",
+            prescription_image_url=url,
+            medications=reconciled,
+            raw_ocr_snippet=raw_ocr[:500] if raw_ocr else None,
+        )
+
+
+@router.get("/api/files/prescriptions/{filename}")
+async def prescription_photo(filename: str, uid: str = Depends(firebase_uid)):
+    safe_filename = os.path.basename(filename)
+    path = os.path.join(PRESCRIPTION_STORAGE_DIR, safe_filename)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "Arquivo não encontrado.")
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
+
 
 
 @router.get("/api/family/patients/{patient_id}/activity-feed")

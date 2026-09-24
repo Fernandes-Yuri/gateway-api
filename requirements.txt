@@ -21,6 +21,9 @@ python-multipart>=0.0.9
 httpx==0.28.1
 requests>=2.31
 
+# Leitura e OCR de PDF de receitas medicas
+pymupdf>=1.24.0
+
 # PostgreSQL (RDS) via asyncpg — so instalado na EC2
 asyncpg>=0.29
 

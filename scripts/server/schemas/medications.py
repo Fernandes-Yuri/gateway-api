@@ -72,3 +72,27 @@ class BleTelemetryRequest(BaseModel):
     diastolic_pressure: Optional[int] = Field(default=None, ge=20, le=200)
     glucose_level: Optional[int] = Field(default=None, ge=20, le=1000)
     protocol: str = Field(default="GATT", pattern=r"^GATT$")
+
+
+class AnalyzedMedicationItem(BaseModel):
+    name: str = Field(default="")
+    name_divergent: bool = False
+    dosage: str = Field(default="")
+    dosage_divergent: bool = False
+    dosage_mg: Optional[float] = None
+    frequency: str = Field(default="")
+    frequency_divergent: bool = False
+    suggested_times: list[str] = Field(default_factory=list)
+    ean_barcode: Optional[str] = None
+    active_principle: Optional[str] = None
+    confidence_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    requires_human_fill: bool = False
+    divergence_reason: Optional[str] = None
+
+
+class PrescriptionAnalysisResponse(BaseModel):
+    status: str = "success"
+    prescription_image_url: Optional[str] = None
+    medications: list[AnalyzedMedicationItem] = Field(default_factory=list)
+    raw_ocr_snippet: Optional[str] = None
+
