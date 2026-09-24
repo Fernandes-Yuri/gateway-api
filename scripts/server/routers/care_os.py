@@ -256,7 +256,7 @@ async def list_patient_medications(
             """SELECT id, user_id, name, active_principle, manufacturer, dosage_mg,
                       pharmaceutical_form, schedule_times, schedule_time, total_units,
                       current_units, alert_threshold_days, photo_reference_url,
-                      confirmed_with_prescription, ean_barcode, anvisa_registration_number,
+                      confirmed_with_prescription, ean_barcode, NULL as anvisa_registration_number,
                       meal_context, frequency_interval_hours, treatment_duration_days,
                       last_restock_date, created_at, updated_at
                FROM medications WHERE user_id = $1 ORDER BY name ASC""",
