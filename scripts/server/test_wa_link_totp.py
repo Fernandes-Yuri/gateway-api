@@ -68,9 +68,16 @@ class FakeConn:
             for pid, prof in self.state["profiles"].items():
                 if prof.get("totp"):
                     r = MagicMock()
-                    r.__getitem__ = lambda self_, k, _p=pid, _r=prof: (
-                        _p if k == "id" else _r.get("name") if k == "full_name"
-                        else _r.get("totp"))
+
+                    def getter(k, default=None, _p=pid, _r=prof):
+                        if k == "id":
+                            return _p
+                        if k == "full_name":
+                            return _r.get("name")
+                        return _r.get("totp", default)
+
+                    r.__getitem__ = lambda self_, k, _g=getter: _g(k)
+                    r.get = lambda k, default=None, _g=getter: _g(k, default)
                     rows.append(r)
             return rows
         return None
@@ -136,6 +143,21 @@ class TestTotpPrimitives(unittest.TestCase):
 
     def test_seconds_until_rotation_bounded_by_window(self):
         self.assertTrue(0 < seconds_until_rotation() <= TOTP_STEP_SECONDS)
+
+    def test_verify_handles_malformed_base32_gracefully(self):
+        malformed_secrets = [
+            "LT2IB/AMBC4GKO5KFOTJEYL6SLU",
+            "3RRWBQTUCIRXDRASZOPSAHUWFVS",
+            "01890189018901890189018901890189",
+            "invalid!chars@#$",
+            "A",
+            "",
+            None,
+        ]
+        for secret in malformed_secrets:
+            with self.subTest(secret=secret):
+                self.assertFalse(verify_totp_code(secret, "123456"))
+                self.assertFalse(verify_totp_code(secret, "000000"))
 
 
 class TestLinkAttempt(unittest.TestCase):
@@ -222,6 +244,147 @@ class TestLinkAttempt(unittest.TestCase):
         consumed, sent = self._run(state, "Bom dia! Tudo bem?")
         self.assertFalse(consumed)
         self.assertEqual(sent, [])
+
+    def test_find_account_ignores_corrupted_secret_row_and_finds_valid_account(self):
+        valid_secret = generate_totp_secret()
+        # Simula primeira conta com segredo corrompido do Android e segunda com segredo valido
+        state = {
+            "profiles": {
+                "usuario-corrompido": {
+                    "name": "Conta Quebrada",
+                    "totp": "LT2IB/AMBC4GKO5KFOTJEYL6SLU",
+                    "wa": None,
+                },
+                "usuario-valido": {
+                    "name": "Conta Valida",
+                    "totp": valid_secret,
+                    "wa": None,
+                },
+            },
+            "attempts": [],
+        }
+        code = current_totp_code(valid_secret)
+        consumed, sent = self._run(state, code)
+        self.assertTrue(consumed)
+        self.assertEqual(state["profiles"]["usuario-valido"]["wa"], "5511987654321")
+        self.assertIsNone(state["profiles"]["usuario-corrompido"]["wa"])
+        self.assertIn("Tudo certo", sent[0][1])
+        self.assertEqual(state["attempts"][-1]["status"], "SUCCESS")
+        self.assertEqual(state["attempts"][-1]["user"], "usuario-valido")
+
+    def test_find_account_handles_row_exception_and_finds_valid_account(self):
+        valid_secret = generate_totp_secret()
+        state = {
+            "profiles": {
+                "usuario-falha": {
+                    "name": "Conta Falha",
+                    "totp": "VALOR_INCOMUM",
+                    "wa": None,
+                },
+                "usuario-valido": {
+                    "name": "Conta Valida",
+                    "totp": valid_secret,
+                    "wa": None,
+                },
+            },
+            "attempts": [],
+        }
+        code = current_totp_code(valid_secret)
+        from unittest.mock import patch
+        import wa_link_service
+
+        orig_verify = wa_link_service.verify_totp_code
+
+        def mock_verify(secret, c, at=None):
+            if secret == "VALOR_INCOMUM":
+                raise RuntimeError("Falha inesperada no parser")
+            return orig_verify(secret, c, at=at)
+
+        with patch("wa_link_service.verify_totp_code", side_effect=mock_verify):
+            consumed, sent = self._run(state, code)
+            self.assertTrue(consumed)
+            self.assertEqual(state["profiles"]["usuario-valido"]["wa"], "5511987654321")
+            self.assertIsNone(state["profiles"]["usuario-falha"]["wa"])
+            self.assertEqual(state["attempts"][-1]["status"], "SUCCESS")
+            self.assertEqual(state["attempts"][-1]["user"], "usuario-valido")
+
+
+class TestSyncProfileTotp(unittest.IsolatedAsyncioTestCase):
+
+    async def asyncSetUp(self):
+        import routers.sync as sync_module
+        self.sync_module = sync_module
+        self._orig_pool = sync_module._state.db_pool
+        self._orig_rl = sync_module._state.rate_limiter
+        self._orig_has_wa = sync_module._state.has_wa_link
+        self._orig_gen = sync_module._state.generate_totp_secret
+
+    async def asyncTearDown(self):
+        self.sync_module._state.db_pool = self._orig_pool
+        self.sync_module._state.rate_limiter = self._orig_rl
+        self.sync_module._state.has_wa_link = self._orig_has_wa
+        self.sync_module._state.generate_totp_secret = self._orig_gen
+
+    async def test_sync_profile_discards_malformed_secret_and_generates_valid(self):
+        conn = AsyncMock()
+        conn.execute = AsyncMock()
+        conn.fetchrow = AsyncMock(return_value=None)
+
+        pool = MagicMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        self.sync_module.configure_state(
+            db_pool=pool,
+            rate_limiter=MagicMock(check=AsyncMock()),
+            has_wa_link=True,
+            generate_totp_secret=generate_totp_secret,
+        )
+
+        from routers.sync import ProfileSyncDto, sync_profile
+        req = MagicMock()
+        dto = ProfileSyncDto(
+            id="uid-123",
+            fullName="Maria Silva",
+            totpSecret="LT2IB/AMBC4GKO5KFOTJEYL6SLU",
+        )
+
+        res = await sync_profile(dto, req, uid="uid-123")
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["id"], "uid-123")
+        self.assertNotEqual(res["totpSecret"], "LT2IB/AMBC4GKO5KFOTJEYL6SLU")
+        self.assertEqual(len(res["totpSecret"]), 32)
+        import base64
+        self.assertEqual(len(base64.b32decode(res["totpSecret"])), 20)
+
+    async def test_sync_profile_returns_existing_db_secret(self):
+        conn = AsyncMock()
+        conn.execute = AsyncMock()
+        db_secret = generate_totp_secret()
+        conn.fetchrow = AsyncMock(return_value={"totp_secret": db_secret})
+
+        pool = MagicMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        self.sync_module.configure_state(
+            db_pool=pool,
+            rate_limiter=MagicMock(check=AsyncMock()),
+            has_wa_link=True,
+            generate_totp_secret=generate_totp_secret,
+        )
+
+        from routers.sync import ProfileSyncDto, sync_profile
+        req = MagicMock()
+        dto = ProfileSyncDto(
+            id="uid-123",
+            fullName="Maria Silva",
+            totpSecret="JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+        )
+
+        res = await sync_profile(dto, req, uid="uid-123")
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["totpSecret"], db_secret)
 
 
 if __name__ == "__main__":

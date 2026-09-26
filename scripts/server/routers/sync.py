@@ -11,6 +11,7 @@ rate-limiter por IP, sanitize_zero_trust_text em campos livres, faixa
 clinica valida em vitais (SBC/SBD), status de exame em lista fechada e
 LGPD Art. 18 no delete de conta (ON DELETE CASCADE).
 """
+import base64
 import json
 import os
 import re
@@ -220,19 +221,40 @@ async def sync_profile(p: ProfileSyncDto, request: Request, uid: str = Depends(f
     # senao o gateway gera e devolve para o app persistir. Nunca regenera o de uma
     # conta existente: isso invalidaria o segredo guardado no aparelho.
     totp_secret = getattr(p, "totpSecret", None)
+    if totp_secret:
+        try:
+            s_clean = str(totp_secret).strip().replace(" ", "").upper()
+            if not s_clean:
+                totp_secret = None
+            else:
+                pad = (8 - len(s_clean) % 8) % 8
+                raw = base64.b32decode(s_clean + "=" * pad, casefold=True)
+                if not raw:
+                    totp_secret = None
+                else:
+                    totp_secret = s_clean
+        except Exception:
+            totp_secret = None
+
     if _state.has_wa_link and not totp_secret:
         totp_secret = _state.generate_totp_secret()
 
     async with db_pool.acquire() as conn:
         await conn.execute(query, *values)
-        if _state.has_wa_link and totp_secret:
-            try:
-                await conn.execute(
-                    "UPDATE profiles SET totp_secret = $2 WHERE id = $1 AND totp_secret IS NULL",
-                    p.id, totp_secret,
-                )
-            except Exception as _totp_err:
-                print(f"[TOTP Secret] Falha ao gravar segredo para {p.id}: {_totp_err}")
+        if _state.has_wa_link:
+            existing = await conn.fetchrow(
+                "SELECT totp_secret FROM profiles WHERE id = $1", p.id
+            )
+            if existing and existing["totp_secret"]:
+                totp_secret = existing["totp_secret"]
+            elif totp_secret:
+                try:
+                    await conn.execute(
+                        "UPDATE profiles SET totp_secret = $2 WHERE id = $1 AND totp_secret IS NULL",
+                        p.id, totp_secret,
+                    )
+                except Exception as _totp_err:
+                    print(f"[TOTP Secret] Falha ao gravar segredo para {p.id}: {_totp_err}")
     return {"status": "success", "id": p.id, "totpSecret": totp_secret}
 
 

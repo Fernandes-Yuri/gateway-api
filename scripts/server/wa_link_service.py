@@ -114,8 +114,12 @@ async def _find_account_by_code(conn, code: str) -> Optional[Tuple[str, str]]:
         "SELECT id, full_name, totp_secret FROM profiles WHERE totp_secret IS NOT NULL"
     )
     for r in rows:
-        if verify_totp_code(r["totp_secret"], code):
-            return r["id"], r["full_name"] or "amigo(a)"
+        try:
+            if verify_totp_code(r["totp_secret"], code):
+                return r["id"], r["full_name"] or "amigo(a)"
+        except Exception as row_err:
+            print(f"[WhatsApp Link] Aviso: erro ao avaliar TOTP da conta {r.get('id')}: {row_err}")
+            continue
     return None
 
 

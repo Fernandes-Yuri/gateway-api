@@ -28,17 +28,24 @@ def generate_totp_secret() -> str:
 
 
 def _hotp(secret_b32: str, counter: int, digits: int = TOTP_DIGITS) -> str:
-    key = base64.b32decode(secret_b32, casefold=True)
-    counter_bytes = counter.to_bytes(8, byteorder="big")
-    digest = hmac.new(key, counter_bytes, hashlib.sha1).digest()
-    offset = digest[-1] & 0x0F
-    code_int = (
-        ((digest[offset] & 0x7F) << 24)
-        | (digest[offset + 1] << 16)
-        | (digest[offset + 2] << 8)
-        | digest[offset + 3]
-    )
-    return f"{code_int % (10 ** digits):0{digits}d}"
+    try:
+        if not secret_b32:
+            return ""
+        s = str(secret_b32).strip().replace(" ", "").upper()
+        s += "=" * ((8 - len(s) % 8) % 8)
+        key = base64.b32decode(s, casefold=True)
+        counter_bytes = counter.to_bytes(8, byteorder="big")
+        digest = hmac.new(key, counter_bytes, hashlib.sha1).digest()
+        offset = digest[-1] & 0x0F
+        code_int = (
+            ((digest[offset] & 0x7F) << 24)
+            | (digest[offset + 1] << 16)
+            | (digest[offset + 2] << 8)
+            | digest[offset + 3]
+        )
+        return f"{code_int % (10 ** digits):0{digits}d}"
+    except Exception:
+        return ""
 
 
 def current_totp_code(secret_b32: str, at: float = None) -> str:
@@ -54,17 +61,23 @@ def verify_totp_code(secret_b32: str, code: str, at: float = None) -> bool:
     step), tolerando drift de relogio entre o celular do usuario e o servidor.
     Codigos a mais de uma janela de distancia sao rejeitados.
     """
-    if not secret_b32 or not code:
+    try:
+        if not secret_b32 or not code:
+            return False
+        now = time.time() if at is None else at
+        base_counter = int(now // TOTP_STEP_SECONDS)
+        submitted = str(code).strip().zfill(TOTP_DIGITS)
+        # D-WA1: aceita a janela atual e as vizinhas; comparacao em tempo constante em
+        # cada tentativa (nao vaza progresso por timing).
+        for step in (base_counter - 1, base_counter, base_counter + 1):
+            hotp_val = _hotp(secret_b32, step)
+            if not hotp_val:
+                continue
+            if hmac.compare_digest(submitted, hotp_val):
+                return True
         return False
-    now = time.time() if at is None else at
-    base_counter = int(now // TOTP_STEP_SECONDS)
-    submitted = str(code).strip().zfill(TOTP_DIGITS)
-    # D-WA1: aceita a janela atual e as vizinhas; comparacao em tempo constante em
-    # cada tentativa (nao vaza progresso por timing).
-    for step in (base_counter - 1, base_counter, base_counter + 1):
-        if hmac.compare_digest(submitted, _hotp(secret_b32, step)):
-            return True
-    return False
+    except Exception:
+        return False
 
 
 def seconds_until_rotation(at: float = None) -> int:
