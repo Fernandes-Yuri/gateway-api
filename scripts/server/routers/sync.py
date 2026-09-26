@@ -810,6 +810,36 @@ async def get_medications(user_id: str, uid: str = Depends(firebase_uid)):
                 d["updated_at"] = d["updated_at"].isoformat()
             result.append(d)
         return result
+ 
+ 
+@router.get("/api/medications/{user_id}/logs")
+@router.get("/api/sync/medication-logs/{user_id}")
+async def get_medication_logs(
+    user_id: str,
+    days: int = 7,
+    uid: str = Depends(firebase_uid),
+):
+    require_owner(uid, user_id)
+    db_pool = _state.db_pool
+    if not db_pool:
+        return []
+    query = """
+        SELECT id, user_id, medication_id, taken_at, scheduled_for, actor_id, units_taken, idempotency_key
+        FROM medication_logs
+        WHERE user_id = $1 AND taken_at >= NOW() - make_interval(days => $2)
+        ORDER BY taken_at DESC;
+    """
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(query, user_id, days)
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["id"] = str(d["id"])
+            d["medication_id"] = str(d["medication_id"])
+            if d.get("taken_at"):
+                d["taken_at"] = d["taken_at"].isoformat()
+            result.append(d)
+        return result
 
 
 # =============================================================

@@ -312,6 +312,34 @@ class TestCareOsMedicationCrud(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("não está autorizado", response.json()["detail"])
 
+    def test_list_patient_medication_logs_success(self):
+        """Logs de doses tomadas são retornados para sincronização com o banco local."""
+        import datetime
+        sample_logs = [
+            {
+                "id": "1973ac83-9c57-4f79-9b9e-6d70c8696659",
+                "user_id": self.patient_id,
+                "medication_id": self.med_id,
+                "taken_at": datetime.datetime(2026, 9, 26, 14, 5, 8, tzinfo=datetime.timezone.utc),
+                "scheduled_for": "2026-09-26T08:00:00-03:00",
+                "actor_id": self.patient_id,
+                "units_taken": 1,
+                "idempotency_key": "idem-123",
+            }
+        ]
+        conn = self._setup_conn_mock(caregiver_role="ADMIN_CHILD")
+        conn.fetch = AsyncMock(return_value=sample_logs)
+        client = _create_test_client(conn, uid=self.caregiver_id)
+
+        response = client.get(f"/api/family/patients/{self.patient_id}/medications/logs?days=7")
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["id"], "1973ac83-9c57-4f79-9b9e-6d70c8696659")
+        self.assertEqual(data[0]["scheduled_for"], "2026-09-26T08:00:00-03:00")
+        self.assertEqual(data[0]["units_taken"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
+

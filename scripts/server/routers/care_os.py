@@ -265,6 +265,31 @@ async def list_patient_medications(
         return [row_dict(r) for r in rows]
 
 
+@router.get("/api/family/patients/{patient_id}/medications/logs", status_code=200)
+async def list_patient_medication_logs(
+    patient_id: str,
+    days: int = 7,
+    uid: str = Depends(firebase_uid),
+):
+    """Retorna os logs de doses tomadas do paciente para sincronização com o banco local Room."""
+    async with _pool().acquire() as conn:
+        await require_patient_permission(conn, uid, patient_id, "care:read")
+        rows = await conn.fetch(
+            """SELECT id, user_id, medication_id, taken_at, scheduled_for, actor_id, units_taken, idempotency_key
+               FROM medication_logs
+               WHERE user_id = $1 AND taken_at >= NOW() - make_interval(days => $2)
+               ORDER BY taken_at DESC""",
+            patient_id, days,
+        )
+    result = []
+    for r in rows:
+        d = row_dict(r)
+        d["id"] = str(d["id"])
+        d["medication_id"] = str(d["medication_id"])
+        result.append(d)
+    return result
+
+
 @router.delete("/api/family/patients/{patient_id}/medications/{medication_id}", status_code=200)
 async def delete_medication(
     patient_id: str,
