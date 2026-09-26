@@ -1,0 +1,42 @@
+Braga Saúde — Licença Proprietária de Software
+Copyright (c) 2026 Braga Saúde / Yuri Fernandes. Todos os direitos reservados.
+
+==============================================================================
+AVISO DE CÓDIGO PROPRIETÁRIO E CONFIDENCIAL
+==============================================================================
+
+Todo o código-fonte, arquitetura, design, documentação, algoritmos, regras de
+negócio e ativos contidos neste repositório são de propriedade intelectual
+exclusiva e privada da Braga Saúde e de seus fundadores.
+
+1. RESERVA DE DIREITOS E PROIBIÇÕES
+É expressamente proibido a qualquer pessoa física ou jurídica, sem autorização
+prévia e formal por escrito dos detentores dos direitos autorais:
+- Copiar, clonar, reproduzir, distribuir, sublicenciar, vender, ceder ou publicar
+  qualquer parte deste software e repositório;
+- Modificar, adaptar ou criar obras derivadas com base neste código-fonte;
+- Utilizar este software ou seus componentes para criar produtos comerciais ou
+  serviços concorrentes;
+- Realizar engenharia reversa, descompilação, desmontagem ou tentar derivar o
+  código-fonte de quaisquer binários ou módulos compilados.
+
+2. COMPONENTES E DEPENDÊNCIAS DE TERCEIROS (OPEN SOURCE)
+Este projeto utiliza componentes, bibliotecas e frameworks de código aberto sob
+licenças permissivas reconhecidas pela comunidade técnica internacional, incluindo:
+- Apache License, Version 2.0 (e.g., ecossistema Android Jetpack, Kotlin, Hilt, Room,
+  PDFBox-Android, Coil, bibliotecas Google e utilitários de infraestrutura);
+- MIT License (e.g., FastAPI, Next.js, React, Pydantic, Tailwind CSS e utilitários web);
+- BSD Licenses e licenças correlatas de bibliotecas utilitárias;
+- Termos de Serviço de APIs do Google / Firebase.
+
+Os direitos autorais, marcas e patentes dessas bibliotecas pertencem a seus
+respectivos titulares. O uso de tais dependências de código aberto ocorre em
+estrita conformidade com os termos de suas respectivas licenças e não concede a
+terceiros qualquer direito sobre o código-fonte proprietário da aplicação Braga Saúde.
+
+3. ISENÇÃO DE RESPONSABILIDADE E GARANTIAS
+ESTE SOFTWARE É DISPONIBILIZADO "NO ESTADO EM QUE SE ENCONTRA" ("AS IS"),
+SEM GARANTIAS DE QUALQUER NATUREZA, EXPRESSAS OU IMPLÍCITAS. EM HIPÓTESE ALGUMA
+OS AUTORES OU DETENTORES DOS DIREITOS AUTORAIS SERÃO RESPONSÁVEIS POR QUAISQUER
+REIVINDICAÇÕES, DANOS DIRETOS, INDIRETOS, INCIDENTAIS, ESPECIAIS OU CONSEQUENCIAIS
+DECORRENTES DO USO OU DA IMPOSSIBILIDADE DE USO DESTE SOFTWARE.
