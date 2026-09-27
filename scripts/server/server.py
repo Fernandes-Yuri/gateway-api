@@ -73,7 +73,6 @@ from routers import whatsapp as whatsapp_router
 # Render consome estes endpoints e deixa de acessar o RDS diretamente.
 from routers import admin as admin_router
 from routers import care_os as care_os_router
-from routers import community as community_router
 from services.care_automations import (
     send_nightly_bulletins,
     send_pattern_break_alerts,
@@ -353,8 +352,7 @@ class FamilyMessageSyncDto(BaseModel):
 # 503/offline_mode em producao. (Detectado na revisao pre-push: os testes
 # locais passavam justamente por esperarem pool None offline.)
 _POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
-                 sync_router, whatsapp_router, admin_router, care_os_router,
-                 community_router)
+                 sync_router, whatsapp_router, admin_router, care_os_router)
 
 
 def _propagate_db_pool():
@@ -819,11 +817,6 @@ app.include_router(admin_router.router)
 
 care_os_router.configure_state(db_pool=None, public_base_url=PUBLIC_API_BASE_URL)
 app.include_router(care_os_router.router)
-
-# Feed Comunitario — Publicacoes de Orgulho Familiar (PWA Cuidador §4).
-# Leitura/escrita escopadas aos vinculos familiares ativos do usuario.
-community_router.configure_state(db_pool=None)  # preenchido no startup (propagacao de pool)
-app.include_router(community_router.router)
 
 # Configuracao dos modulos core extraidos (Fase A passo 6).
 # dispatch_clinical_alert continua definido neste arquivo (compartilhado

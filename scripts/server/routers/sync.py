@@ -17,7 +17,7 @@ import os
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -132,6 +132,9 @@ class SocialPostSyncDto(BaseModel):
     description: Optional[str] = None
     relatedMilestoneId: Optional[str] = None
     createdAt: str
+    # Opcional por compatibilidade: clientes legados nao enviam e a coluna
+    # usa default 'PUBLIC' (023_social_posts_visibility).
+    visibility: Optional[Literal["PUBLIC", "FAMILY"]] = None
 
 
 class PostReactionSyncDto(BaseModel):
@@ -516,8 +519,8 @@ async def sync_social_post(p: SocialPostSyncDto, uid: str = Depends(firebase_uid
     if not db_pool:
         return {"status": "offline_mode"}
     query = """
-    INSERT INTO social_posts (user_id, post_type, title, description, created_at)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO social_posts (user_id, post_type, title, description, created_at, visibility)
+    VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING id;
     """
     try:
@@ -525,7 +528,10 @@ async def sync_social_post(p: SocialPostSyncDto, uid: str = Depends(firebase_uid
     except Exception:
         c_at = datetime.utcnow()
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(query, p.userId, p.postType, p.title, p.description, c_at)
+        row = await conn.fetchrow(
+            query, p.userId, p.postType, p.title, p.description, c_at,
+            p.visibility or "PUBLIC",
+        )
     return {"status": "success", "id": str(row["id"])}
 
 
@@ -543,16 +549,31 @@ async def get_social_feed(
         return []
     query = """
     SELECT sp.id, sp.user_id, sp.post_type, sp.title, sp.description, sp.created_at,
+           sp.visibility,
            p.full_name as user_name, p.avatar_identifier,
-           (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = sp.id) as reaction_count
+           (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = sp.id) as reaction_count,
+           EXISTS(SELECT 1 FROM post_reactions pr
+                  WHERE pr.post_id = sp.id AND pr.user_id = $3) as has_user_reacted
     FROM social_posts sp
     JOIN profiles p ON sp.user_id = p.id
     WHERE sp.is_visible = TRUE
+      AND (
+          sp.visibility = 'PUBLIC'
+          OR sp.user_id = $3
+          OR EXISTS (
+              SELECT 1 FROM family_bindings b
+              WHERE b.status = 'ACTIVE'
+                AND (
+                    (b.patient_id = sp.user_id AND b.caregiver_id = $3)
+                    OR (b.caregiver_id = sp.user_id AND b.patient_id = $3)
+                )
+          )
+      )
     ORDER BY sp.created_at DESC
     LIMIT $1 OFFSET $2;
     """
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(query, limit, offset)
+        rows = await conn.fetch(query, limit, offset, uid)
         result = []
         for r in rows:
             d = dict(r)
