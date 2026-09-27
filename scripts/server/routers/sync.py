@@ -319,6 +319,9 @@ async def delete_profile(user_id: str, uid: str = Depends(firebase_uid)):
         target = uuid.UUID(user_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="ID de usuário inválido.")
+    # Diretorio de fotos validado ANTES de apagar o banco: id que nao resulte
+    # numa pasta segura dentro de avatars/ aborta com 400 sem mexer em nada.
+    avatar_dir = _avatar_user_dir(user_id)
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT id FROM profiles WHERE id = $1", target)
@@ -326,9 +329,9 @@ async def delete_profile(user_id: str, uid: str = Depends(firebase_uid)):
             raise HTTPException(status_code=404, detail="Perfil não encontrado.")
         await conn.execute("DELETE FROM profiles WHERE id = $1", target)
 
-    # LGPD: a foto de perfil e arquivo em disco (sem CASCADE) — remove o
-    # diretorio do usuario junto com a conta.
-    shutil.rmtree(os.path.join(AVATAR_UPLOADS_DIR, user_id), ignore_errors=True)
+    # LGPD: remove somente o diretorio ja validado e contido em
+    # AVATAR_UPLOADS_DIR (nunca um caminho montado a partir de string bruta).
+    shutil.rmtree(avatar_dir, ignore_errors=True)
 
     print(f"[LGPD] Conta excluída (Direito ao Esquecimento): {user_id}")
     return {"success": True, "deleted": True, "user_id": user_id}
@@ -343,9 +346,30 @@ AVATAR_MAX_BYTES = 5 * 1024 * 1024
 AVATAR_FILENAME_RE = re.compile(r"^[0-9a-f-]{36}\.(jpg|png|webp)$")
 
 
-def _avatar_file_path(user_id: str, filename: str) -> str:
+def _avatar_user_dir(user_id: str) -> str:
+    """Diretorio de fotos de um usuario — sempre DENTRO de AVATAR_UPLOADS_DIR.
+
+    Defesa em profundidade contra path traversal / exclusao de terceiros:
+    1) user_id e reduzido a [A-Za-z0-9_-] (sem '/', '\\', '.', '..');
+    2) o caminho resultante e resolvido com realpath;
+    3) exige-se que ele esteja sob AVATAR_UPLOADS_DIR — qualquer fuga
+       recusa a operacao com 400 antes de tocar em disco ou banco.
+    Quem chega aqui ja passou por require_owner/uuid (dono apenas).
+    """
     safe_user = re.sub(r"[^a-zA-Z0-9_-]", "", user_id)
-    return os.path.join(AVATAR_UPLOADS_DIR, safe_user, os.path.basename(filename))
+    if not safe_user:
+        raise HTTPException(status_code=400, detail="Identificador de usuário inválido.")
+    root = os.path.realpath(AVATAR_UPLOADS_DIR)
+    directory = os.path.realpath(os.path.join(root, safe_user))
+    if not directory.startswith(root + os.sep):
+        raise HTTPException(status_code=400, detail="Identificador de usuário inválido.")
+    return directory
+
+
+def _avatar_file_path(user_id: str, filename: str) -> str:
+    # basename corta qualquer tentativa de subida ('../', '..\\'); o diretorio
+    # ja passou pela checagem de contencao do helper.
+    return os.path.join(_avatar_user_dir(user_id), os.path.basename(filename))
 
 
 def _remove_avatar_file(path: str) -> None:
@@ -396,8 +420,8 @@ async def upload_profile_avatar(
     if extension is None:
         raise HTTPException(status_code=415, detail="Formato de foto não suportado (use JPEG, PNG ou WebP).")
 
-    safe_user = re.sub(r"[^a-zA-Z0-9_-]", "", user_id)
-    directory = os.path.join(AVATAR_UPLOADS_DIR, safe_user)
+    directory = _avatar_user_dir(user_id)
+    safe_user = os.path.basename(directory)
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT photo_url FROM profiles WHERE id = $1", user_id)
@@ -428,6 +452,7 @@ async def delete_profile_avatar(user_id: str, uid: str = Depends(firebase_uid)):
     db_pool = _state.db_pool
     if not db_pool:
         raise HTTPException(status_code=503, detail="Banco indisponível")
+    directory = _avatar_user_dir(user_id)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT photo_url FROM profiles WHERE id = $1", user_id)
         if not row:
@@ -440,7 +465,7 @@ async def delete_profile_avatar(user_id: str, uid: str = Depends(firebase_uid)):
     if previous:
         previous_name = previous.rsplit("/", 1)[-1]
         if AVATAR_FILENAME_RE.fullmatch(previous_name):
-            _remove_avatar_file(os.path.join(AVATAR_UPLOADS_DIR, re.sub(r"[^a-zA-Z0-9_-]", "", user_id), previous_name))
+            _remove_avatar_file(os.path.join(directory, previous_name))
     return {"status": "success", "photo_url": None}
 
 
