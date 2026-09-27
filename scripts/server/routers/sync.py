@@ -13,6 +13,7 @@ LGPD Art. 18 no delete de conta (ON DELETE CASCADE).
 """
 import base64
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,8 +29,10 @@ from api_identity import firebase_uid, require_owner, require_family_access
 from config import STORAGE_DIR, STORAGE_EXAMS_DIR, PUBLIC_API_BASE_URL
 from profile_contract import profile_upsert
 from security_defense import get_client_ip, sanitize_zero_trust_text
+from services.content_moderation import ModerationUnavailable, moderate_avatar
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # =============================================================
@@ -419,6 +422,24 @@ async def upload_profile_avatar(
     extension = AVATAR_ALLOWED_TYPES.get((file.content_type or "").lower())
     if extension is None:
         raise HTTPException(status_code=415, detail="Formato de foto não suportado (use JPEG, PNG ou WebP).")
+
+    # Gate de moderacao (ecossistema familiar): ANTES de tocar em disco ou
+    # banco. Foto aprovada = segue; reprovada = 422 com o motivo; falha de
+    # visao = 503 (fail-closed, nada e gravado).
+    try:
+        aprovada, motivo = await moderate_avatar(content, file.content_type or "image/jpeg")
+    except ModerationUnavailable:
+        logger.warning("[avatar] Moderacao indisponivel para user_id=%s — upload recusado", user_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível verificar a foto agora. Tente novamente em instantes.",
+        )
+    if not aprovada:
+        logger.info("[avatar] Foto reprovada na moderacao user_id=%s motivo=%s", user_id, motivo)
+        raise HTTPException(
+            status_code=422,
+            detail=motivo or "Foto não aprovada. Escolha outra imagem.",
+        )
 
     directory = _avatar_user_dir(user_id)
     safe_user = os.path.basename(directory)
