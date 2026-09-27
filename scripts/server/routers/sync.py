@@ -15,15 +15,17 @@ import base64
 import json
 import os
 import re
+import shutil
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from api_identity import firebase_uid, require_owner, require_family_access
-from config import STORAGE_EXAMS_DIR, PUBLIC_API_BASE_URL
+from config import STORAGE_DIR, STORAGE_EXAMS_DIR, PUBLIC_API_BASE_URL
 from profile_contract import profile_upsert
 from security_defense import get_client_ip, sanitize_zero_trust_text
 
@@ -324,8 +326,136 @@ async def delete_profile(user_id: str, uid: str = Depends(firebase_uid)):
             raise HTTPException(status_code=404, detail="Perfil não encontrado.")
         await conn.execute("DELETE FROM profiles WHERE id = $1", target)
 
+    # LGPD: a foto de perfil e arquivo em disco (sem CASCADE) — remove o
+    # diretorio do usuario junto com a conta.
+    shutil.rmtree(os.path.join(AVATAR_UPLOADS_DIR, user_id), ignore_errors=True)
+
     print(f"[LGPD] Conta excluída (Direito ao Esquecimento): {user_id}")
     return {"success": True, "deleted": True, "user_id": user_id}
+
+
+# =============================================================
+# FOTO DE PERFIL (avatar)
+# =============================================================
+AVATAR_UPLOADS_DIR = os.path.join(STORAGE_DIR, "avatars")
+AVATAR_ALLOWED_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+AVATAR_MAX_BYTES = 5 * 1024 * 1024
+AVATAR_FILENAME_RE = re.compile(r"^[0-9a-f-]{36}\.(jpg|png|webp)$")
+
+
+def _avatar_file_path(user_id: str, filename: str) -> str:
+    safe_user = re.sub(r"[^a-zA-Z0-9_-]", "", user_id)
+    return os.path.join(AVATAR_UPLOADS_DIR, safe_user, os.path.basename(filename))
+
+
+def _remove_avatar_file(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+@router.post("/api/profile/{user_id}/avatar", status_code=status.HTTP_201_CREATED)
+async def upload_profile_avatar(
+    user_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    uid: str = Depends(firebase_uid),
+):
+    """Sobe a foto de perfil do proprio usuario (apenas o dono).
+
+    Padrao ja usado nas fotos de medicamentos (care_os): upload
+    autenticado, limite de 5 MB, JPEG/PNG/WebP, arquivo em disco com
+    nome UUID. A foto fica visivel para qualquer usuario autenticado
+    via GET /api/files/avatars (o mural mostra autores nao vinculados).
+    """
+    require_owner(uid, user_id)
+    db_pool = _state.db_pool
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Banco indisponível")
+    client_ip = get_client_ip(request)
+    await _state.rate_limiter.check(
+        "avatar_upload_ip", client_ip, limit=10, window_seconds=60,
+        ip=client_ip, pool=db_pool,
+    )
+
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > AVATAR_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="A foto excede o limite de 5 MB.")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Content-Length inválido.") from exc
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="A foto enviada está vazia.")
+    if len(content) > AVATAR_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="A foto excede o limite de 5 MB.")
+    extension = AVATAR_ALLOWED_TYPES.get((file.content_type or "").lower())
+    if extension is None:
+        raise HTTPException(status_code=415, detail="Formato de foto não suportado (use JPEG, PNG ou WebP).")
+
+    safe_user = re.sub(r"[^a-zA-Z0-9_-]", "", user_id)
+    directory = os.path.join(AVATAR_UPLOADS_DIR, safe_user)
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT photo_url FROM profiles WHERE id = $1", user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Perfil não encontrado.")
+        os.makedirs(directory, exist_ok=True)
+        filename = str(uuid.uuid4()) + extension
+        with open(os.path.join(directory, filename), "wb") as target:
+            target.write(content)
+        photo_url = f"{PUBLIC_API_BASE_URL}/api/files/avatars/{safe_user}/{filename}"
+        await conn.execute(
+            "UPDATE profiles SET photo_url = $2, updated_at = NOW() WHERE id = $1",
+            user_id, photo_url,
+        )
+
+    previous = row.get("photo_url")
+    if previous:
+        previous_name = previous.rsplit("/", 1)[-1]
+        if AVATAR_FILENAME_RE.fullmatch(previous_name):
+            _remove_avatar_file(os.path.join(directory, previous_name))
+    return {"photo_url": photo_url}
+
+
+@router.delete("/api/profile/{user_id}/avatar")
+async def delete_profile_avatar(user_id: str, uid: str = Depends(firebase_uid)):
+    """Remove a foto de perfil — o cliente volta ao fallback de iniciais."""
+    require_owner(uid, user_id)
+    db_pool = _state.db_pool
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Banco indisponível")
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT photo_url FROM profiles WHERE id = $1", user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Perfil não encontrado.")
+        await conn.execute(
+            "UPDATE profiles SET photo_url = NULL, updated_at = NOW() WHERE id = $1",
+            user_id,
+        )
+    previous = row.get("photo_url")
+    if previous:
+        previous_name = previous.rsplit("/", 1)[-1]
+        if AVATAR_FILENAME_RE.fullmatch(previous_name):
+            _remove_avatar_file(os.path.join(AVATAR_UPLOADS_DIR, re.sub(r"[^a-zA-Z0-9_-]", "", user_id), previous_name))
+    return {"status": "success", "photo_url": None}
+
+
+@router.get("/api/files/avatars/{user_id}/{filename}")
+async def profile_avatar_file(user_id: str, filename: str, uid: str = Depends(firebase_uid)):
+    """Serve a foto de perfil para qualquer usuario autenticado.
+
+    O nome do arquivo e um UUID inguessavel (mesma postura das fotos de
+    medicamentos); nao exige vinculo familiar porque o mural mostra
+    autores de outros grupos.
+    """
+    path = _avatar_file_path(user_id, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Foto não encontrada.")
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"})
 
 
 # =============================================================
@@ -550,7 +680,7 @@ async def get_social_feed(
     query = """
     SELECT sp.id, sp.user_id, sp.post_type, sp.title, sp.description, sp.created_at,
            sp.visibility,
-           p.full_name as user_name, p.avatar_identifier,
+           p.full_name as user_name, p.avatar_identifier, p.photo_url,
            (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = sp.id) as reaction_count,
            EXISTS(SELECT 1 FROM post_reactions pr
                   WHERE pr.post_id = sp.id AND pr.user_id = $3) as has_user_reacted
