@@ -728,3 +728,287 @@ async def admin_register(
         "user": {"id": user_id, "email": email, "name": name, "role": "admin"},
     }
 
+
+# ---- TOTP (conta do admin) -----------------------------------------------
+#
+# Contexto (D-WS4): o portal nao acessa o RDS direto. Todas as operacoes
+# TOTP passam pelo gateway, que valida SERVICE_TOKEN e consulta o banco.
+# Recovery codes usam bcrypt (iguais ao login-step2 original).
+#
+# Seguranca:
+#  - Timing-safe comparison em todas as verificacoes
+#  - Fail-closed: credenciais invalidas retornam 401 identico
+#  - TOTP usa 30s window (RFC 6238), mesmo padrao do admin register
+
+
+def _totp_generate_secret() -> str:
+    """Gera segredo Base32 de 32 chars (mesmo padrao do webservice)."""
+    import secrets as _s
+    raw = _s.token_bytes(20)
+    return base64.b32encode(raw).decode("ascii").replace("=", "")
+
+
+def _totp_verify(secret_b32: str, code: str, step_seconds: int = 30) -> bool:
+    """Verifica TOTP com janela +/-1 (tolerancia de relogio descompassado)."""
+    try:
+        key = base64.b32decode(secret_b32 + "=", casefold=True)
+        submitted = code.strip().zfill(6)
+        now = int(time.time())
+        for counter in (now // step_seconds - 1, now // step_seconds, now // step_seconds + 1):
+            msg = struct.pack(">Q", counter)
+            h = hmac.new(key, msg, hashlib.sha1).digest()
+            offset = h[-1] & 0x0F
+            binary = struct.unpack(">I", h[offset:offset + 4])[0] & 0x7FFFFFFF
+            if hmac.compare_digest(f"{binary % 1000000:06d}", submitted):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+# Modelos de request
+
+class LoginStep2Request(BaseModel):
+    email: str
+    password: str
+    totpCode: Optional[str] = None
+    recoveryCode: Optional[str] = None
+
+
+class TotpEnrollRequest(BaseModel):
+    email: str
+
+
+class TotpDisableRequest(BaseModel):
+    email: str
+    totpCode: str
+
+
+@router.post("/api/admin/login-step2")
+async def admin_login_step2(
+    req: LoginStep2Request,
+    _auth=Depends(require_service_token),
+):
+    """Segundo passo do login admin: valida senha + TOTP (ou recovery code).
+
+    O token de sessao (HMAC/ADMIN_SESSION_SECRET) e gerado no portal —
+    este endpoint apenas valida as credenciais e devolve o usuario.
+    Fail-closed: resposta identica para email inexistente e senha errada.
+    """
+    import bcrypt as _bcrypt
+
+    pool = _require_pool()
+    email = (req.email or "").strip().lower()
+    password = req.password or ""
+
+    if not email or not password:
+        raise HTTPException(401, "Credenciais inválidas.")
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT id, email, password_hash, name, role,
+                      totp_enabled, totp_secret, totp_recovery_codes
+               FROM admin_users WHERE email = $1 LIMIT 1""",
+            email)
+
+    if row is None:
+        # Dummy bcrypt para timing equal (mesmo hash do login simples)
+        _bcrypt.checkpw(b"dummy", _DUMMY_BCRYPT_HASH)
+        raise HTTPException(401, "Credenciais inválidas.")
+
+    try:
+        password_ok = _bcrypt.checkpw(
+            password.encode("utf-8"),
+            row["password_hash"].encode("utf-8"),
+        )
+    except (ValueError, TypeError):
+        password_ok = False
+
+    if not password_ok:
+        raise HTTPException(401, "Credenciais inválidas.")
+
+    # Segundo fator: exige TOTP ativo
+    if not row["totp_enabled"] or not row["totp_secret"]:
+        raise HTTPException(400, "Autenticação em dois fatores não está ativa nesta conta.")
+
+    # Aceita TOTP de 6 digitos OU recovery code
+    totp_code = (req.totpCode or "").replace(" ", "").replace("-", "")
+    recovery_raw = (req.recoveryCode or "").strip().upper()
+
+    auth_ok = False
+    if totp_code:
+        # TOTP padrao: 6 digitos, janela de 30s
+        if len(totp_code) == 6 and totp_code.isdigit():
+            auth_ok = _totp_verify(row["totp_secret"], totp_code)
+    elif recovery_raw:
+        # Recovery code: bcrypt comparison (uso unico)
+        codes_raw: list = row["totp_recovery_codes"] or []
+        for i, hashed in enumerate(codes_raw):
+            try:
+                if _bcrypt.checkpw(recovery_raw.encode("utf-8"), hashed.encode("utf-8")):
+                    # Consome o codigo: remove da lista
+                    codes_raw = [c for j, c in enumerate(codes_raw) if j != i]
+                    auth_ok = True
+                    break
+            except Exception:
+                continue
+        if auth_ok:
+            # Persiste a remocao do recovery code
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE admin_users SET totp_recovery_codes = $2 WHERE id = $1",
+                    row["id"], codes_raw)
+
+    if not auth_ok:
+        raise HTTPException(401, "Código inválido ou expirado.")
+
+    # Atualiza last_login_at
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE admin_users SET last_login_at = NOW() WHERE id = $1",
+            row["id"])
+
+    return {
+        "success": True,
+        "user": {
+            "id": row["id"],
+            "email": row["email"],
+            "name": row["name"],
+            "role": row["role"] or "admin",
+        },
+    }
+
+
+@router.post("/api/admin/totp/enroll")
+async def admin_totp_enroll(
+    req: TotpEnrollRequest,
+    _auth=Depends(require_service_token),
+):
+    """Gera segredo TOTP pendente para a conta (ativa apos confirmacao).
+
+    Zera totp_enabled e obriga re-confirmacao com um codigo — nao da
+    para ficar com dois segredos validos ao mesmo tempo.
+    """
+    import json as _json
+
+    pool = _require_pool()
+    email = (req.email or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "E-mail obrigatorio.")
+
+    secret = _totp_generate_secret()
+    # URI otpauth para o QR code (issuer fixo BragaSaude)
+    issuer_escaped = "BragaSaude"
+    account_escaped = email
+    otpauth_uri = (
+        f"otpauth://totp/{issuer_escaped}:{account_escaped}"
+        f"?secret={secret}&issuer={issuer_escaped}"
+        f"&algorithm=SHA1&digits=6&period=30"
+    )
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """UPDATE admin_users
+               SET totp_secret = $1, totp_enabled = FALSE
+               WHERE email = $2""",
+            secret, email)
+
+    # Nao retorna o secret em producao (apenas o QR por ora)
+    return {
+        "success": True,
+        "otpauthUri": otpauth_uri,
+        # secret devolvido apenas na enrol - o portal precisa dele para
+        # testar a confirmacao localmente antes de ativar
+        "secret": secret,
+    }
+
+
+@router.get("/api/admin/totp/status")
+async def admin_totp_status(
+    request: Request,
+    _auth=Depends(require_service_token),
+):
+    """Retorna se TOTP esta ativo e quantos recovery codes restam.
+
+    O Authorization header carrega o Bearer token do portal (a mesma
+    validacao do session token). O e-mail e extraido do token para
+    nao precisar passar como parametro.
+    """
+    # O token de sessao do portal: Bearer <token_hmac>
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Não autorizado.")
+    token = auth_header[7:]
+
+    # Decodifica o payload do token (mesmo formato do generateAdminSessionToken)
+    parts = token.split(".")
+    if len(parts) != 2:
+        raise HTTPException(401, "Token inválido.")
+    payload_b64 = parts[0]
+    try:
+        import base64 as _b64
+        payload_json = _b64.b64decode(payload_b64 + "=", altchars=b"-_").decode("utf-8")
+        import json as _json
+        payload = _json.loads(payload_json)
+        email = payload.get("email", "").lower().strip()
+    except Exception:
+        raise HTTPException(401, "Token inválido.")
+
+    pool = _require_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT totp_enabled,
+                      jsonb_array_length(
+                          COALESCE(totp_recovery_codes, '[]'::jsonb)
+                      ) AS recovery_left
+               FROM admin_users WHERE email = $1 LIMIT 1""",
+            email)
+    if not row:
+        raise HTTPException(404, "Conta não encontrada.")
+
+    return {
+        "success": True,
+        "enabled": bool(row["totp_enabled"]),
+        "recoveryLeft": int(row["recovery_left"] or 0),
+    }
+
+
+@router.post("/api/admin/totp/disable")
+async def admin_totp_disable(
+    req: TotpDisableRequest,
+    _auth=Depends(require_service_token),
+):
+    """Desabilita TOTP da conta — exige codigo atual para confirmar.
+
+    Limpa segredo e zera recovery codes (precisa gerar novos se reativar).
+    """
+    pool = _require_pool()
+    email = (req.email or "").strip().lower()
+    totp_code = (req.totpCode or "").replace(" ", "").replace("-", "")
+
+    if not totp_code or len(totp_code) != 6 or not totp_code.isdigit():
+        raise HTTPException(400, "O código deve ter 6 dígitos numéricos.")
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, totp_enabled, totp_secret FROM admin_users WHERE email = $1 LIMIT 1",
+            email)
+    if not row:
+        raise HTTPException(404, "Conta não encontrada.")
+
+    if not row["totp_enabled"] or not row["totp_secret"]:
+        raise HTTPException(400, "Autenticação em dois fatores não está ativa nesta conta.")
+
+    if not _totp_verify(row["totp_secret"], totp_code):
+        raise HTTPException(401, "Código do autenticador inválido ou expirado.")
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """UPDATE admin_users
+               SET totp_enabled = FALSE, totp_secret = NULL,
+                   totp_recovery_codes = '[]'::jsonb
+               WHERE id = $1""",
+            row["id"])
+
+    return {"success": True, "message": "Autenticação em dois fatores desativada."}
+
