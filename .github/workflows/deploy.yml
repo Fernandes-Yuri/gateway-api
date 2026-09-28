@@ -2,7 +2,7 @@ name: Deploy to EC2
 
 on:
   push:
-    branches: [master, ci/deploy-via-ssm]
+    branches: [master]
 
 concurrency:
   group: production-deploy
