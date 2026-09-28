@@ -222,6 +222,13 @@ dentro do SQL do gateway, e `audit_logs.metadata` nunca é selecionado.
 
 ## 🚢 Deploy (Production)
 
+### Pipeline Automatizado (GitHub Actions & AWS SSM)
+
+O deploy para produção ocorre automaticamente a cada `git push` na branch `master` através do workflow `.github/workflows/deploy.yml`:
+1. **Lint e Testes Unitários:** Validação estática com Ruff e execução de toda a suíte de testes unitários.
+2. **Deploy via AWS SSM Run Command:** Acionado via AWS CLI com credenciais IAM dedicadas de privilégio mínimo (`AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`). O comando é despachado diretamente para o agente SSM da EC2 (`i-04728dd8094ed0e78`), executando o script `deploy.sh` com captura em tempo real de logs de saída e código de retorno (sem necessidade de porta SSH/22 aberta para a internet).
+3. **Controle de Concorrência:** Protegido pelo grupo `production-deploy` para impedir execuções simultâneas concorrentes.
+
 ### Systemd Service
 
 ```ini

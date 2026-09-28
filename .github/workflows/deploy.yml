@@ -2,7 +2,11 @@ name: Deploy to EC2
 
 on:
   push:
-    branches: [master]
+    branches: [master, ci/deploy-via-ssm]
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
   lint-and-test:
@@ -34,16 +38,52 @@ jobs:
     needs: lint-and-test
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            cd /home/ec2-user/braga-gateway
-            git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Fernandes-Yuri/gateway-api.git
-            git fetch origin master
-            git reset --hard origin/master
-            git remote set-url origin git@github.com:Fernandes-Yuri/gateway-api.git
-            bash deploy.sh
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      - name: Deploy via AWS SSM Run Command
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          echo "Disparando deploy na EC2 via AWS SSM..."
+          cat << EOF > /tmp/ssm_params.json
+          {
+            "commands": [
+              "runuser -u ec2-user -- git -C /home/ec2-user/braga-gateway remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/Fernandes-Yuri/gateway-api.git",
+              "runuser -u ec2-user -- git -C /home/ec2-user/braga-gateway fetch origin ${REF_NAME}",
+              "runuser -u ec2-user -- git -C /home/ec2-user/braga-gateway reset --hard origin/${REF_NAME}",
+              "runuser -u ec2-user -- git -C /home/ec2-user/braga-gateway remote set-url origin git@github.com:Fernandes-Yuri/gateway-api.git",
+              "runuser -u ec2-user -- bash /home/ec2-user/braga-gateway/deploy.sh"
+            ]
+          }
+          EOF
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "i-04728dd8094ed0e78" \
+            --document-name "AWS-RunShellScript" \
+            --parameters file:///tmp/ssm_params.json \
+            --query "Command.CommandId" \
+            --output text)
+          rm -f /tmp/ssm_params.json
+
+          echo "Comando SSM disparado com ID: $COMMAND_ID"
+          echo "Aguardando conclusao do script de deploy..."
+
+          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "i-04728dd8094ed0e78" || true
+
+          STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "i-04728dd8094ed0e78" --query "Status" --output text)
+          echo "Status final: $STATUS"
+
+          echo "=== SAIDA PADRAO (STDOUT) ==="
+          aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "i-04728dd8094ed0e78" --query "StandardOutputContent" --output text
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "=== ERRO (STDERR) ==="
+            aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "i-04728dd8094ed0e78" --query "StandardErrorContent" --output text
+            exit 1
+          fi
