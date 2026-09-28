@@ -52,6 +52,11 @@ class FeedbackReplyCreate(BaseModel):
     body: str
 
 
+class BlockedIpCreate(BaseModel):
+    ip: str
+    reason: str
+
+
 # ---- Autenticacao ------------------------------------------------------
 
 
@@ -506,6 +511,52 @@ async def list_blocked_ips_admin(
             "createdAt": r["created_at"].isoformat() if r["created_at"] else None,
         } for r in rows],
     }
+
+
+@router.post("/blocked-ips")
+async def create_blocked_ip(
+    _auth=Depends(require_service_token),
+    body: BlockedIpCreate = None,
+):
+    """Cria ou atualiza um bloqueio de IP manual na tabela security_blocked_ips.
+
+    O IP fica bloqueado por 24h a partir de agora. O campo violations e
+    setado para 3 para garantir que o middleware nao desbloqueie
+    automaticamente antes do prazo.
+    """
+    pool = _require_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO security_blocked_ips (ip, reason, violations, blocked_until, created_at, updated_at)
+            VALUES ($1, $2, 3, NOW() + INTERVAL '24 hours', NOW(), NOW())
+            ON CONFLICT (ip) DO UPDATE SET
+                reason = EXCLUDED.reason,
+                violations = 3,
+                blocked_until = NOW() + INTERVAL '24 hours',
+                updated_at = NOW();
+            """,
+            body.ip,
+            body.reason,
+        )
+    print(f"[ADMIN] IP bloqueado: {body.ip} | razao: {body.reason}")
+    return {"success": True, "ip": body.ip, "reason": body.reason}
+
+
+@router.delete("/blocked-ips/{ip}")
+async def delete_blocked_ip(
+    _auth=Depends(require_service_token),
+    ip: str = None,
+):
+    """Remove um IP da tabela security_blocked_ips, desbloqueando-o imediatamente."""
+    pool = _require_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM security_blocked_ips WHERE ip = $1",
+            ip,
+        )
+    print(f"[ADMIN] IP desbloqueado: {ip}")
+    return {"success": True, "ip": ip}
 
 
 # ---- Proxy de autenticacao (login) -------------------------------------
