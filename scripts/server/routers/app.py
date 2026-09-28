@@ -83,8 +83,6 @@ async def download_app_apk(token: Optional[str] = None):
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "releases", "latest.apk"),
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "releases", "BragaSaude.apk"),
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "releases", "latest.apk"),
-        "/home/yurifjs/projetos/braga-gateway/releases/BragaSaude.apk",
-        "/home/yurifjs/projetos/braga-gateway/releases/latest.apk",
     ]
     for apk_path in candidates:
         if os.path.exists(apk_path) and os.path.getsize(apk_path) > 0:
