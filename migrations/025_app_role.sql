@@ -22,8 +22,8 @@ BEGIN
 END
 $$;
 
--- Acesso ao banco e schema
-GRANT CONNECT ON DATABASE braga_saude TO bragasaude_app;
+-- Acesso ao banco e schema (o banco real se chama bragasaude)
+GRANT CONNECT ON DATABASE bragasaude TO bragasaude_app;
 GRANT USAGE ON SCHEMA public TO bragasaude_app;
 
 -- DML: SELECT, INSERT, UPDATE, DELETE em todas as tabelas existentes

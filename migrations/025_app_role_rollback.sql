@@ -9,7 +9,7 @@ REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM bragasaude_app;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM bragasaude_app;
 REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM bragasaude_app;
 REVOKE USAGE ON SCHEMA public FROM bragasaude_app;
-REVOKE CONNECT ON DATABASE braga_saude FROM bragasaude_app;
+REVOKE CONNECT ON DATABASE bragasaude FROM bragasaude_app;
 
 -- Remove default privileges futuros
 ALTER DEFAULT PRIVILEGES IN SCHEMA public

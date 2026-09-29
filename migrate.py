@@ -23,6 +23,12 @@ for env_candidate in [
         load_dotenv(env_candidate)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+# DSN dedicada do executor de migrations (T-06): as migrations exigem DDL e
+# rodam com a role de migracao (superuser). O app conecta com DATABASE_URL,
+# que e a role limitada bragasaude_app (DML apenas). Sem esta variavel o
+# runner cai no DATABASE_URL e o preflight de privilegio acusa a falta de
+# CREATE antes de aplicar qualquer migration.
+MIGRATIONS_DATABASE_URL = os.getenv("MIGRATIONS_DATABASE_URL") or DATABASE_URL
 
 
 def _strip_transaction_control(sql: str) -> str:
@@ -67,6 +73,40 @@ def _strip_transaction_control(sql: str) -> str:
     return "\n".join(out)
 
 
+def _arquivos_de_migration() -> list[Path]:
+    """Ordena os .sql do diretorio, excluindo rollbacks.
+
+    `025_app_role_rollback.sql` mora em migrations/ por convencao, mas o
+    runner percorre todos os `*.sql`: sem este filtro o rollback roda logo
+    depois da migration correspondente e desfaz o que ela acabou de criar
+    (DROP ROLE no meio do deploy).
+    """
+    return sorted(
+        f for f in MIGRATIONS_DIR.glob("*.sql") if not f.stem.endswith("_rollback")
+    )
+
+
+async def _exige_privilegio_ddl(conn) -> None:
+    """Aborta com mensagem acionavel quando a role nao pode executar DDL.
+
+    Sem este preflight a falha aparecia como InsufficientPrivilegeError no
+    meio do traceback (permission denied for schema public), sem dizer qual
+    variavel corrigir.
+    """
+    can_create = await conn.fetchval(
+        "SELECT has_schema_privilege(current_user, 'public', 'CREATE')"
+    )
+    if can_create:
+        return
+
+    user = await conn.fetchval("SELECT current_user")
+    print(f"[Error] Role '{user}' nao possui CREATE no schema 'public'.")
+    print("[Error] Migrations exigem DDL: defina MIGRATIONS_DATABASE_URL no .env")
+    print("[Error] com a role de migracao (superuser) e reinicie o servico.")
+    print("[Error] DATABASE_URL deve continuar sendo a role limitada da aplicacao.")
+    sys.exit(1)
+
+
 async def get_applied_migrations(conn) -> set:
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -78,14 +118,15 @@ async def get_applied_migrations(conn) -> set:
     return {r["version"] for r in rows}
 
 async def run_status():
-    if not DATABASE_URL:
+    if not MIGRATIONS_DATABASE_URL:
         print("[Error] DATABASE_URL nao configurada.")
         sys.exit(1)
 
-    conn = await asyncpg.connect(DATABASE_URL)
+    conn = await asyncpg.connect(MIGRATIONS_DATABASE_URL)
     try:
+        await _exige_privilegio_ddl(conn)
         applied = await get_applied_migrations(conn)
-        sql_files = sorted(MIGRATIONS_DIR.glob("*.sql"))
+        sql_files = _arquivos_de_migration()
         print("\n=== Status das Migrations do Banco ===")
         for f in sql_files:
             v = f.stem
@@ -95,7 +136,7 @@ async def run_status():
     finally:
         await conn.close()
 
-def _psql_dsn_without_password() -> tuple[str, dict]:
+def _psql_dsn_without_password(dsn: str | None = None) -> tuple[str, dict]:
     """AUD-G(M): devolve (dsn sem senha, env com PGPASSWORD).
 
     Antes a URL completa — incluindo a senha do RDS — era passada como
@@ -105,7 +146,7 @@ def _psql_dsn_without_password() -> tuple[str, dict]:
     import urllib.parse
 
     env = dict(os.environ)
-    parsed = urllib.parse.urlparse(DATABASE_URL)
+    parsed = urllib.parse.urlparse(dsn or MIGRATIONS_DATABASE_URL)
     if parsed.password:
         env["PGPASSWORD"] = urllib.parse.unquote(parsed.password)
     # Reconstrói o DSN SEM a senha: scheme://user@host:port/path?params
@@ -119,7 +160,7 @@ def _psql_dsn_without_password() -> tuple[str, dict]:
 
 
 async def run_migrate():
-    if not DATABASE_URL:
+    if not MIGRATIONS_DATABASE_URL:
         print("[Error] DATABASE_URL nao configurada.")
         sys.exit(1)
 
@@ -127,7 +168,7 @@ async def run_migrate():
         print(f"[Error] Diretorio de migrations nao encontrado: {MIGRATIONS_DIR}")
         sys.exit(1)
 
-    conn = await asyncpg.connect(DATABASE_URL)
+    conn = await asyncpg.connect(MIGRATIONS_DATABASE_URL)
     try:
         # AUD-G(M): SEM advisory lock, duas execucoes concorrentes do migrate
         # (deploy + cron, ou dois pods subindo juntos) liam a mesma lista de
@@ -135,12 +176,15 @@ async def run_migrate():
         # mascara a maioria, mas um ALTER ou CREATE INDEX concorrente pode
         # corromper o schema_migrations e deixar os nodes em versoes diferentes.
         # Lock por-sessao; liberado no finally.
+        # Falha previa e legivel: a role conectada precisa de DDL.
+        await _exige_privilegio_ddl(conn)
+
         LOCK_KEY = -872314509  # chave fixa, BragaSaude migrations
         await conn.execute("SELECT pg_advisory_lock($1)", LOCK_KEY)
         print("[Migrations] Lock consultivo obtido.")
 
         applied = await get_applied_migrations(conn)
-        sql_files = sorted(MIGRATIONS_DIR.glob("*.sql"))
+        sql_files = _arquivos_de_migration()
         pending = [f for f in sql_files if f.stem not in applied]
 
         if not pending:
