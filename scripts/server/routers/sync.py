@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from api_identity import firebase_uid, require_owner, require_family_access
 from config import STORAGE_DIR, STORAGE_EXAMS_DIR, PUBLIC_API_BASE_URL
 from profile_contract import profile_upsert
+from community_identity import normalize_nickname
 from security_defense import get_client_ip, sanitize_zero_trust_text
 from services.content_moderation import ModerationUnavailable, moderate_avatar
 
@@ -711,6 +712,40 @@ async def sync_social_post(p: SocialPostSyncDto, uid: str = Depends(firebase_uid
     return {"status": "success", "id": str(row["id"])}
 
 
+class CommunityNicknameDto(BaseModel):
+    nickname: str = Field(default="", max_length=24)
+
+
+@router.get("/api/community/profile")
+async def get_community_profile(uid: str = Depends(firebase_uid)):
+    if not _state.db_pool:
+        raise HTTPException(status_code=503, detail="Banco indisponível")
+    async with _state.db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT community_nickname FROM profiles WHERE id = $1", uid)
+    if not row:
+        raise HTTPException(status_code=404, detail="Perfil não encontrado")
+    return {"nickname": row["community_nickname"] or ""}
+
+
+@router.post("/api/community/profile")
+async def save_community_profile(p: CommunityNicknameDto, uid: str = Depends(firebase_uid)):
+    try:
+        nickname = normalize_nickname(p.nickname)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not _state.db_pool:
+        raise HTTPException(status_code=503, detail="Banco indisponível")
+    await _state.rate_limiter.check("community_nickname", uid, limit=10, window_seconds=60, pool=_state.db_pool)
+    async with _state.db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE profiles SET community_nickname = $2, updated_at = NOW() WHERE id = $1 RETURNING community_nickname",
+            uid, nickname or None,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Perfil não encontrado")
+    return {"nickname": row["community_nickname"] or ""}
+
+
 @router.get("/api/social/feed")
 async def get_social_feed(
     limit: int = Query(30, ge=1, le=100, description="Máximo 100 posts por página"),
@@ -726,7 +761,7 @@ async def get_social_feed(
     query = """
     SELECT sp.id, sp.user_id, sp.post_type, sp.title, sp.description, sp.created_at,
            sp.visibility,
-           p.full_name as user_name, p.avatar_identifier, p.photo_url,
+           p.full_name as user_name, p.community_nickname as user_nickname, p.avatar_identifier, p.photo_url,
            (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = sp.id) as reaction_count,
            EXISTS(SELECT 1 FROM post_reactions pr
                   WHERE pr.post_id = sp.id AND pr.user_id = $3) as has_user_reacted
