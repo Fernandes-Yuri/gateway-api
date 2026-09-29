@@ -8,10 +8,8 @@ Fallback: itens sem resultado são marcados com needs_manual=TRUE.
 """
 import asyncio
 import json
-import os
-import time
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any
 
 import httpx
 

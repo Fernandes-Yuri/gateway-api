@@ -6,12 +6,11 @@ Endpoints:
 """
 import os
 import secrets
-from typing import Any, Dict, List, Optional
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from security_defense import get_client_ip
-from config import DATABASE_URL
 
 router = APIRouter()
 
