@@ -13,8 +13,13 @@ Metricas (Frente 2): aggregate-only. Nenhuma linha de usuario cruza;
 bucket com menos de MIN_BUCKET usuários e suprimido/fundido DENTRO do
 SQL do gateway — o portal so recebe numeros que nao isolam ninguem.
 """
+import base64
+import hashlib
+import hmac
 import os
 import secrets
+import struct
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -551,7 +556,7 @@ async def delete_blocked_ip(
     """Remove um IP da tabela security_blocked_ips, desbloqueando-o imediatamente."""
     pool = _require_pool()
     async with pool.acquire() as conn:
-        result = await conn.execute(
+        await conn.execute(
             "DELETE FROM security_blocked_ips WHERE ip = $1",
             ip,
         )
@@ -889,7 +894,6 @@ async def admin_totp_enroll(
     Zera totp_enabled e obriga re-confirmacao com um codigo — nao da
     para ficar com dois segredos validos ao mesmo tempo.
     """
-    import json as _json
 
     pool = _require_pool()
     email = (req.email or "").strip().lower()
