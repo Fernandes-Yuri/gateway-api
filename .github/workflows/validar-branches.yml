@@ -1,0 +1,20 @@
+name: Validar alterações
+on:
+  push:
+    branches: ['feat/t17-04-nome-comunitario']
+  pull_request:
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: ruff check scripts/server/
+      - run: python -m unittest discover scripts/server/ "test_*.py"
