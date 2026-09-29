@@ -455,7 +455,7 @@ async def upload_profile_avatar(
             target.write(content)
         photo_url = f"{PUBLIC_API_BASE_URL}/api/files/avatars/{safe_user}/{filename}"
         await conn.execute(
-            "UPDATE profiles SET photo_url = $2, updated_at = NOW() WHERE id = $1",
+            "UPDATE profiles SET photo_url = $2, avatar_identifier = NULL, updated_at = NOW() WHERE id = $1",
             user_id, photo_url,
         )
 
@@ -480,7 +480,7 @@ async def delete_profile_avatar(user_id: str, uid: str = Depends(firebase_uid)):
         if not row:
             raise HTTPException(status_code=404, detail="Perfil não encontrado.")
         await conn.execute(
-            "UPDATE profiles SET photo_url = NULL, updated_at = NOW() WHERE id = $1",
+            "UPDATE profiles SET photo_url = NULL, avatar_identifier = NULL, updated_at = NOW() WHERE id = $1",
             user_id,
         )
     previous = row.get("photo_url")
