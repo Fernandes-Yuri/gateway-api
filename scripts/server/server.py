@@ -73,6 +73,7 @@ from routers import whatsapp as whatsapp_router
 # Render consome estes endpoints e deixa de acessar o RDS diretamente.
 from routers import admin as admin_router
 from routers import care_os as care_os_router
+from routers import catalog as catalog_router
 from services.care_automations import (
     send_nightly_bulletins,
     send_pattern_break_alerts,
@@ -352,7 +353,7 @@ class FamilyMessageSyncDto(BaseModel):
 # 503/offline_mode em producao. (Detectado na revisao pre-push: os testes
 # locais passavam justamente por esperarem pool None offline.)
 _POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
-                 sync_router, whatsapp_router, admin_router, care_os_router)
+                 sync_router, whatsapp_router, admin_router, care_os_router, catalog_router)
 
 
 def _propagate_db_pool():
@@ -398,6 +399,12 @@ async def startup():
                     await conn.execute("SELECT expire_pending_confirmations()")
             except Exception as e:
                 print(f"[Startup] Aviso: função expire_pending_confirmations() indisponível: {e}")
+
+            try:
+                from services.meli_price_fetcher import seed_inicial
+                await seed_inicial(db_pool)
+            except Exception as e:
+                print(f"[Startup] Aviso ao rodar seed_inicial de alimentos: {e}")
 
         # Pass the coroutine directly: a sync lambda runs in an executor without an event loop.
         if db_pool and HAS_SCHEDULER:
@@ -501,7 +508,19 @@ async def startup():
                     args=[_periodo], id=_id,
                     replace_existing=True, max_instances=1, coalesce=True,
                 )
-            print("[Scheduler] Rotinas pró-ativas registradas: 09h00, 14h30, 20h30.")
+            async def _meli_price_refresh_job():
+                try:
+                    from services.meli_price_fetcher import atualizar_precos
+                    await atualizar_precos(db_pool)
+                except Exception as err:
+                    print(f"[MELI] Falha no job semanal de preços: {err}")
+
+            retention_scheduler.add_job(
+                _meli_price_refresh_job,
+                CronTrigger(day_of_week="mon", hour=3, minute=0, timezone="America/Sao_Paulo"),
+                id="meli_grocery_price_weekly", replace_existing=True, max_instances=1, coalesce=True,
+            )
+            print("[Scheduler] Rotinas pró-ativas registradas: 09h00, 14h30, 20h30. Job semanal Meli registrado: Seg 03h00.")
             retention_scheduler.start()
 
     if HAS_WHATSAPP and hasattr(whatsapp_router, "init_fast_lane_audio_cache"):
@@ -817,6 +836,9 @@ app.include_router(admin_router.router)
 
 care_os_router.configure_state(db_pool=None, public_base_url=PUBLIC_API_BASE_URL)
 app.include_router(care_os_router.router)
+
+catalog_router.configure_state(db_pool=None)
+app.include_router(catalog_router.router)
 
 # Configuracao dos modulos core extraidos (Fase A passo 6).
 # dispatch_clinical_alert continua definido neste arquivo (compartilhado
