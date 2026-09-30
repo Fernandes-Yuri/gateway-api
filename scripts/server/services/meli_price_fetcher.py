@@ -103,7 +103,7 @@ async def atualizar_precos(db_pool) -> Dict[str, int]:
                             price_max      = CASE WHEN grocery_price_cache.source = 'manual' THEN grocery_price_cache.price_max ELSE EXCLUDED.price_max END,
                             source         = grocery_price_cache.source,
                             results_count  = EXCLUDED.results_count,
-                            updated_at     = now(),
+                            updated_at     = CASE WHEN grocery_price_cache.source = 'manual' THEN grocery_price_cache.updated_at ELSE now() END,
                             needs_manual   = CASE WHEN grocery_price_cache.source = 'manual' THEN FALSE ELSE EXCLUDED.needs_manual END
                         """,
                         food_name, search_term,

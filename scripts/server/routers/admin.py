@@ -16,6 +16,7 @@ SQL do gateway — o portal so recebe numeros que nao isolam ninguem.
 import base64
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import struct
@@ -23,9 +24,10 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from security_defense import get_client_ip
+from portal_auth_security import auth_limit, master_step, consume_master
 
 router = APIRouter()
 
@@ -104,6 +106,29 @@ def _require_pool():
     if _state.db_pool is None:
         raise HTTPException(503, "Banco de dados indisponível.")
     return _state.db_pool
+
+
+def _portal_identity(request: Request) -> str:
+    """Identidade assinada pelo portal, vinculada à rota e válida por 60s.
+
+    O portal só emite esta declaração depois de validar a sessão do usuário.
+    Não confundir com Authorization: esse header contém SERVICE_TOKEN.
+    """
+    try:
+        encoded, signature = request.headers.get("X-Admin-Identity", "").split(".")
+        expected = hmac.new(_service_token().encode(), encoded.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("assinatura")
+        payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        now = time.time()
+        if payload["path"] != request.url.path or not now < payload["exp"] <= now + 60:
+            raise ValueError("escopo ou validade")
+        email = payload["email"]
+        if not isinstance(email, str) or not email or len(email) > 254:
+            raise ValueError("identidade")
+        return email.strip().lower()
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(401, "Identidade administrativa inválida.")
 
 
 def _row_to_feedback(row) -> dict:
@@ -608,9 +633,11 @@ async def admin_login(
         # Mesma mensagem do fail-closed abaixo — nao vaza qual faltou.
         raise HTTPException(401, "Credenciais inválidas.")
 
+    await auth_limit(pool, "admin_login", email, 10, 300)
+
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            """SELECT id, email, password_hash, role, totp_enabled
+            """SELECT id, email, password_hash, role, totp_enabled, session_version
                FROM admin_users WHERE email = $1 LIMIT 1""",
             email)
 
@@ -642,6 +669,7 @@ async def admin_login(
             "email": row["email"],
             "role": row["role"] or "admin",
             "totp_enabled": bool(row["totp_enabled"]) if "totp_enabled" in row.keys() else False,
+            "session_version": row["session_version"],
         },
     }
 
@@ -667,10 +695,6 @@ async def admin_register(
     confiavel, e o hash nunca cruza de volta.
     """
     import bcrypt as _bcrypt
-    import hmac as _hmac
-    import base64 as _base64
-    import struct as _struct
-    import time as _time
 
     pool = _require_pool()
     email = (req.email or "").strip().lower()
@@ -682,35 +706,12 @@ async def admin_register(
         raise HTTPException(400, "O nome deve ter no mínimo 2 caracteres.")
     if not email or "@" not in email:
         raise HTTPException(400, "Informe um endereço de e-mail válido.")
-    if len(password) < 8:
+    if len(password) < 8 or len(password.encode("utf-8")) > 72:
         raise HTTPException(400, "A senha deve ter no mínimo 8 caracteres.")
 
-    # 2. TOTP master — prova de autorizacao (RFC 6238, mesma logica do portal)
-    secret_b32 = os.getenv("ADMIN_TOTP_SECRET", "").strip().replace(" ", "").upper()
-    if not secret_b32:
-        raise HTTPException(503, "ADMIN_TOTP_SECRET não configurado no gateway.")
-    try:
-        key = _base64.b32decode(secret_b32, casefold=True)
-    except Exception:
-        raise HTTPException(503, "ADMIN_TOTP_SECRET inválido no gateway (base32).")
-
-    code = (req.master_totp_code or "").replace(" ", "").replace("-", "")
-    if len(code) != 6 or not code.isdigit():
-        raise HTTPException(400, "O código de autorização deve conter 6 dígitos numéricos.")
-
-    # Janela de +/-1 passo de 30s (tolerancia de relogio, igual ao portal)
-    now = int(_time.time())
-    ok = False
-    for counter in (now // 30 - 1, now // 30, now // 30 + 1):
-        msg = _struct.pack(">Q", counter)
-        h = _hmac.new(key, msg, "sha1").digest()
-        offset = h[-1] & 0x0F
-        binary = _struct.unpack(">I", h[offset:offset + 4])[0] & 0x7FFFFFFF
-        if f"{binary % 1000000:06d}" == code:
-            ok = True
-            break
-    if not ok:
-        raise HTTPException(401, "Código de autorização do Google Authenticator inválido ou expirado.")
+    # Mesmo segredo mestre e limite compartilhado com a recuperação.
+    await auth_limit(pool, "master", "global", 5, 60)
+    step, fingerprint = master_step(req.master_totp_code)
 
     # 3. Duplicidade
     async with pool.acquire() as conn:
@@ -718,6 +719,8 @@ async def admin_register(
             "SELECT id FROM admin_users WHERE email = $1 LIMIT 1", email)
         if existing:
             raise HTTPException(409, "Já existe um usuário cadastrado com este e-mail.")
+
+        await consume_master(conn, step, fingerprint)
 
         # 4. Hash bcrypt custo 12 (mesmo do portal) + insert
         password_hash = _bcrypt.hashpw(
@@ -756,8 +759,11 @@ def _totp_generate_secret() -> str:
 def _totp_verify(secret_b32: str, code: str, step_seconds: int = 30) -> bool:
     """Verifica TOTP com janela +/-1 (tolerancia de relogio descompassado)."""
     try:
-        key = base64.b32decode(secret_b32 + "=", casefold=True)
-        submitted = code.strip().zfill(6)
+        clean = secret_b32.strip().replace(" ", "").rstrip("=").upper()
+        key = base64.b32decode(clean + "=" * (-len(clean) % 8), casefold=True)
+        submitted = code.strip()
+        if len(submitted) != 6 or not submitted.isascii() or not submitted.isdigit():
+            return False
         now = int(time.time())
         for counter in (now // step_seconds - 1, now // step_seconds, now // step_seconds + 1):
             msg = struct.pack(">Q", counter)
@@ -789,6 +795,34 @@ class TotpDisableRequest(BaseModel):
     totpCode: str
 
 
+@router.post("/api/admin/totp/confirm")
+async def admin_totp_confirm(
+    req: TotpDisableRequest, request: Request, _auth=Depends(require_service_token),
+):
+    import asyncio
+    import bcrypt
+
+    email = _portal_identity(request)
+    if email != req.email.strip().lower():
+        raise HTTPException(403, "Identidade divergente.")
+    pool = _require_pool()
+    await auth_limit(pool, "totp_confirm", email, 5, 300)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT id, totp_enabled, totp_secret FROM admin_users WHERE email = $1 FOR UPDATE", email)
+            if not row or row["totp_enabled"] or not row["totp_secret"]:
+                raise HTTPException(409, "Nenhum vínculo pendente. Gere um novo QR code.")
+            if not _totp_verify(row["totp_secret"], req.totpCode):
+                raise HTTPException(401, "Código inválido ou expirado. Verifique o horário do celular.")
+            codes = ["-".join(secrets.token_hex(2).upper() for _ in range(3)) for _ in range(8)]
+            hashes = [await asyncio.to_thread(bcrypt.hashpw, c.encode(), bcrypt.gensalt(10)) for c in codes]
+            await conn.execute(
+                "UPDATE admin_users SET totp_enabled = TRUE, totp_recovery_codes = $2 WHERE id = $1",
+                row["id"], [h.decode() for h in hashes])
+    return {"success": True, "recoveryCodes": codes}
+
+
 @router.post("/api/admin/login-step2")
 async def admin_login_step2(
     req: LoginStep2Request,
@@ -809,10 +843,12 @@ async def admin_login_step2(
     if not email or not password:
         raise HTTPException(401, "Credenciais inválidas.")
 
+    await auth_limit(pool, "admin_login_step2", email, 10, 300)
+
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """SELECT id, email, password_hash, name, role,
-                      totp_enabled, totp_secret, totp_recovery_codes
+                      totp_enabled, totp_secret, totp_recovery_codes, session_version
                FROM admin_users WHERE email = $1 LIMIT 1""",
             email)
 
@@ -852,6 +888,7 @@ async def admin_login_step2(
             try:
                 if _bcrypt.checkpw(recovery_raw.encode("utf-8"), hashed.encode("utf-8")):
                     # Consome o codigo: remove da lista
+                    original_codes = list(codes_raw)
                     codes_raw = [c for j, c in enumerate(codes_raw) if j != i]
                     auth_ok = True
                     break
@@ -860,9 +897,11 @@ async def admin_login_step2(
         if auth_ok:
             # Persiste a remocao do recovery code
             async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE admin_users SET totp_recovery_codes = $2 WHERE id = $1",
-                    row["id"], codes_raw)
+                consumed = await conn.fetchval(
+                    """UPDATE admin_users SET totp_recovery_codes = $2
+                       WHERE id = $1 AND totp_recovery_codes = $3 RETURNING id""",
+                    row["id"], codes_raw, original_codes)
+                auth_ok = consumed is not None
 
     if not auth_ok:
         raise HTTPException(401, "Código inválido ou expirado.")
@@ -879,6 +918,7 @@ async def admin_login_step2(
             "id": row["id"],
             "email": row["email"],
             "name": row["name"],
+            "session_version": row["session_version"],
             "role": row["role"] or "admin",
         },
     }
@@ -887,23 +927,28 @@ async def admin_login_step2(
 @router.post("/api/admin/totp/enroll")
 async def admin_totp_enroll(
     req: TotpEnrollRequest,
+    request: Request,
     _auth=Depends(require_service_token),
 ):
     """Gera segredo TOTP pendente para a conta (ativa apos confirmacao).
 
-    Zera totp_enabled e obriga re-confirmacao com um codigo — nao da
-    para ficar com dois segredos validos ao mesmo tempo.
+    Somente contas sem 2FA ativo podem gerar outro segredo pendente.
+    Um vínculo ativo exige desativação autorizada antes da substituição.
     """
 
     pool = _require_pool()
-    email = (req.email or "").strip().lower()
+    email = _portal_identity(request)
+    if email != req.email.strip().lower():
+        raise HTTPException(403, "Identidade divergente.")
+    await auth_limit(pool, "totp_enroll", email, 5, 300)
     if not email:
         raise HTTPException(400, "E-mail obrigatorio.")
 
     secret = _totp_generate_secret()
     # URI otpauth para o QR code (issuer fixo BragaSaude)
     issuer_escaped = "BragaSaude"
-    account_escaped = email
+    from urllib.parse import quote
+    account_escaped = quote(email, safe="")
     otpauth_uri = (
         f"otpauth://totp/{issuer_escaped}:{account_escaped}"
         f"?secret={secret}&issuer={issuer_escaped}"
@@ -911,18 +956,19 @@ async def admin_totp_enroll(
     )
 
     async with pool.acquire() as conn:
-        await conn.execute(
+        changed = await conn.fetchval(
             """UPDATE admin_users
-               SET totp_secret = $1, totp_enabled = FALSE
-               WHERE email = $2""",
+               SET totp_secret = $1, totp_recovery_codes = '{}'::text[]
+               WHERE email = $2 AND totp_enabled = FALSE RETURNING id""",
             secret, email)
+        if not changed:
+            raise HTTPException(409, "Conta inexistente ou 2FA já ativo. Desative com o código atual antes de vincular novamente.")
 
-    # Nao retorna o secret em producao (apenas o QR por ora)
+    # O segredo só é entregue à própria conta durante o vínculo.
     return {
         "success": True,
         "otpauthUri": otpauth_uri,
-        # secret devolvido apenas na enrol - o portal precisa dele para
-        # testar a confirmacao localmente antes de ativar
+        # Permite configuração manual do autenticador além do QR code.
         "secret": secret,
     }
 
@@ -934,37 +980,17 @@ async def admin_totp_status(
 ):
     """Retorna se TOTP esta ativo e quantos recovery codes restam.
 
-    O Authorization header carrega o Bearer token do portal (a mesma
-    validacao do session token). O e-mail e extraido do token para
-    nao precisar passar como parametro.
+    Authorization autentica o serviço; X-Admin-Identity contém a
+    identidade assinada da sessão validada pelo portal, com escopo e expiração.
     """
-    # O token de sessao do portal: Bearer <token_hmac>
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(401, "Não autorizado.")
-    token = auth_header[7:]
-
-    # Decodifica o payload do token (mesmo formato do generateAdminSessionToken)
-    parts = token.split(".")
-    if len(parts) != 2:
-        raise HTTPException(401, "Token inválido.")
-    payload_b64 = parts[0]
-    try:
-        import base64 as _b64
-        payload_json = _b64.b64decode(payload_b64 + "=", altchars=b"-_").decode("utf-8")
-        import json as _json
-        payload = _json.loads(payload_json)
-        email = payload.get("email", "").lower().strip()
-    except Exception:
-        raise HTTPException(401, "Token inválido.")
+    # Valida a assinatura e o escopo da identidade, separadamente do token de serviço.
+    email = _portal_identity(request)
 
     pool = _require_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """SELECT totp_enabled,
-                      jsonb_array_length(
-                          COALESCE(totp_recovery_codes, '[]'::jsonb)
-                      ) AS recovery_left
+                      cardinality(COALESCE(totp_recovery_codes, '{}'::text[])) AS recovery_left
                FROM admin_users WHERE email = $1 LIMIT 1""",
             email)
     if not row:
@@ -980,6 +1006,7 @@ async def admin_totp_status(
 @router.post("/api/admin/totp/disable")
 async def admin_totp_disable(
     req: TotpDisableRequest,
+    request: Request,
     _auth=Depends(require_service_token),
 ):
     """Desabilita TOTP da conta — exige codigo atual para confirmar.
@@ -987,7 +1014,10 @@ async def admin_totp_disable(
     Limpa segredo e zera recovery codes (precisa gerar novos se reativar).
     """
     pool = _require_pool()
-    email = (req.email or "").strip().lower()
+    email = _portal_identity(request)
+    if email != req.email.strip().lower():
+        raise HTTPException(403, "Identidade divergente.")
+    await auth_limit(pool, "totp_disable", email, 5, 300)
     totp_code = (req.totpCode or "").replace(" ", "").replace("-", "")
 
     if not totp_code or len(totp_code) != 6 or not totp_code.isdigit():
@@ -1007,12 +1037,90 @@ async def admin_totp_disable(
         raise HTTPException(401, "Código do autenticador inválido ou expirado.")
 
     async with pool.acquire() as conn:
-        await conn.execute(
+        changed = await conn.fetchval(
             """UPDATE admin_users
                SET totp_enabled = FALSE, totp_secret = NULL,
-                   totp_recovery_codes = '[]'::jsonb
-               WHERE id = $1""",
-            row["id"])
+                   totp_recovery_codes = '{}'::text[]
+               WHERE id = $1 AND totp_secret = $2 AND totp_enabled = TRUE RETURNING id""",
+            row["id"], row["totp_secret"])
+        if not changed:
+            raise HTTPException(409, "O vínculo mudou. Atualize a página.")
 
     return {"success": True, "message": "Autenticação em dois fatores desativada."}
+
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=8, max_length=72)
+    master_totp_code: str = Field(min_length=6, max_length=6)
+
+
+@router.post("/api/admin/password-reset")
+async def admin_password_reset(req: PasswordResetRequest, _auth=Depends(require_service_token)):
+    import asyncio
+    import bcrypt
+
+    pool = _require_pool()
+    # Global: trocar o e-mail ou o IP não aumenta as tentativas sobre o segredo mestre.
+    await auth_limit(pool, "master", "global", 5, 60)
+    step, fingerprint = master_step(req.master_totp_code)
+    if len(req.password.encode("utf-8")) > 72:
+        raise HTTPException(400, "A senha excede 72 bytes.")
+    hashed = await asyncio.to_thread(bcrypt.hashpw, req.password.encode(), bcrypt.gensalt(12))
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await consume_master(conn, step, fingerprint)
+            # Preserva o segundo fator da conta. A versão revoga sessões existentes.
+            await conn.execute(
+                """UPDATE admin_users SET password_hash = $2, session_version = session_version + 1
+                   WHERE email = $1""", req.email.strip().lower(), hashed.decode())
+    return {"success": True, "message": "Se a conta existir, a senha foi alterada. Entre novamente."}
+
+
+class SessionCheckRequest(BaseModel):
+    email: str = Field(max_length=254)
+    version: int = Field(ge=0)
+
+
+@router.post("/api/admin/session-check")
+async def admin_session_check(req: SessionCheckRequest, request: Request, _auth=Depends(require_service_token)):
+    email = _portal_identity(request)
+    if email != req.email:
+        raise HTTPException(403, "Identidade divergente.")
+    async with _require_pool().acquire() as conn:
+        version = await conn.fetchval("SELECT session_version FROM admin_users WHERE email = $1", email)
+    return {"valid": version is not None and version == req.version}
+
+
+class ChallengeRequest(BaseModel):
+    id: str = Field(min_length=32, max_length=64)
+    binding: str = Field(min_length=64, max_length=64)
+    purpose: str = Field(pattern="^(login|register|reset)$")
+    answer: int = Field(ge=0, le=260)
+
+
+@router.post("/api/admin/challenge/create")
+async def admin_challenge_create(req: ChallengeRequest, _auth=Depends(require_service_token)):
+    pool = _require_pool()
+    await auth_limit(pool, "challenge_issue", req.binding, 15, 300)
+    await auth_limit(pool, "challenge_capacity", "global", 300, 60)
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM admin_challenges WHERE expires_at < NOW()")
+        await conn.execute(
+            """INSERT INTO admin_challenges (id, binding, purpose, answer, expires_at)
+               VALUES ($1, $2, $3, $4, NOW() + interval '2 minutes')""",
+            req.id, req.binding, req.purpose, req.answer)
+    return {"success": True}
+
+
+@router.post("/api/admin/challenge/verify")
+async def admin_challenge_verify(req: ChallengeRequest, _auth=Depends(require_service_token)):
+    async with _require_pool().acquire() as conn:
+        # DELETE é atômico e consome inclusive tentativas erradas em qualquer réplica.
+        row = await conn.fetchrow(
+            """DELETE FROM admin_challenges WHERE id = $1 AND binding = $2 AND purpose = $3
+               RETURNING answer, expires_at > NOW() AS fresh,
+                         expires_at < NOW() + interval '119 seconds' AS old_enough""",
+            req.id, req.binding, req.purpose)
+    return {"success": bool(row and row["fresh"] and row["old_enough"] and abs(row["answer"] - req.answer) <= 3)}
 
