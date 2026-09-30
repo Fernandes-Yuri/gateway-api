@@ -132,13 +132,13 @@ class PortalAuthTest(unittest.TestCase):
             result = self.client.post(path, headers=self.headers(path), json={'email': 'admin@example.test', 'version': version})
             self.assertEqual(result.json()['valid'], valid)
 
-    def test_desafio_valida_expiracao_tempo_posicao_e_uso_unico(self):
+    def test_desafio_valida_resolucao_frescor_e_uso_unico(self):
         path = '/api/admin/challenge/verify'
         payload = {'id': 'a' * 32, 'binding': 'b' * 64, 'purpose': 'reset', 'answer': 100}
-        for row, expected in [({'answer': 100, 'fresh': True, 'old_enough': True}, True),
-                              ({'answer': 120, 'fresh': True, 'old_enough': True}, False),
-                              ({'answer': 100, 'fresh': False, 'old_enough': True}, False),
-                              ({'answer': 100, 'fresh': True, 'old_enough': False}, False), (None, False)]:
+        # O submit so passa com a linha marcada resolvida pelo check e fresca.
+        for row, expected in [({'solved': True, 'fresh': True}, True),
+                              ({'solved': False, 'fresh': True}, False),
+                              ({'solved': True, 'fresh': False}, False), (None, False)]:
             self.conn.fetchrow.return_value = row
             result = self.client.post(path, headers=self.headers(path), json=payload)
             self.assertEqual(result.json()['success'], expected)
