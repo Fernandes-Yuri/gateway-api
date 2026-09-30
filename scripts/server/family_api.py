@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel
 from api_identity import firebase_uid, require_owner, require_family_access
+from core.devices import load_devices_by_user
 from family_contract import validate_acceptance, validate_consultation_acceptance
 from security_defense import get_client_ip, sanitize_zero_trust_text
 
@@ -183,9 +184,12 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
         # Best-effort, fora da transação: falha de push não desfaz o vínculo.
         if dispatch_push and load_devices and updated is not None:
             patient_uid = updated['patient_id']
-            devices = load_devices()
-            token = (devices.get(patient_uid) or {}).get('token')
-            if token:
+            # Plano B (doc 10 §1B): le do banco; o loader injetado e o fallback.
+            devices = await load_devices_by_user(get_pool(), load_devices)
+            for dev in devices.get(patient_uid) or []:
+                token = dev.get('token')
+                if not token:
+                    continue
                 try:
                     await asyncio.to_thread(
                         dispatch_push,
@@ -254,26 +258,27 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
 
         # Push fora da transação: falha de FCM nunca pode quebrar o envio da mensagem.
         if row is not None and dispatch_push and load_devices and notify_recipients:
-            devices = load_devices()
+            devices = await load_devices_by_user(get_pool(), load_devices)
             for recipient_uid in notify_recipients:
-                token = (devices.get(recipient_uid) or {}).get('token')
-                if not token:
-                    continue
-                try:
-                    await asyncio.to_thread(
-                        dispatch_push,
-                        token=token,
-                        title=f'Mensagem de {clean_sender}',
-                        body=clean_text[:200],
-                        data={
-                            'type': 'FAMILY_MESSAGE',
-                            'messageId': str(message_id),
-                            'senderId': uid,
-                            'patientId': m.patientId,
-                        },
-                    )
-                except Exception as push_err:
-                    print(f'[FamilyMessage] Falha no push para {recipient_uid}: {push_err}')
+                for dev in devices.get(recipient_uid) or []:
+                    token = dev.get('token')
+                    if not token:
+                        continue
+                    try:
+                        await asyncio.to_thread(
+                            dispatch_push,
+                            token=token,
+                            title=f'Mensagem de {clean_sender}',
+                            body=clean_text[:200],
+                            data={
+                                'type': 'FAMILY_MESSAGE',
+                                'messageId': str(message_id),
+                                'senderId': uid,
+                                'patientId': m.patientId,
+                            },
+                        )
+                    except Exception as push_err:
+                        print(f'[FamilyMessage] Falha no push para {recipient_uid}: {push_err}')
 
         return {'status': 'success', 'id': str(message_id)}
 
@@ -343,27 +348,28 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             recipients = [row['user_id']]
         if not recipients:
             return
-        devices = load_devices()
+        devices = await load_devices_by_user(get_pool(), load_devices)
         for recipient_uid in recipients:
-            token = (devices.get(recipient_uid) or {}).get('token')
-            if not token:
-                continue
-            try:
-                await asyncio.to_thread(
-                    dispatch_push,
-                    token=token,
-                    title=title,
-                    body=body,
-                    data={
-                        'type': event_type,
-                        'consultationId': str(row['id']),
-                        'patientId': row['user_id'],
-                        'title': title,
-                        'message': body,
-                    },
-                )
-            except Exception as push_err:
-                print(f'[Consultation] Falha no push para {recipient_uid}: {push_err}')
+            for dev in devices.get(recipient_uid) or []:
+                token = dev.get('token')
+                if not token:
+                    continue
+                try:
+                    await asyncio.to_thread(
+                        dispatch_push,
+                        token=token,
+                        title=title,
+                        body=body,
+                        data={
+                            'type': event_type,
+                            'consultationId': str(row['id']),
+                            'patientId': row['user_id'],
+                            'title': title,
+                            'message': body,
+                        },
+                    )
+                except Exception as push_err:
+                    print(f'[Consultation] Falha no push para {recipient_uid}: {push_err}')
 
     @app.post('/api/consultation/create')
     async def create_consultation(c: CreateConsultation, uid: str = Depends(firebase_uid)):
