@@ -1,0 +1,28 @@
+name: Validar autenticação do portal
+on:
+  push:
+    branches: ['fix/autenticacao-portal-precos']
+  pull_request:
+    branches: [master]
+    paths:
+      - 'scripts/server/routers/admin.py'
+      - 'scripts/server/routers/catalog.py'
+      - 'scripts/server/portal_auth_security.py'
+      - 'scripts/server/test_portal_auth_security.py'
+      - 'migrations/028_admin_auth_security.sql'
+      - '.github/workflows/validar-autenticacao-portal.yml'
+permissions:
+  contents: read
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: ruff check scripts/server/routers/admin.py scripts/server/routers/catalog.py scripts/server/portal_auth_security.py scripts/server/test_portal_auth_security.py scripts/server/services/meli_price_fetcher.py
+      - run: python -m unittest test_portal_auth_security -v
+        working-directory: scripts/server

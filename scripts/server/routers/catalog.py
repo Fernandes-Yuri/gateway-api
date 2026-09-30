@@ -57,7 +57,7 @@ class GroceryPriceItemDto(BaseModel):
 
 
 class ManualPriceUpdate(BaseModel):
-    price: float = Field(..., gt=0, description="Preço unitário ou de embalagem em Reais (BRL)")
+    price: float = Field(..., gt=0, le=99999999.99, multiple_of=0.01, allow_inf_nan=False, description="Preço unitário ou de embalagem em Reais (BRL)")
 
 
 # ---- Endpoint público/app -----------------------------------------------
