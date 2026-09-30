@@ -6,7 +6,13 @@ cd "$APP_DIR"
 
 echo "=== [1/4] Sincronizando scripts do servidor ==="
 if [ -d "scripts/server" ] && [ -d "app" ]; then
-    rsync -av --exclude '__pycache__' --exclude '*.pyc' scripts/server/ app/
+    rsync -av --delete --exclude '__pycache__' --exclude '*.pyc' scripts/server/ app/
+fi
+
+# Limpeza de binarios/modelos legados do Piper TTS da EC2 se existirem
+if [ -d "/home/ec2-user/piper" ]; then
+    echo "Expurgando arquivos legados do Piper TTS da EC2..."
+    rm -rf /home/ec2-user/piper
 fi
 
 echo "=== [2/4] Verificando dependencias Python ==="
