@@ -30,17 +30,19 @@ serviço. O portal gera os pixels e o cookie HttpOnly; o gateway guarda a
 posição esperada, o hash de vínculo e a finalidade. Um DELETE com
 RETURNING consome cada tentativa atomicamente. Validade: dois minutos.
 A avaliação acontece no momento em que o operador solta o slider
-(`/check`): a resposta é aceita só com precisão mínima de 92% em relação
-ao alvo (erro de até 20px em 260) e em movimento contínuo — soltar fora
-do alvo consome o desafio e o cliente gera outro automaticamente. O acerto
-marca a linha como resolvida (`solved`, migração
-`029_admin_challenges_solved.sql`) e `/verify` passa a exigir essa marca
-no submit final. A posição-alvo fica na faixa 70–239 para que o fim do
-slider nunca seja resposta válida. O check ainda exige que o desafio tenha
-ao menos 1 segundo, eliminando script que cria e resolve de uma vez. A
-verificação visual é uma camada contra automação simples, complementada
-por limites persistentes por conta, vínculo e operação; não representa
-detecção de fraude equivalente à de uma exchange.
+(`/check`): a resposta é aceita só com precisão mínima de **98.2%** em
+relação ao alvo (erro de até 4px em 260) e em movimento contínuo —
+soltar fora do alvo consome o desafio e o cliente gera outro
+automaticamente. O acerto marca a linha como resolvida (`solved`,
+migração `029_admin_challenges_solved.sql`) e `/verify` passa a exigir
+essa marca no submit final. A posição-alvo fica na faixa 70–239 para que
+o fim do slider nunca seja resposta válida. O check não exige idade
+mínima do desafio: numa sonda em produção um acerto correto em 337ms era
+rejeitado (desafio "nascendo morto" para o operador rápido), e a espera
+não barrava script — quem decide é o corte de 4px, o consumo único por
+vínculo e os limites por conta, vínculo e operação. A verificação
+visual é uma camada contra automação simples; não representa detecção de
+fraude equivalente à de uma exchange.
 
 A confirmação de TOTP ocorre no gateway com bloqueio da linha, impedindo
 dupla ativação ou substituição de um vínculo já ativo. Os códigos de

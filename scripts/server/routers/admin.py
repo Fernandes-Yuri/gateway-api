@@ -1119,9 +1119,10 @@ async def admin_challenge_check(req: ChallengeRequest, _auth=Depends(require_ser
 
     O DELETE atomico consome o desafio em QUALQUER tentativa: soltar fora do
     alvo invalida a linha e o cliente gera outro automaticamente. Acerto com
-    precisao >= 92% (erro <= 20px em 260) devolve a linha marcada como
-    resolvida para o submit final. O desafio precisa ter pelo menos 1 segundo
-    para eliminar script que cria e resolve de uma vez.
+    precisao >= 98.2% (erro <= 4px em 260) devolve a linha marcada como
+    resolvida para o submit final. Nao ha idade minima: o corte de 4px ja e a
+    barreira, e exigir espera punia o operador rapido (sonda em producao:
+    desafio correto em 337ms era rejeitado) sem impedir script nenhum.
     """
     pool = _require_pool()
     await auth_limit(pool, "challenge_check", req.binding, 15, 300)
@@ -1129,20 +1130,19 @@ async def admin_challenge_check(req: ChallengeRequest, _auth=Depends(require_ser
         row = await conn.fetchrow(
             """DELETE FROM admin_challenges WHERE id = $1 AND binding = $2 AND purpose = $3
                AND expires_at > NOW()
-               AND expires_at < NOW() + interval '119 seconds'
                RETURNING answer""",
             req.id, req.binding, req.purpose)
     if row is None:
         return {"success": False}
-    precision = int((1 - abs(row["answer"] - req.answer) / 260) * 100)
-    if precision < 92:
+    precision = (1 - abs(row["answer"] - req.answer) / 260) * 100
+    if precision < 98.2:
         return {"success": False}
     async with pool.acquire() as conn:
         await conn.execute(
             """INSERT INTO admin_challenges (id, binding, purpose, answer, expires_at, solved)
                VALUES ($1, $2, $3, $4, NOW() + interval '2 minutes', TRUE)""",
             req.id, req.binding, req.purpose, row["answer"])
-    return {"success": True, "precision": precision}
+    return {"success": True, "precision": round(precision, 1)}
 
 
 @router.post("/api/admin/challenge/verify")
@@ -1153,7 +1153,7 @@ async def admin_challenge_verify(req: ChallengeRequest, _auth=Depends(require_se
             """DELETE FROM admin_challenges WHERE id = $1 AND binding = $2 AND purpose = $3
                RETURNING solved, expires_at > NOW() AS fresh""",
             req.id, req.binding, req.purpose)
-    # O desafio so vale se o check o marcou resolvido (precisao >= 92%) e a
-    # linha ainda esta fresca; o minimo de 1 segundo ja foi exigido no check.
+    # O desafio so vale se o check o marcou resolvido (precisao >= 98.2%) e
+    # a linha ainda esta fresca.
     return {"success": bool(row and row["fresh"] and row["solved"])}
 
