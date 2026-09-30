@@ -72,7 +72,11 @@ class FamilyMessagePushTest(unittest.TestCase):
         self.assertEqual(200, result.status_code)
         self.assertCountEqual(['patient-token', 'never-use'],
                               [call.kwargs['token'] for call in self.dispatch.call_args_list])
-        query, patient = self.conn.fetch.call_args.args
+        # A consulta por device_push_tokens (Plano B) tambem usa conn.fetch;
+        # isola a query de vinculos ativos entre as chamadas.
+        family_call = next(c for c in self.conn.fetch.call_args_list
+                           if "family_bindings" in c.args[0] and "status='ACTIVE'" in c.args[0])
+        query, patient = family_call.args
         self.assertIn("status='ACTIVE'", query)
         self.assertEqual('patient', patient)
         for call in self.dispatch.call_args_list:

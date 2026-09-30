@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from config import RELEASES_DIR, PUBLIC_API_BASE_URL
-from core.devices import load_devices, dispatch_push
+from core.devices import dispatch_push, load_devices_by_user
 
 router = APIRouter()
 
@@ -149,45 +149,48 @@ async def broadcast_app_update(req: BroadcastUpdateRequest, request: Request):
     supplied = request.headers.get("Authorization", "")
     if supplied != f"Bearer {admin_token}":
         raise HTTPException(401, "Não autorizado.")
-    devices = load_devices()
+    # Plano B (doc 10 §1B): le do banco device_push_tokens (a migracao de
+    # startup renomeia o JSON, entao ler load_devices() devolvia 0 aparelhos).
+    devices_by_user = await load_devices_by_user(_state.db_pool)
     sent_count = 0
     errors = []
 
-    for uid, dev in devices.items():
-        token = dev.get("token")
-        if not token:
-            continue
-        success = dispatch_push(
-            token=token,
-            title=req.title,
-            body=req.message,
-            # HIBRIDO (correcao da Causa 3): data-only puro nao acorda um app em
-            # estado STOPPED (fechado pelo usuario) — o Android so entrega a
-            # mensagem de dados se o processo estiver vivo ou a prioridade for
-            # alta o suficiente, e em muitas fabricantes nem assim. Mandando
-            # TAMBEM a notificacao, o proprio Google Play Services desenha o
-            # balao com o link de download; o data continua la para o caso do
-            # app estar aberto (deep link pelo onMessageReceived).
-            include_notification=True,
-            data={
-                "type": "APP_UPDATE",
-                "title": req.title,
-                "message": req.message,
-                "download_url": req.download_url,
-                "version_name": str(req.version_name),
-                "version_code": str(req.version_code)
-            },
-            messaging=_state.messaging,
-            has_fcm=_state.has_fcm,
-        )
-        if success:
-            sent_count += 1
-        else:
-            errors.append(uid)
+    for uid, devices in devices_by_user.items():
+        for dev in devices:
+            token = dev.get("token")
+            if not token:
+                continue
+            success = dispatch_push(
+                token=token,
+                title=req.title,
+                body=req.message,
+                # HIBRIDO (correcao da Causa 3): data-only puro nao acorda um app em
+                # estado STOPPED (fechado pelo usuario) — o Android so entrega a
+                # mensagem de dados se o processo estiver vivo ou a prioridade for
+                # alta o suficiente, e em muitas fabricantes nem assim. Mandando
+                # TAMBEM a notificacao, o proprio Google Play Services desenha o
+                # balao com o link de download; o data continua la para o caso do
+                # app estar aberto (deep link pelo onMessageReceived).
+                include_notification=True,
+                data={
+                    "type": "APP_UPDATE",
+                    "title": req.title,
+                    "message": req.message,
+                    "download_url": req.download_url,
+                    "version_name": str(req.version_name),
+                    "version_code": str(req.version_code)
+                },
+                messaging=_state.messaging,
+                has_fcm=_state.has_fcm,
+            )
+            if success:
+                sent_count += 1
+            else:
+                errors.append(uid)
 
     return {
         "status": "update_broadcasted",
-        "total_devices": len(devices),
+        "total_devices": sum(len(devs) for devs in devices_by_user.values()),
         "sent_count": sent_count,
         "failed_count": len(errors),
         "version": req.version_name

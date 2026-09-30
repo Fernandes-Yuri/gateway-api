@@ -101,6 +101,51 @@ async def get_active_devices_for_users(pool) -> List[Dict[str, Any]]:
         return []
 
 
+async def load_devices_by_user(pool, legacy_loader=None) -> Dict[str, List[Dict[str, Any]]]:
+    """Dispositivos ativos agrupados por usuario, com suporte a multi-device.
+
+    Plano B (doc 10 §1B): a fonte de verdade do push e a tabela
+    device_push_tokens — o registered_devices.json era consumido pela migracao
+    de startup, deixando o broadcast lendo 0 dispositivos. Sem pool, ou quando
+    o banco nao responde/sem linhas, cai no loader legado (JSON): no
+    pos-deploy o arquivo vira apenas fallback de disponibilidade.
+    """
+    def _legacy() -> Dict[str, List[Dict[str, Any]]]:
+        raw = (legacy_loader or load_devices)() or {}
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for user_id, dev in raw.items():
+            if isinstance(dev, dict) and dev.get("token"):
+                entry = dict(dev)
+                entry.setdefault("userId", user_id)
+                grouped.setdefault(user_id, []).append(entry)
+        return grouped
+
+    if not pool:
+        return _legacy()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT token, user_id, role, platform FROM device_push_tokens WHERE is_active = true;"
+            )
+        grouped = {}
+        for row in rows or []:
+            token = row.get("token")
+            if not token:
+                continue
+            user_id = row.get("user_id")
+            grouped.setdefault(user_id, []).append({
+                "userId": user_id,
+                "token": token,
+                "role": row.get("role"),
+                "platform": row.get("platform"),
+            })
+        if grouped:
+            return grouped
+    except Exception as error:
+        print(f"[Devices] Falha ao ler device_push_tokens; usando JSON legado: {error}")
+    return _legacy()
+
+
 async def migrate_legacy_json_devices(pool) -> int:
     """Migra registros legados de registered_devices.json para PostgreSQL.
 
