@@ -33,7 +33,6 @@ except ImportError:
     async def sender_has_linked_account(*args, **kwargs):  # type: ignore
         return None
 from assistant_preferences import install_preference_routes, process_preferences
-from piper_service import PiperService
 from family_api import install_family_routes, purge_expired_family_messages
 from caregiver_alerts import install_caregiver_alert_routes
 from vip_api import install_vip_routes
@@ -93,7 +92,7 @@ from core.dataset import (
 from config import (
     DATASET_PATH, RELEASES_DIR,
     DATABASE_URL,
-    GROQ_API_URL, MODEL_ID, MODEL_REST, GROQ_API_KEY_CHAT, PIPER_BIN, PIPER_MODELS_DIR,
+    GROQ_API_URL, MODEL_ID, MODEL_REST, GROQ_API_KEY_CHAT,
     SERVICE_ACCOUNT_PATH,
     PUBLIC_API_BASE_URL,
     DEVELOPMENT_MODE,
@@ -190,11 +189,6 @@ try:
 except Exception:
     HAS_FCM = False
 
-# GROQ/PIPER/PUBLIC_API_BASE_URL vindos de `config` (Fase B, passo 1).
-# PIPER_BIN/PIPER_MODELS_DIR podem ser None se o .env nao os definir; o
-# PiperService entende isso e a sintese simplesmente falha com aviso
-# (config.py ja avisou no startup).
-PIPER_SERVICE = PiperService(PIPER_BIN, PIPER_MODELS_DIR)
 GROQ_SEMAPHORE = asyncio.Semaphore(5)
 # Concorrência por canal (isolamento: um canal lento não mata os outros).
 SEM_CHAT = asyncio.Semaphore(3)
@@ -232,7 +226,7 @@ app_router.configure_state(
     has_fcm=HAS_FCM,
 )
 app.include_router(app_router.router)
-audio_router.configure_state(piper_service=PIPER_SERVICE)
+audio_router.configure_state()
 app.include_router(audio_router.router)
 
 # Origens permitidas via env (separadas por vírgula). "CORS *" com credenciais
@@ -821,7 +815,6 @@ app.include_router(sync_router.router)
 # continua sendo inicializado no startup daqui (init_fast_lane_audio_cache).
 whatsapp_router.configure_state(
     db_pool=None,  # preenchido no startup (init_db)
-    piper_service=PIPER_SERVICE,
     sem_wa=SEM_WA,
 )
 app.include_router(whatsapp_router.router)

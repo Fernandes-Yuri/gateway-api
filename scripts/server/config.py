@@ -88,15 +88,6 @@ GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMI
 
 
 # ------------------------------------------------------------------
-# Piper TTS (subprocesso local). SEM defaults hardcoded do homelab:
-# PIPER_BIN/PIPER_MODELS_DIR devem vir do .env do ambiente (na EC2 apontam
-# para /home/ec2-user/piper/...). Se ausentes, o aviso no startup explica
-# em vez de falhar silenciosamente apontando para um caminho inexistente.
-# ------------------------------------------------------------------
-PIPER_BIN = os.getenv("PIPER_BIN")
-PIPER_MODELS_DIR = os.getenv("PIPER_MODELS_DIR")
-
-# ------------------------------------------------------------------
 # Firebase / FCM. A serviceAccountKey fica em arquivo; o path vem do env
 # (na EC2, FIREBASE_SERVICE_ACCOUNT_PATH aponta para o local instalado).
 # Sem default do homelab pela mesma razao acima.
@@ -125,8 +116,6 @@ DEVELOPMENT_MODE = os.getenv("DEVELOPMENT_MODE", "0").strip() in ("1", "true", "
 # em vez de virar um bug silencioso em runtime.
 # ------------------------------------------------------------------
 _REQUIRED_ENV_HINTS = [
-    ("PIPER_BIN", PIPER_BIN, "binario do Piper TTS"),
-    ("PIPER_MODELS_DIR", PIPER_MODELS_DIR, "diretorio de modelos do Piper"),
     ("FIREBASE_SERVICE_ACCOUNT_PATH", SERVICE_ACCOUNT_PATH, "serviceAccountKey do Firebase"),
     ("PUBLIC_API_BASE_URL", PUBLIC_API_BASE_URL, "URL publica da API"),
     ("DATABASE_URL", DATABASE_URL, "string de conexao do PostgreSQL"),

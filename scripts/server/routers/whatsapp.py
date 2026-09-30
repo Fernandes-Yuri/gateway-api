@@ -14,8 +14,6 @@ O que mora aqui:
   conta -> fast-lane de audio -> router deterministico Fase 4 -> Groq)
 - handle_confirmation_callback (botes Confirmar/Editar/Cancelar)
 - fast-lane de audio engatilhado (FAST_LANE_*) + init_fast_lane_audio_cache
-- synthesize_with_piper (ponte para o PiperService; todos os chamadores
-  sao deste canal)
 
 Seguranca preservada: verify_meta_signature no webhook (zero-trust),
 match EXATO de telefone (AUD-G10), admin-only em /events (AUD-G09),
@@ -181,17 +179,6 @@ WEBHOOK_OUTBOX_PATH = os.path.join(PROJECT_ROOT, "webhook_outbox.log")
 
 
 # =============================================================
-# SÍNTESE DE VOZ (Piper) — todos os chamadores sao deste canal
-# =============================================================
-async def synthesize_with_piper(text: str, voice_name: str, output_path: str) -> bool:
-    """Ponte para o PiperService. O endpoint HTTP /v1/audio/speech +
-    /synthesize_voice vive em routers/audio.py (Fase A passo 3)."""
-    if _state.piper_service is None:
-        return False
-    return await _state.piper_service.synthesize(text, voice_name, output_path)
-
-
-# =============================================================
 # TOM CALOROSO (reacao 💚)
 # =============================================================
 WARM_AFFEX_KEYWORDS = [
@@ -297,15 +284,6 @@ async def init_fast_lane_audio_cache():
             except Exception as e:
                 print(f"[Fast-Lane Audio] Erro lendo cache em disco de {intent_key}: {e}")
 
-        if not file_bytes:
-            try:
-                await synthesize_with_piper(data["text"], "faber", audio_path)
-                with open(audio_path, "rb") as f:
-                    file_bytes = f.read()
-                print(f"[Fast-Lane Audio] Áudio gerado e salvo: {audio_path} ({len(file_bytes)} bytes)")
-            except Exception as e:
-                print(f"[Fast-Lane Audio] Erro ao sintetizar áudio de {intent_key}: {e}")
-
         if file_bytes:
             FAST_LANE_CACHE[intent_key] = {
                 "text": data["text"],
@@ -315,7 +293,7 @@ async def init_fast_lane_audio_cache():
             if HAS_WHATSAPP:
                 try:
                     m_id = await upload_whatsapp_media(file_bytes, mime_type="audio/mpeg", filename=f"fastlane_{intent_key}.mp3")
-                    # NOTE: os bytes sao WAV (Piper gera RIFF/WAVE). A extensao
+                    # NOTE: os bytes sao RIFF/WAVE de arquivos pre-gerados. A extensao
                     # .mp3 no nome enviado a Meta e intencional por enquanto:
                     # audio/wav nao esta na lista oficial de tipos suportados
                     # para upload. Ver doc 06 (divida rebaixada a parcial).
@@ -365,23 +343,6 @@ async def _wa_send_router_text(sender_phone: str, msg_type: str, fala: str,
         )
     except Exception:
         pass
-    if msg_type in ("audio", "voice"):
-        try:
-            spoken = clean_text_for_tts(fala)
-            wav_temp = f"/tmp/wa_router_{int(time.time()*1000)}.wav"
-            if await synthesize_with_piper(spoken, "faber", wav_temp) and os.path.exists(wav_temp):
-                with open(wav_temp, "rb") as f:
-                    audio_bytes = f.read()
-                try:
-                    os.remove(wav_temp)
-                except Exception:
-                    pass
-                if audio_bytes:
-                    a_res = await send_whatsapp_audio(sender_phone, audio_bytes=bytes(audio_bytes))
-                    if a_res.get("success"):
-                        return
-        except Exception as tts_err:
-            print(f"[WhatsApp Router Audio Error] {tts_err}")
     await send_whatsapp_text(sender_phone, fala)
 
 
@@ -506,27 +467,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             "Meu foco por aqui é cuidar com todo carinho da sua saúde e bem-estar. "
                             "Me conta, como você está se sentindo hoje? 💚"
                         )
-                        if msg_type in ("audio", "voice"):
-                            audio_sent = False
-                            try:
-                                # Unificado no Piper (decisao 20/09/2026, doc 11 §3.1):
-                                # edge_tts nunca foi importado neste arquivo -> o NameError
-                                # era engolido aqui e a recusa caia sempre em texto.
-                                spoken_refusal = clean_text_for_tts(refusal_text)
-                                refusal_path = os.path.join(AUDIO_CACHE_DIR, f"refusal_{hashlib.md5(spoken_refusal.encode('utf-8')).hexdigest()}.wav")
-                                if await synthesize_with_piper(spoken_refusal, "faber", refusal_path) and os.path.exists(refusal_path):
-                                    with open(refusal_path, "rb") as f:
-                                        audio_buf = bytearray(f.read())
-                                    if audio_buf:
-                                        a_res = await send_whatsapp_audio(sender_phone, audio_bytes=bytes(audio_buf))
-                                        if a_res.get("success"):
-                                            audio_sent = True
-                            except Exception as e:
-                                print(f"[Refusal Audio Error] {e}")
-                            if not audio_sent:
-                                await send_whatsapp_text(sender_phone, refusal_text)
-                        else:
-                            await send_whatsapp_text(sender_phone, refusal_text)
+                        await send_whatsapp_text(sender_phone, refusal_text)
                         continue
 
                     # 2. Identificação do Usuário no PostgreSQL
@@ -623,21 +564,11 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             audio_path = os.path.join(AUDIO_CACHE_DIR, f"fastlane_{fast_intent}_{text_hash}.mp3")
                             f_bytes = None
                             if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
-                                with open(audio_path, "rb") as f:
-                                    f_bytes = f.read()
-                            if not f_bytes:
                                 try:
-                                    # Unificado no Piper (decisao 20/09/2026, doc 11 §3.1):
-                                    # antes usava edge_tts aqui, mas edge_tts nunca foi
-                                    # importado neste arquivo -> NameError silencioso.
-                                    # O Piper ja e a engine do fast-lane de startup
-                                    # (init_fast_lane_audio_cache) e da voz em producao.
-                                    ok = await synthesize_with_piper(data["text"], "faber", audio_path)
-                                    if ok:
-                                        with open(audio_path, "rb") as f:
-                                            f_bytes = f.read()
-                                except Exception as e:
-                                    print(f"[Fast-Lane On-Demand Error] {e}")
+                                    with open(audio_path, "rb") as f:
+                                        f_bytes = f.read()
+                                except Exception:
+                                    pass
                             cached = {"text": data["text"], "bytes": f_bytes, "media_id": None}
                             FAST_LANE_CACHE[fast_intent] = cached
 
@@ -658,29 +589,10 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             action_params={"intent": fast_intent}
                         )
 
-                        if msg_type in ("audio", "voice"):
-                            audio_res = await send_whatsapp_audio(
-                                sender_phone,
-                                audio_bytes=audio_bytes,
-                                media_id=media_id
-                            )
-                            if audio_res.get("success"):
-                                if audio_res.get("media_id"):
-                                    cached["media_id"] = audio_res["media_id"]
-                                # Send link if it exists
-                                if "link_text" in FAST_LANE_AUDIO_INTENTS[fast_intent]:
-                                    await send_whatsapp_text(sender_phone, FAST_LANE_AUDIO_INTENTS[fast_intent]["link_text"])
-                                continue
-                            # Fallback para texto se áudio falhar
-                            await send_whatsapp_text(sender_phone, reply_text)
-                            if "link_text" in FAST_LANE_AUDIO_INTENTS[fast_intent]:
-                                await send_whatsapp_text(sender_phone, FAST_LANE_AUDIO_INTENTS[fast_intent]["link_text"])
-                            continue
-                        else:
-                            await send_whatsapp_text(sender_phone, reply_text)
-                            if "link_text" in FAST_LANE_AUDIO_INTENTS[fast_intent]:
-                                await send_whatsapp_text(sender_phone, FAST_LANE_AUDIO_INTENTS[fast_intent]["link_text"])
-                            continue
+                        await send_whatsapp_text(sender_phone, reply_text)
+                        if "link_text" in FAST_LANE_AUDIO_INTENTS[fast_intent]:
+                            await send_whatsapp_text(sender_phone, FAST_LANE_AUDIO_INTENTS[fast_intent]["link_text"])
+                        continue
 
                     # 2.8. Camada 0 (Fase 4): router determinístico antes do LLM.
                     # Vitais com número vão direto aos botões; fofoca/social vai
@@ -795,44 +707,11 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             # Higieniza profundamente o texto falado para a IA não soletrar expressões/caracteres
                             spoken_text = clean_text_for_tts(reply_text)
 
-                            # REGRA CLÍNICA & ACESSIBILIDADE: Toda mensagem de áudio é respondida em ÁUDIO!
-                            if msg_type in ("audio", "voice"):
-                                audio_sent = False
-                                try:
-                                    print("[WhatsApp TTS] Sintetizando resposta de voz do Braga (Piper faber)...")
-                                    wav_temp = f"/tmp/wa_reply_{int(time.time()*1000)}.wav"
-                                    ok = await synthesize_with_piper(spoken_text, "faber", wav_temp)
-                                    audio_buffer = bytearray()
-                                    if ok and os.path.exists(wav_temp):
-                                        with open(wav_temp, "rb") as f:
-                                            audio_buffer = bytearray(f.read())
-                                        try:
-                                            os.remove(wav_temp)
-                                        except Exception:
-                                            pass
-
-                                    if audio_buffer:
-                                        print(f"[WhatsApp Audio Upload] Enviando áudio de {len(audio_buffer)} bytes...")
-                                        audio_res = await send_whatsapp_audio(sender_phone, audio_bytes=bytes(audio_buffer))
-                                        if audio_res.get("success"):
-                                            audio_sent = True
-                                            print("[WhatsApp Audio] Áudio do Braga entregue com sucesso!")
-                                            for link in links_to_send:
-                                                await send_whatsapp_text(sender_phone, link)
-                                except Exception as tts_err:
-                                    print(f"[WhatsApp Audio Synthesize/Send Error] {tts_err}")
-
-                                # Se o áudio falhar por qualquer motivo, garante resposta por texto
-                                if not audio_sent:
-                                    if links_to_send:
-                                        await send_whatsapp_text(sender_phone, f"{spoken_text}\n\n{links_to_send[0]}")
-                                    else:
-                                        await send_whatsapp_text(sender_phone, spoken_text)
+                            # Envia resposta por texto (com links formatados se houver)
+                            if links_to_send:
+                                await send_whatsapp_text(sender_phone, f"{spoken_text}\n\n{links_to_send[0]}")
                             else:
-                                if links_to_send:
-                                    await send_whatsapp_text(sender_phone, f"{spoken_text}\n\n{links_to_send[0]}")
-                                else:
-                                    await send_whatsapp_text(sender_phone, spoken_text)
+                                await send_whatsapp_text(sender_phone, spoken_text)
                         else:
                             await send_whatsapp_text(
                                 sender_phone,
@@ -1133,19 +1012,17 @@ def whatsapp_events(limit: int = Query(10, ge=1, le=50), uid: str = Depends(fire
 # ESTADO (preenchido por server.py no startup)
 # =============================================================
 class _AppState:
-    """Porta das dependencias do monolito: pool Postgres, servico Piper e
+    """Porta das dependencias do monolito: pool Postgres e
     semaforo de concorrencia do Groq (SEM_WA)."""
 
     db_pool = None
-    piper_service = None
     sem_wa = None
 
 
 _state = _AppState()
 
 
-def configure_state(*, db_pool=None, piper_service=None, sem_wa=None):
+def configure_state(*, db_pool=None, sem_wa=None):
     """Chamado por server.py ao subir a aplicacao."""
     _state.db_pool = db_pool
-    _state.piper_service = piper_service
     _state.sem_wa = sem_wa

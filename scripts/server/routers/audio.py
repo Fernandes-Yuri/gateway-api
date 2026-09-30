@@ -1,12 +1,8 @@
-"""Router de sintese vocal (TTS) — voz do assistente.
+"""Router de sintese vocal (TTS).
 
-Extraido do monolito server.py na Fase A passo 3
-(doc 11_PLANO_MODULARIZACAO_E_TTS.md). Dominios: /synthesize_voice,
-/v1/audio/speech (GET+POST).
-
-Engine: Piper TTS (pt_BR-faber-medium) em processo na EC2. A decisao do
-fundador (20/09/2026) mantem o Piper como voz unica; a frente de
-substituicao por voz mais humana fica arquivada (doc 11 §4).
+A sintese neural foi migrada 100% para On-Device no aplicativo Android (Sherpa-ONNX + VITS),
+com fallback para o TextToSpeech do sistema operacional.
+Estes endpoints permanecem para servir audios pre-gerados em cache ou retornar 410 Gone.
 """
 import hashlib
 import os
@@ -39,47 +35,25 @@ async def synthesize_voice(
     voice: Optional[str] = "faber",
     uid: str = Depends(firebase_uid),
 ):
-    # TTS anonimo com texto ilimitado = exaustao de CPU/disco (DoS).
     input_text = (req.text if req else text) or ""
-    input_voice = (req.voice if req else voice) or "faber"
-    lower_voice = input_voice.lower()
-    if "cadu" in lower_voice:
-        chosen_voice = "cadu"
-    elif "edresson" in lower_voice:
-        chosen_voice = "edresson"
-    else:
-        chosen_voice = "faber"
-
     clean = clean_text_for_tts(input_text)
     if not clean:
         raise HTTPException(status_code=400, detail="Texto vazio ou inválido para síntese vocal")
-    # Limite de tamanho por sintese.
-    if len(clean) > 3000:
-        raise HTTPException(status_code=413, detail="Texto excede o limite de 3000 caracteres.")
 
-    hash_key = hashlib.md5(f"{chosen_voice}_{clean}".encode("utf-8")).hexdigest()
+    # Se existir em cache em disco, serve o arquivo
+    hash_key = hashlib.md5(f"faber_{clean}".encode("utf-8")).hexdigest()
     audio_path = os.path.join(AUDIO_CACHE_DIR, f"{hash_key}.wav")
-
-    piper = _state.piper_service
-    if piper and piper.has_audio(audio_path):
+    if os.path.isfile(audio_path) and os.path.getsize(audio_path) > 0:
         return FileResponse(audio_path, media_type="audio/wav")
 
-    ok = await piper.synthesize(clean, chosen_voice, audio_path) if piper else False
-    if ok:
-        return FileResponse(audio_path, media_type="audio/wav")
-    raise HTTPException(status_code=500, detail="Erro ao sintetizar áudio via Piper TTS local")
+    # Sintese em runtime na EC2 desativada (migrada para on-device)
+    raise HTTPException(
+        status_code=410,
+        detail="Síntese vocal desativada no servidor: migrada para On-Device no aplicativo Android."
+    )
 
 
-class _AppState:
-    """Porta do PiperService (estado global do server). Preenchida por
-    server.py no startup."""
-
-    piper_service = None
-
-
-_state = _AppState()
-
-
-def configure_state(*, piper_service=None):
+def configure_state():
     """Chamado por server.py ao subir a aplicacao."""
-    _state.piper_service = piper_service
+    pass
+
