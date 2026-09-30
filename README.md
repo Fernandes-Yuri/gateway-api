@@ -1,17 +1,17 @@
 # Braga Saúde — Gateway API
 
 > Backend principal do assistente de saúde por voz Braga Saúde.  
-> FastAPI + PostgreSQL + Groq AI + Piper TTS + WhatsApp Cloud API.
+> FastAPI + PostgreSQL + Groq AI + WhatsApp Cloud API + Firebase Admin.
 
 ## 🏗️ Tech Stack
 
 - **Python 3.12+** (requer `str | None` syntax — PEP 604)
 - **FastAPI** (async REST + WebSocket)
 - **PostgreSQL** via `asyncpg` (connection pool)
-- **Groq Cloud** (LLM: qwen/qwen3.8-27b)
-- **Piper TTS** (síntese de voz neural pt-BR, modelos ONNX)
+- **Groq Cloud** (LLMs clínicos: qwen/qwen3.8-27b, llama-3.3-70b-versatile, whisper-large-v3)
+- **Voz Desacoplada (On-Device):** Síntese neural transferida 100% para o cliente Android (0% carga de TTS na EC2)
 - **Firebase Admin** (FCM push + autenticação)
-- **WhatsApp Cloud API** (mensageria)
+- **WhatsApp Cloud API** (mensageria multimodal: recepção/transcrição de áudio com resposta estrita em texto)
 - **Gmail SMTP** (emails de verificação/recuperação)
 
 ## 🚀 Quick Start
@@ -19,7 +19,6 @@
 ### Pré-requisitos
 - Python 3.12+
 - PostgreSQL 16+
-- Piper TTS binary + modelos pt-BR
 - chave de API Groq
 - conta Firebase + serviceAccountKey.json
 - conta WhatsApp Business API
@@ -87,12 +86,12 @@ scripts/server/
 ├── routers/               # Rotas FastAPI por domínio (APIRouter)
 │   ├── health.py          #   /health + status de serviços
 │   ├── app.py             #   /api/app/* (OTA, devices, FCM)
-│   ├── audio.py           #   /api/audio/* (TTS streaming)
+│   ├── audio.py           #   /api/audio/* (compatibilidade/cache de audio)
 │   ├── chat.py            #   /v1/chat/completions (canal REST)
 │   ├── auth.py            #   /api/auth/* (OTP, cadastro, sessão)
 │   ├── sync.py            #   /api/sync/* (22 endpoints, gravar/sincronizar)
 │   ├── care_os.py         #   contratos D62: família, farmácia, médico e resgate
-│   └── whatsapp.py        #   /api/whatsapp/* (webhook, send, events)
+│   └── whatsapp.py        #   /api/whatsapp/* (webhook, recepção de áudio e respostas em texto)
 ├── schemas/               # Contratos Pydantic canônicos do Care OS
 ├── services/              # Regras de autorização e workers do Care OS
 ├── routers/admin.py       #   /api/admin/* — portal do webservice (D-WS1):
@@ -105,8 +104,7 @@ scripts/server/
 │   └── dataset.py         #   Dataset de fine-tuning
 ├── config.py              # Centralized env vars & paths
 ├── orb_router.py          # Voice assistant routes (Orb)
-├── ws_orb.py              # WebSocket handler (streaming TTS)
-├── piper_service.py       # Piper TTS wrapper
+├── ws_orb.py              # WebSocket handler
 ├── whatsapp_service.py    # WhatsApp Cloud API client
 ├── email_service.py       # Gmail SMTP sender
 ├── assistant_preferences.py
@@ -258,20 +256,12 @@ cloudflared tunnel route dns braga-gateway your-domain.com
 cloudflared service install <TOKEN>
 ```
 
-### Piper TTS Setup
+### Síntese de Voz On-Device & WhatsApp em Texto
 
-```bash
-# Binary
-wget https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz
-tar -xzf piper_linux_x86_64.tar.gz
-
-# PT-BR model (faber-medium)
-mkdir -p piper/models
-wget https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx \
-  -O piper/models/pt_BR-faber-medium.onnx
-wget https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json \
-  -O piper/models/pt_BR-faber-medium.onnx.json
-```
+Desde a eliminação de TTS remoto na EC2:
+- A síntese de voz neural foi transferida integralmente para os dispositivos clientes (App Android com Sherpa-ONNX local).
+- O backend economiza ciclos de CPU/RAM e não mantém binários de inferência C++ em execução contínua.
+- O WhatsApp recebe e transcreve áudios (Whisper via Groq), mas responde **exclusivamente em texto** para máxima clareza e acessibilidade.
 
 ## 🔒 Segurança
 
@@ -302,7 +292,7 @@ exigem que o token corresponda ao proprietário e aceitam somente os estados
 ```bash
 cd scripts/server
 python -m pytest -q
-# 283 passed, 1 skipped (75 subtests)
+# Ran 436 tests, 436 passed, 0 failures
 # asyncio_mode=auto esta em pytest.ini — testes async soltos rodam nativo
 ```
 
