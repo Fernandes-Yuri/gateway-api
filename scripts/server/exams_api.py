@@ -1,11 +1,4 @@
-"""Módulo de Gerenciamento e Persistência do Ecossistema de Exames — Gateway API.
-
-Cumpre os contratos formais de software estipulados em:
-Contexto/01_PRODUTO_E_CLINICO/08_CADERNO_DE_CONTRATOS_EXAMES_E_DOSSIE.md
-- Seção 5: Termo de Consentimento LGPD com Isenção de Ataques (Art. 43, III)
-- Seção 7: Rotas REST (/api/exams/upload, /api/exams/manual, /api/exams/{user_id}, /api/exams/{exam_id})
-- Seção 8: Persistência no PostgreSQL RDS e Homelab Storage Local
-"""
+"""Organização de exames pessoais e consentimento específico para armazenamento."""
 import os
 import re
 import uuid
@@ -25,6 +18,23 @@ from config import STORAGE_EXAMS_DIR, PUBLIC_API_BASE_URL
 # =============================================================
 
 ExamStatus = Literal["uploaded", "analyzed", "confirmed", "failed"]
+EXAM_TERMS_VERSION = "nuvem_exames_v2_20261001"
+
+
+def require_exam_consent(cloud_consent, terms_version, valid_exam, purpose):
+    if not cloud_consent or terms_version != EXAM_TERMS_VERSION or not valid_exam or not purpose:
+        raise HTTPException(422, "Confirme o termo da Nuvem de Exames e a validade do exame antes de enviar.")
+
+
+async def record_exam_consent(conn, uid, exam_id, client_ip, now):
+    await conn.execute(
+        """INSERT INTO exam_cloud_consents
+           (user_id, exam_id, terms_version, accepted_cloud_storage,
+            accepted_third_party_attack_waiver, valid_exam_attested,
+            non_diagnostic_purpose_accepted, ip_address, accepted_at)
+           VALUES ($1, $2, $3, TRUE, FALSE, TRUE, TRUE, $4, $5)""",
+        uid, exam_id, EXAM_TERMS_VERSION, client_ip, now,
+    )
 
 
 class ExamItemInput(BaseModel):
@@ -44,6 +54,10 @@ class ManualExamCreateRequest(BaseModel):
     category: str = Field("Laboratorial", max_length=100)
     exam_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     items: List[ExamItemInput] = Field(default_factory=list)
+    cloud_consent: bool = False
+    terms_version: str = ""
+    valid_exam_attested: bool = False
+    non_diagnostic_purpose_accepted: bool = False
 
 
 class LegacyExamSyncRequest(BaseModel):
@@ -129,7 +143,8 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
         INSERT INTO exams
             (id, user_id, title, category, exam_date, result_summary, file_url,
              status, ai_extracted_data, validated_by, validation_notes)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+        WHERE EXISTS (SELECT 1 FROM exams WHERE id = $1 AND user_id = $2)
         ON CONFLICT (id) DO UPDATE SET
             title = EXCLUDED.title,
             category = EXCLUDED.category,
@@ -207,12 +222,15 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
         category: str = Form("Geral"),
         exam_date: str = Form(...),
         exam_type: str = Form("LAB"),
-        cloud_consent: bool = Form(True),
-        terms_version: str = Form("v1.0_202609"),
+        cloud_consent: bool = Form(False),
+        terms_version: str = Form(""),
+        valid_exam_attested: bool = Form(False),
+        non_diagnostic_purpose_accepted: bool = Form(False),
         exam_id: Optional[str] = Form(None),
         file: UploadFile = File(...),
         uid: str = Depends(firebase_uid)
     ):
+        require_exam_consent(cloud_consent, terms_version, valid_exam_attested, non_diagnostic_purpose_accepted)
         client_ip = get_client_ip(request)
         if rate_limiter:
             await rate_limiter.check("exam_upload_ip", client_ip, limit=15, window_seconds=60, ip=client_ip, pool=pool())
@@ -256,12 +274,18 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
             if len(content) > 35 * 1024 * 1024:
                 raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Arquivo excede o limite de 35MB.")
 
+            original_ext = os.path.splitext(file.filename or "")[1].lower()
+            signatures = {
+                ".pdf": content.startswith(b"%PDF-"),
+                ".jpg": content.startswith(b"\xff\xd8\xff"),
+                ".jpeg": content.startswith(b"\xff\xd8\xff"),
+                ".png": content.startswith(b"\x89PNG\r\n\x1a\n"),
+                ".webp": content.startswith(b"RIFF") and content[8:12] == b"WEBP",
+            }
+            if not signatures.get(original_ext, False):
+                raise HTTPException(415, "Envie um exame em PDF ou uma imagem válida. A extensão deve corresponder ao arquivo.")
             user_dir = os.path.join(STORAGE_EXAMS_DIR, safe_user_id)
             os.makedirs(user_dir, exist_ok=True)
-
-            original_ext = os.path.splitext(file.filename or "")[1].lower()
-            if original_ext not in [".pdf", ".jpg", ".jpeg", ".png", ".webp"]:
-                original_ext = ".pdf"
 
             safe_disk_filename = f"{parsed_exam_id}{original_ext}"
             file_path = os.path.join(user_dir, safe_disk_filename)
@@ -279,25 +303,14 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
         # arquivo — nada de PHI sem dono no storage.
         try:
             async with pool().acquire() as conn, conn.transaction():
-                # 1. Registra auditoria de consentimento se nuvem aceita
-                if cloud_consent:
-                    consent_query = """
-                    INSERT INTO exam_cloud_consents
-                        (user_id, exam_id, terms_version, accepted_cloud_storage,
-                         accepted_third_party_attack_waiver, ip_address, accepted_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    """
-                    await conn.execute(
-                        consent_query,
-                        uid, parsed_exam_id, terms_version, True, True, client_ip, now
-                    )
+                await record_exam_consent(conn, uid, parsed_exam_id, client_ip, now)
 
                 # 2. Insere ou atualiza o exame
                 exam_query = """
                 INSERT INTO exams
                     (id, user_id, title, category, exam_date, file_url,
                      exam_type, is_cloud_stored, cloud_consent_accepted, status, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'confirmed', $10)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'uploaded', $10)
                 ON CONFLICT (id) DO UPDATE SET
                     title = EXCLUDED.title,
                     category = EXCLUDED.category,
@@ -310,11 +323,13 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
                 WHERE exams.user_id = $2
                 RETURNING id;
                 """
-                await conn.fetchrow(
+                row = await conn.fetchrow(
                     exam_query,
                     parsed_exam_id, uid, clean_title, clean_category, parsed_date,
                     file_url, safe_exam_type, cloud_consent, cloud_consent, now
                 )
+                if row is None:
+                    raise HTTPException(403, "Exame indisponível para esta conta.")
         except Exception:
             # AUD-G11: a transação falhou — não deixa laudo PHI órfão no disco.
             if cloud_consent and file_url:
@@ -393,6 +408,8 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
         request: Request,
         uid: str = Depends(firebase_uid)
     ):
+        require_exam_consent(payload.cloud_consent, payload.terms_version,
+                             payload.valid_exam_attested, payload.non_diagnostic_purpose_accepted)
         client_ip = get_client_ip(request)
         if rate_limiter:
             await rate_limiter.check("exam_manual_ip", client_ip, limit=20, window_seconds=60, ip=client_ip, pool=pool())
@@ -418,7 +435,7 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
             INSERT INTO exams
                 (id, user_id, title, category, exam_date, file_url,
                  exam_type, is_cloud_stored, cloud_consent_accepted, status, created_at)
-            VALUES ($1, $2, $3, $4, $5, NULL, 'LAB', FALSE, FALSE, 'confirmed', $6)
+            VALUES ($1, $2, $3, $4, $5, NULL, 'LAB', FALSE, TRUE, 'confirmed', $6)
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title,
                 category = EXCLUDED.category,
@@ -427,7 +444,10 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
             WHERE exams.user_id = $2
             RETURNING id;
             """
-            await conn.fetchrow(exam_query, parsed_exam_id, uid, clean_title, clean_category, parsed_date, now)
+            row = await conn.fetchrow(exam_query, parsed_exam_id, uid, clean_title, clean_category, parsed_date, now)
+            if row is None:
+                raise HTTPException(403, "Exame indisponível para esta conta.")
+            await record_exam_consent(conn, uid, parsed_exam_id, client_ip, now)
 
             # 2. Insere os parâmetros laboratoriais em lote
             items_count = 0

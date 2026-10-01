@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from api_identity import firebase_uid, require_owner, require_family_access
-from config import STORAGE_DIR, STORAGE_EXAMS_DIR, PUBLIC_API_BASE_URL
+from config import STORAGE_DIR, PUBLIC_API_BASE_URL
 from profile_contract import profile_upsert
 from community_identity import normalize_nickname
 from social_time import parse_social_timestamp, serialize_social_timestamp
@@ -911,50 +911,8 @@ async def upload_exam_file(
     filename: Optional[str] = Query(None),
     uid: str = Depends(firebase_uid),
 ):
-    """
-    Recebe o arquivo PDF do exame diretamente no armazenamento seguro do servidor.
-    Elimina 100% qualquer dependencia de Firebase Cloud Storage e mantem os dados privados.
-    """
-    # Zero-trust: upload anonimo permitia gravar arquivos no storage de
-    # qualquer usuario (hosting de arquivos maliciosos + exaustao de disco).
     require_owner(uid, user_id)
-    safe_user_id = re.sub(r'[^a-zA-Z0-9_-]', '', user_id)
-    if not safe_user_id:
-        raise HTTPException(status_code=400, detail="ID de usuário inválido")
-
-    db_pool = _state.db_pool
-    client_ip = get_client_ip(request)
-    if _state.rate_limiter:
-        await _state.rate_limiter.check("upload_exam_ip", client_ip, limit=10, window_seconds=60, ip=client_ip, pool=db_pool)
-
-    body = await request.body()
-    if not body:
-        raise HTTPException(status_code=400, detail="Arquivo vazio")
-
-    # Limite de tamanho: 20 MB por laudo.
-    if len(body) > 20 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Arquivo excede o limite de 20 MB.")
-
-    user_dir = os.path.join(STORAGE_EXAMS_DIR, safe_user_id)
-    os.makedirs(user_dir, exist_ok=True)
-
-    raw_filename = filename or f"laudo_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
-    safe_filename = os.path.basename(raw_filename)
-    if not safe_filename.lower().endswith(".pdf"):
-        safe_filename += ".pdf"
-
-    file_path = os.path.join(user_dir, safe_filename)
-    with open(file_path, "wb") as f:
-        f.write(body)
-
-    file_url = f"{PUBLIC_API_BASE_URL}/api/files/exams/{safe_user_id}/{safe_filename}"
-    print(f"[Storage] Laudo salvo com sucesso: {file_path} ({len(body)} bytes) para usuário {safe_user_id}")
-    return {
-        "status": "success",
-        "fileUrl": file_url,
-        "fileName": safe_filename,
-        "sizeBytes": len(body)
-    }
+    raise HTTPException(410, "Atualize o aplicativo e confirme o termo da Nuvem de Exames antes de enviar.")
 
 
 # =============================================================
