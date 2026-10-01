@@ -763,7 +763,6 @@ async def get_social_feed(
     SELECT sp.id, sp.user_id, sp.post_type, sp.title, sp.description, sp.created_at,
            sp.visibility,
            p.full_name as user_name, p.community_nickname as user_nickname, p.avatar_identifier, p.photo_url,
-           COALESCE(p.current_level, 1) as user_level,
            (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = sp.id) as reaction_count,
            EXISTS(SELECT 1 FROM post_reactions pr
                   WHERE pr.post_id = sp.id AND pr.user_id = $3) as has_user_reacted
