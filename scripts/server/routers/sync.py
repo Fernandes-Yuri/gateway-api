@@ -29,6 +29,7 @@ from api_identity import firebase_uid, require_owner, require_family_access
 from config import STORAGE_DIR, STORAGE_EXAMS_DIR, PUBLIC_API_BASE_URL
 from profile_contract import profile_upsert
 from community_identity import normalize_nickname
+from social_time import parse_social_timestamp, serialize_social_timestamp
 from security_defense import get_client_ip, sanitize_zero_trust_text
 from services.content_moderation import ModerationUnavailable, moderate_avatar
 
@@ -701,9 +702,9 @@ async def sync_social_post(p: SocialPostSyncDto, uid: str = Depends(firebase_uid
     RETURNING id;
     """
     try:
-        c_at = datetime.fromisoformat(p.createdAt.replace("Z", "+00:00"))
-    except Exception:
-        c_at = datetime.utcnow()
+        c_at = parse_social_timestamp(p.createdAt)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Data de publicação inválida") from exc
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             query, p.userId, p.postType, p.title, p.description, c_at,
@@ -762,6 +763,7 @@ async def get_social_feed(
     SELECT sp.id, sp.user_id, sp.post_type, sp.title, sp.description, sp.created_at,
            sp.visibility,
            p.full_name as user_name, p.community_nickname as user_nickname, p.avatar_identifier, p.photo_url,
+           COALESCE(p.current_level, 1) as user_level,
            (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = sp.id) as reaction_count,
            EXISTS(SELECT 1 FROM post_reactions pr
                   WHERE pr.post_id = sp.id AND pr.user_id = $3) as has_user_reacted
@@ -789,7 +791,7 @@ async def get_social_feed(
         for r in rows:
             d = dict(r)
             d["id"] = str(d["id"])
-            d["created_at"] = d["created_at"].isoformat()
+            d["created_at"] = serialize_social_timestamp(d["created_at"])
             result.append(d)
         return result
 
