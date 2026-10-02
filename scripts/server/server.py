@@ -410,6 +410,16 @@ async def startup():
                 args=[db_pool], id="purge_family_messages_24h",
                 replace_existing=True, max_instances=1, coalesce=True,
             )
+            async def cleanup_deleted_accounts():
+                from services.account_deletion import cleanup_account_files
+                async with db_pool.acquire() as conn:
+                    jobs = await conn.fetch("SELECT user_id FROM account_storage_cleanup ORDER BY created_at LIMIT 100")
+                for job in jobs:
+                    await cleanup_account_files(db_pool, job["user_id"])
+            retention_scheduler.add_job(
+                cleanup_deleted_accounts, 'interval', minutes=5,
+                id="cleanup_deleted_accounts", replace_existing=True, max_instances=1,
+            )
             async def purge_expired_blocked_ips():
                 if db_pool:
                     try:

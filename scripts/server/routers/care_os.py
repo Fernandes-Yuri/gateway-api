@@ -212,7 +212,7 @@ async def medication_stock(patient_id: str, uid: str = Depends(firebase_uid)):
     return result
 
 
-def _try_remove_stored_file(file_url_or_path: Optional[str], patient_id: str) -> None:
+def _try_remove_stored_file(file_url_or_path: Optional[str], patient_id: str, prescription_owned: bool = False) -> None:
     """Remove com segurança o arquivo físico da receita/foto do disco (LGPD Art. 18)."""
     if not file_url_or_path or not isinstance(file_url_or_path, str):
         return
@@ -222,11 +222,11 @@ def _try_remove_stored_file(file_url_or_path: Optional[str], patient_id: str) ->
         if not fname or fname in (".", ".."):
             return
 
-        # 1. Verifica em PRESCRIPTION_STORAGE_DIR
-        p_path = os.path.join(PRESCRIPTION_STORAGE_DIR, fname)
-        if os.path.isfile(p_path):
-            os.remove(p_path)
-            return
+        if prescription_owned:
+            p_path = os.path.join(PRESCRIPTION_STORAGE_DIR, fname)
+            if os.path.isfile(p_path):
+                os.remove(p_path)
+                return
 
         # 2. Verifica em MEDICATION_IMAGE_DIR/<safe_patient>/
         safe_patient = re.sub(r"[^a-zA-Z0-9_-]", "", patient_id)
@@ -235,11 +235,6 @@ def _try_remove_stored_file(file_url_or_path: Optional[str], patient_id: str) ->
             os.remove(m_patient_path)
             return
 
-        # 3. Verifica diretamente em MEDICATION_IMAGE_DIR/
-        m_path = os.path.join(MEDICATION_IMAGE_DIR, fname)
-        if os.path.isfile(m_path):
-            os.remove(m_path)
-            return
     except Exception as exc:
         logger.warning("[_try_remove_stored_file] Falha ao remover arquivo físico %s: %s", file_url_or_path, exc)
 
@@ -324,7 +319,15 @@ async def delete_medication(
             patient_id, uid, actor_name, json.dumps(audit_details),
         )
 
-        _try_remove_stored_file(med.get("photo_reference_url"), patient_id)
+        photo_url = med.get("photo_reference_url")
+        owned = False
+        if photo_url:
+            filename = os.path.basename(photo_url.split("?")[0])
+            owned = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM prescription_files WHERE filename=$1 AND patient_id=$2) "
+                "AND NOT EXISTS(SELECT 1 FROM medications WHERE photo_reference_url LIKE $3)",
+                filename, patient_id, "%/" + filename)
+        _try_remove_stored_file(photo_url, patient_id, prescription_owned=owned is True)
         return {"status": "success", "deleted": True, "medication_id": medication_id, "patient_id": patient_id}
 
 
@@ -598,46 +601,62 @@ async def analyze_prescription(
             target.write(content)
         url = f"{_state.public_base_url}/api/files/prescriptions/{unique_filename}"
 
-        # Roteamento de Pipeline: PDF Digital (Fluxo A) vs Foto Física (Fluxo B)
-        is_pdf = content_type == "application/pdf" or safe_filename.lower().endswith(".pdf") or content.startswith(b"%PDF")
-        if is_pdf:
-            raw_ocr = await extract_raw_ocr_text(content, safe_filename)
-            reconciled = await analyze_pdf_prescription(content, conn)
-        else:
-            raw_ocr = await extract_raw_ocr_text(content, safe_filename)
-            structured = await extract_structured_prescription(content, content_type)
-            reconciled = await reconcile_and_verify(structured, raw_ocr, conn)
+        try:
+            async with conn.transaction():
+                # Roteamento de Pipeline: PDF Digital (Fluxo A) vs Foto Física (Fluxo B)
+                is_pdf = content_type == "application/pdf" or safe_filename.lower().endswith(".pdf") or content.startswith(b"%PDF")
+                if is_pdf:
+                    raw_ocr = await extract_raw_ocr_text(content, safe_filename)
+                    reconciled = await analyze_pdf_prescription(content, conn, raw_ocr_text=raw_ocr)
+                else:
+                    raw_ocr = await extract_raw_ocr_text(content, safe_filename)
+                    structured = await extract_structured_prescription(content, content_type)
+                    reconciled = await reconcile_and_verify(structured, raw_ocr, conn)
 
-        # Auditoria LGPD
-        actor_name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid) or "Usuário autorizado"
-        audit_details = {
-            "filename": safe_filename,
-            "content_type": content_type,
-            "size_bytes": len(content),
-            "file_url": url,
-            "medications_count": len(reconciled.medications),
-            "total_pages_analyzed": reconciled.total_pages_analyzed,
-            "duplicates_merged_count": reconciled.duplicates_merged_count,
-        }
-        await conn.execute(
-            """INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type,details)
-               VALUES ($1,$2,$3,'PRESCRIPTION_ANALYZED',$4::jsonb)""",
-            patient_id, uid, actor_name, json.dumps(audit_details),
-        )
+                await conn.execute("INSERT INTO prescription_files(filename,patient_id) VALUES ($1,$2)", unique_filename, patient_id)
 
-        return PrescriptionAnalysisResponse(
-            status="success",
-            prescription_image_url=url,
-            medications=reconciled.medications,
-            raw_ocr_snippet=raw_ocr[:500] if raw_ocr else None,
-            total_pages_analyzed=reconciled.total_pages_analyzed,
-            duplicates_merged_count=reconciled.duplicates_merged_count,
-        )
+                # Auditoria LGPD
+                actor_name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid) or "Usuário autorizado"
+                audit_details = {
+                    "filename": safe_filename,
+                    "content_type": content_type,
+                    "size_bytes": len(content),
+                    "file_url": url,
+                    "medications_count": len(reconciled.medications),
+                    "total_pages_analyzed": reconciled.total_pages_analyzed,
+                    "duplicates_merged_count": reconciled.duplicates_merged_count,
+                }
+                await conn.execute(
+                    """INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type,details)
+                       VALUES ($1,$2,$3,'PRESCRIPTION_ANALYZED',$4::jsonb)""",
+                    patient_id, uid, actor_name, json.dumps(audit_details),
+                )
+
+                return PrescriptionAnalysisResponse(
+                    status="success",
+                    prescription_image_url=url,
+                    medications=reconciled.medications,
+                    raw_ocr_snippet=raw_ocr[:500] if raw_ocr else None,
+                    total_pages_analyzed=reconciled.total_pages_analyzed,
+                    duplicates_merged_count=reconciled.duplicates_merged_count,
+                )
+        except BaseException:
+            if os.path.isfile(target_path):
+                os.remove(target_path)
+            raise
 
 
 @router.get("/api/files/prescriptions/{filename}")
 async def prescription_photo(filename: str, uid: str = Depends(firebase_uid)):
     safe_filename = os.path.basename(filename)
+    if safe_filename != filename:
+        raise HTTPException(404, "Arquivo não encontrado.")
+    async with _pool().acquire() as conn:
+        patient_id = await conn.fetchval("SELECT patient_id FROM prescription_files WHERE filename=$1", filename)
+        if not patient_id:
+            # Anexos legados sem vínculo precisam de inventário antes de liberar acesso.
+            raise HTTPException(404, "Arquivo não encontrado.")
+        await require_patient_permission(conn, uid, patient_id, "care:read")
     path = os.path.join(PRESCRIPTION_STORAGE_DIR, safe_filename)
     if not os.path.isfile(path):
         raise HTTPException(404, "Arquivo não encontrado.")

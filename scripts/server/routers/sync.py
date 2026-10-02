@@ -16,14 +16,13 @@ import json
 import logging
 import os
 import re
-import shutil
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from api_identity import firebase_uid, require_owner, require_family_access
 from config import STORAGE_DIR, PUBLIC_API_BASE_URL
@@ -162,6 +161,23 @@ class FeedbackSyncDto(BaseModel):
     inputMethod: Optional[str] = None
     appVersion: Optional[str] = None
     deviceInfo: Optional[str] = None
+    screenshotBase64: Optional[str] = Field(None, max_length=1_400_000)
+
+    @field_validator("screenshotBase64")
+    @classmethod
+    def validate_screenshot(cls, value):
+        if not value:
+            return None
+        try:
+            encoded = value.split(",", 1)[-1]
+            content = base64.b64decode(encoded, validate=True)
+            is_image = content.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")) or (
+                content.startswith(b"RIFF") and content[8:12] == b"WEBP")
+            if len(content) > 1_000_000 or not is_image:
+                raise ValueError("Captura inválida ou maior que 1 MB.")
+        except ValueError:
+            raise ValueError("A captura deve ser uma imagem PNG, JPEG ou WebP em base64 de até 1 MB.")
+        return encoded
 
 
 class AuditLogSyncDto(BaseModel):
@@ -308,38 +324,11 @@ async def get_profile(user_id: str, uid: str = Depends(firebase_uid)):
 
 @router.delete("/api/profile/{user_id}", status_code=status.HTTP_200_OK)
 async def delete_profile(user_id: str, uid: str = Depends(firebase_uid)):
-    """Direito ao Esquecimento — LGPD Art. 18.
-
-    AUD-AN16: o app chamava deleteProfileRemotely() que era um no-op retornando
-    true; o usuario excluia a conta e todo o PHI permanecia no RDS. Agora o app
-    chama este endpoint. So o PROPRIO dono pode excluir (cuidador nao pode
-    apagar a conta do paciente); ON DELETE CASCADE remove as 14 tabelas filhas.
-    """
-    db_pool = _state.db_pool
-    if not db_pool:
-        raise HTTPException(status_code=503, detail="Banco local offline")
-    if uid != user_id:
-        raise HTTPException(status_code=403, detail="Apenas o próprio dono pode excluir a conta.")
-    try:
-        target = uuid.UUID(user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="ID de usuário inválido.")
-    # Diretorio de fotos validado ANTES de apagar o banco: id que nao resulte
-    # numa pasta segura dentro de avatars/ aborta com 400 sem mexer em nada.
-    avatar_dir = _avatar_user_dir(user_id)
-
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT id FROM profiles WHERE id = $1", target)
-        if not row:
-            raise HTTPException(status_code=404, detail="Perfil não encontrado.")
-        await conn.execute("DELETE FROM profiles WHERE id = $1", target)
-
-    # LGPD: remove somente o diretorio ja validado e contido em
-    # AVATAR_UPLOADS_DIR (nunca um caminho montado a partir de string bruta).
-    shutil.rmtree(avatar_dir, ignore_errors=True)
-
-    print(f"[LGPD] Conta excluída (Direito ao Esquecimento): {user_id}")
-    return {"success": True, "deleted": True, "user_id": user_id}
+    if _state.db_pool is None:
+        raise HTTPException(503, "Banco indisponível")
+    require_owner(uid, user_id)
+    from services.account_deletion import delete_account
+    return await delete_account(_state.db_pool, user_id, actor="próprio titular")
 
 
 # =============================================================
@@ -830,7 +819,11 @@ async def sync_feedback(f: FeedbackSyncDto, request: Request, uid: str = Depends
         raise HTTPException(403, "Não autorizado: feedbacks só podem ser enviados para a própria conta.")
     db_pool = _state.db_pool
     if not db_pool:
-        return {"status": "offline_mode"}
+        raise HTTPException(503, "Feedback não persistido: banco indisponível.")
+    try:
+        feedback_id = uuid.UUID(f.id) if f.id else uuid.uuid4()
+    except ValueError:
+        raise HTTPException(422, "Identificador de feedback inválido.")
     client_ip = get_client_ip(request)
     await _state.rate_limiter.check("sync_feedback_ip", client_ip, limit=10, window_seconds=60, ip=client_ip, pool=db_pool)
 
@@ -840,42 +833,24 @@ async def sync_feedback(f: FeedbackSyncDto, request: Request, uid: str = Depends
     clean_name = sanitize_zero_trust_text(f.userName or "", max_length=120, field_name="userName", ip=client_ip)
 
     query = """
-    INSERT INTO feedbacks (user_id, user_email, user_name, category, title, message, input_method, app_version, device_info, created_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-    RETURNING id;
+    INSERT INTO feedbacks (id, user_id, user_email, user_name, category, title, message, input_method, app_version, device_info, screenshot_base64, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+    ON CONFLICT (id) DO NOTHING RETURNING id;
     """
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(query, uid, clean_email, clean_name, f.category, clean_title, clean_message, f.inputMethod, f.appVersion, f.deviceInfo)
-    return {"status": "success", "id": str(row["id"])}
+        row = await conn.fetchrow(query, feedback_id, uid, clean_email, clean_name, f.category, clean_title, clean_message, f.inputMethod, f.appVersion, f.deviceInfo, f.screenshotBase64)
+        if row is None:
+            row = await conn.fetchrow("SELECT id FROM feedbacks WHERE id=$1 AND user_id=$2", feedback_id, uid)
+            if row is None:
+                raise HTTPException(409, "Identificador de feedback já utilizado.")
+    return {"status": "success", "persisted": True, "id": str(row["id"])}
 
 
 @router.post("/api/feedback/reply")
 async def create_feedback_reply(req: FeedbackReplyCreate, request: Request, uid: str = Depends(firebase_uid)):
-    """Resposta da equipe a um feedback (doc 10 §4.1).
-
-    admin-only: precisa de um token Firebase valido. A resposta fica pendente
-    ate o app puxar no SyncWorker, que entao notifica o usuario localmente.
-    """
-    db_pool = _state.db_pool
-    if not db_pool:
-        raise HTTPException(503, "Banco indisponível")
-    client_ip = get_client_ip(request)
-    await _state.rate_limiter.check("feedback_reply_ip", client_ip, limit=20, window_seconds=60, ip=client_ip, pool=db_pool)
-    clean_body = sanitize_zero_trust_text(req.body, max_length=1000, field_name="body", ip=client_ip, rate_limiter=_state.rate_limiter, pool=db_pool)
-    clean_author = sanitize_zero_trust_text(req.author or "Suporte Braga Saúde", max_length=100, field_name="author", ip=client_ip)
-    try:
-        fid = uuid.UUID(req.feedbackId)
-    except ValueError:
-        raise HTTPException(422, "Feedback inválido.")
-    async with db_pool.acquire() as conn:
-        # Zero-trust: o feedback precisa pertencer ao usuario informado.
-        owned = await conn.fetchval("SELECT 1 FROM feedbacks WHERE id=$1 AND user_id=$2", fid, req.userId)
-        if not owned:
-            raise HTTPException(404, "Feedback não encontrado para este usuário.")
-        row = await conn.fetchrow(
-            "INSERT INTO feedback_replies (feedback_id, user_id, author, body) VALUES ($1,$2,$3,$4) RETURNING id, created_at",
-            fid, req.userId, clean_author, clean_body)
-    return {"status": "success", "id": str(row["id"]), "createdAt": row["created_at"].isoformat()}
+    # A rota legada aceitava qualquer usuário Firebase como equipe de suporte.
+    # O portal usa exclusivamente a rota administrativa autenticada.
+    raise HTTPException(410, "Respostas da equipe exigem o canal administrativo do suporte.")
 
 
 @router.get("/api/feedback/replies")
