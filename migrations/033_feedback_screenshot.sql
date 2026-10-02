@@ -1,0 +1,1 @@
+ALTER TABLE feedbacks ADD COLUMN IF NOT EXISTS screenshot_base64 TEXT;

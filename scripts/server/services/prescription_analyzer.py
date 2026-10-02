@@ -504,7 +504,7 @@ async def reconcile_and_verify(
     Garante o princípio clínico de tolerância zero com ambiguidades e funde 1ª e 2ª vias idênticas.
     """
     merged_items: list[dict] = []
-    seen_keys: dict[tuple[str, float], dict] = {}
+    seen_keys: dict[tuple, dict] = {}
     duplicates_merged_count = 0
     pages_seen: set[int] = set()
 
@@ -523,7 +523,7 @@ async def reconcile_and_verify(
         ).strip()
         canonical_name = " ".join(canonical_name.split())
         canonical_dose = parse_dosage_mg(raw_dosage) or 0.0
-        key = (canonical_name, canonical_dose)
+        key = (canonical_name, canonical_dose, normalize_text(item.get("frequency") or ""), str(item.get("treatment_duration_days") or ""))
 
         if canonical_name and key in seen_keys:
             existing = seen_keys[key]
@@ -774,7 +774,7 @@ async def reconcile_and_verify(
     )
 
 
-async def analyze_pdf_prescription(pdf_bytes: bytes, db_conn) -> ReconciliationResult:
+async def analyze_pdf_prescription(pdf_bytes: bytes, db_conn, raw_ocr_text: str | None = None) -> ReconciliationResult:
     """Pipeline especializado para receitas médicas digitais em PDF (Single-call Gemini + Enriquecimento ANVISA).
 
     Características clínicas e de arquitetura:
@@ -861,7 +861,7 @@ async def analyze_pdf_prescription(pdf_bytes: bytes, db_conn) -> ReconciliationR
 
     # Deduplicação de vias / cópias
     merged_items: list[dict] = []
-    seen_keys: dict[tuple[str, float], dict] = {}
+    seen_keys: dict[tuple, dict] = {}
     duplicates_merged_count = 0
 
     for item in extracted_items:
@@ -876,7 +876,7 @@ async def analyze_pdf_prescription(pdf_bytes: bytes, db_conn) -> ReconciliationR
         ).strip()
         canonical_name = " ".join(canonical_name.split())
         canonical_dose = parse_dosage_mg(raw_dosage) or 0.0
-        key = (canonical_name, canonical_dose)
+        key = (canonical_name, canonical_dose, normalize_text(item.get("frequency") or ""), str(item.get("treatment_duration_days") or ""))
 
         if canonical_name and key in seen_keys:
             existing = seen_keys[key]
@@ -891,100 +891,18 @@ async def analyze_pdf_prescription(pdf_bytes: bytes, db_conn) -> ReconciliationR
                 seen_keys[key] = item_copy
             merged_items.append(item_copy)
 
-    results: list[AnalyzedMedicationItem] = []
-    for item in merged_items:
-        raw_name = (item.get("name") or "").strip()
-        raw_dosage = (item.get("dosage") or "").strip()
-        raw_freq = (item.get("frequency") or "").strip()
-        source_pages = item.get("source_pages") or [1]
-        dosage_mg = parse_dosage_mg(raw_dosage)
-
-        # Enriquecimento com ANVISA (opcional e não destrutivo: mantém nome e dosagem)
-        ean_barcode = None
-        active_principle = None
-        anvisa_registration_number = item.get("anvisa_registration_number")
-
-        clean_drug_name = re.sub(r"\d+(\.\d+)?\s*(mg|g|mcg|ml|ui|%)?", "", raw_name, flags=re.IGNORECASE).strip()
-        words = [w for w in re.split(r"[^\w]+", clean_drug_name) if len(w) >= 3]
-        search_term = f"%{words[0]}%" if words else f"%{raw_name}%"
-
-        catalog_rows = []
-        if db_conn is not None and words:
-            query = (
-                "SELECT ean_barcode, name, concentration, active_principle "
-                "FROM anvisa_medication_catalog "
-                "WHERE name ILIKE $1 OR active_principle ILIKE $1 LIMIT 5"
-            )
-            try:
-                res = db_conn.fetch(query, search_term)
-                if inspect.isawaitable(res):
-                    catalog_rows = await res
-                else:
-                    catalog_rows = res
-            except Exception as exc:
-                logger.warning("[analyze_pdf_prescription] Erro na consulta ANVISA: %s", exc)
-                catalog_rows = []
-
-        if catalog_rows:
-            for row in catalog_rows:
-                r_conc = row.get("concentration") or ""
-                r_mg = parse_dosage_mg(r_conc)
-                if dosage_mg is not None and r_mg is not None:
-                    if math.isclose(dosage_mg, r_mg, abs_tol=0.01):
-                        ean_barcode = row.get("ean_barcode")
-                        active_principle = row.get("active_principle")
-                        anvisa_registration_number = row.get("anvisa_registration_number") or anvisa_registration_number
-                        break
-                else:
-                    norm_c = normalize_text(r_conc).replace(" ", "")
-                    norm_d = normalize_text(raw_dosage).replace(" ", "")
-                    if norm_c and (norm_c in norm_d or norm_d in norm_c):
-                        ean_barcode = row.get("ean_barcode")
-                        active_principle = row.get("active_principle")
-                        anvisa_registration_number = row.get("anvisa_registration_number") or anvisa_registration_number
-                        break
-
-        # Posologia, Refeição e Duração
-        full_posology_text = f"{raw_freq} {item.get('instructions', '')}".strip()
-        posology = infer_posology(full_posology_text)
-        raw_interval = item.get("frequency_interval_hours")
-        final_interval = int(raw_interval) if raw_interval is not None else posology.interval_hours
-        raw_doses = item.get("daily_doses_count")
-        final_doses = int(raw_doses) if raw_doses is not None else posology.daily_doses_count
-        final_suggested_times = item.get("suggested_times") or posology.suggested_times
-        final_meal_context = item.get("meal_context") or posology.meal_context or infer_meal_context(item.get("instructions", ""))
-        raw_duration = item.get("treatment_duration_days")
-        final_duration = int(raw_duration) if raw_duration is not None else infer_treatment_duration(
-            full_posology_text
-        )
-
-        results.append(
-            AnalyzedMedicationItem(
-                name=raw_name,
-                name_divergent=False,
-                dosage=raw_dosage,
-                dosage_divergent=False,
-                dosage_mg=dosage_mg,
-                frequency=raw_freq,
-                frequency_divergent=False,
-                frequency_interval_hours=final_interval,
-                daily_doses_count=final_doses,
-                treatment_duration_days=final_duration,
-                meal_context=final_meal_context,
-                suggested_times=final_suggested_times,
-                ean_barcode=ean_barcode,
-                anvisa_registration_number=anvisa_registration_number,
-                active_principle=active_principle,
-                confidence_score=1.0 if ean_barcode else 0.95,
-                requires_human_fill=not bool(raw_name),
-                divergence_reason=None,
-                source_pages=source_pages,
-            )
-        )
-
+    raw_ocr = raw_ocr_text if raw_ocr_text is not None else await extract_raw_ocr_text(pdf_bytes, "receita.pdf")
+    reconciled = await reconcile_and_verify(merged_items, raw_ocr, db_conn)
+    for medication, source in zip(reconciled.medications, merged_items):
+        medication.source_pages = source["source_pages"]
+        if not raw_ocr or not medication.frequency:
+            medication.requires_human_fill = True
+            medication.frequency_divergent = True
+            medication.confidence_score = 0.0
+            medication.suggested_times = []
+            medication.divergence_reason = "Texto ou posologia sem confirmação independente; preencha e confira manualmente."
     return ReconciliationResult(
-        medications=results,
+        medications=reconciled.medications,
         total_pages_analyzed=total_pages,
         duplicates_merged_count=duplicates_merged_count,
     )
-

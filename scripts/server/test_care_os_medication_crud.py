@@ -206,6 +206,7 @@ class TestCareOsMedicationCrud(unittest.TestCase):
             "photo_reference_url": f"https://api.bragasaude.online/api/files/prescriptions/{os.path.basename(test_file_path)}",
         }
         conn = self._setup_conn_mock(caregiver_role="ADMIN_CHILD", med_row=med_row)
+        conn.fetchval.side_effect = ["Cuidador", True]  # vínculo do anexo e ausência de outras referências
         client = _create_test_client(conn, uid=self.caregiver_id)
 
         response = client.delete(f"/api/family/patients/{self.patient_id}/medications/{self.med_id}")

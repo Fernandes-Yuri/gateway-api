@@ -128,6 +128,14 @@ class StrictRateLimiter:
         self._blocked_ips: Dict[str, float] = {}       # ip -> timestamp monotonic de liberacao
         self._lock = asyncio.Lock()
 
+    async def set_manual_block(self, ip: str, blocked: bool, *, seconds: int = 86400) -> None:
+        async with self._lock:
+            if blocked:
+                self._blocked_ips[ip] = time.monotonic() + seconds
+            else:
+                self._blocked_ips.pop(ip, None)
+                self._violations.pop(ip, None)
+
     async def load_blocked_ips_from_db(self, pool) -> None:
         """Carrega bloqueios ativos do PostgreSQL na inicializacao."""
         if not pool:

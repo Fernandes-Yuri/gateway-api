@@ -13,6 +13,7 @@ Metricas (Frente 2): aggregate-only. Nenhuma linha de usuario cruza;
 bucket com menos de MIN_BUCKET usuários e suprimido/fundido DENTRO do
 SQL do gateway — o portal so recebe numeros que nao isolam ninguem.
 """
+import ipaddress
 import base64
 import hashlib
 import hmac
@@ -61,7 +62,8 @@ class FeedbackReplyCreate(BaseModel):
 
 class BlockedIpCreate(BaseModel):
     ip: str
-    reason: str
+    reason: str = Field(min_length=1, max_length=500)
+    minutes: int = Field(default=1440, ge=1, le=43200)
 
 
 # ---- Autenticacao ------------------------------------------------------
@@ -144,6 +146,7 @@ def _row_to_feedback(row) -> dict:
         "inputMethod": row["input_method"],
         "appVersion": row["app_version"],
         "deviceInfo": row["device_info"],
+        "screenshotBase64": row.get("screenshot_base64"),
         # O gateway usa 'pending'; o portal usa 'novo'. Unificamos para o
         # vocabulario do portal (ver ALLOWED_STATUS).
         "status": _map_status_gateway_to_portal(row["status"]),
@@ -242,7 +245,7 @@ async def list_feedback_admin(
         rows = await conn.fetch(
             f"""SELECT f.id, f.user_id, f.user_email, f.user_name, f.category,
                        f.title, f.message, f.input_method, f.app_version,
-                       f.device_info, f.status, f.created_at,
+                       f.device_info, f.screenshot_base64, f.status, f.created_at,
                        (SELECT COUNT(*) FROM feedback_replies r WHERE r.feedback_id = f.id) AS replies_count
                 FROM feedbacks f {where}
                 ORDER BY f.created_at DESC
@@ -543,50 +546,77 @@ async def list_blocked_ips_admin(
     }
 
 
-@router.post("/blocked-ips")
+@router.post("/blocked-ips", include_in_schema=False)
+@router.post("/api/admin/blocked-ips")
 async def create_blocked_ip(
+    body: BlockedIpCreate,
     _auth=Depends(require_service_token),
-    body: BlockedIpCreate = None,
 ):
     """Cria ou atualiza um bloqueio de IP manual na tabela security_blocked_ips.
 
-    O IP fica bloqueado por 24h a partir de agora. O campo violations e
+    O prazo padrão é de 24h; o portal pode informar até 30 dias. O campo violations e
     setado para 3 para garantir que o middleware nao desbloqueie
     automaticamente antes do prazo.
     """
+    try:
+        body.ip = str(ipaddress.ip_address(body.ip))
+    except ValueError:
+        raise HTTPException(422, "IP inválido.")
     pool = _require_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO security_blocked_ips (ip, reason, violations, blocked_until, created_at, updated_at)
-            VALUES ($1, $2, 3, NOW() + INTERVAL '24 hours', NOW(), NOW())
+            VALUES ($1, $2, 3, NOW() + ($3 * INTERVAL '1 minute'), NOW(), NOW())
             ON CONFLICT (ip) DO UPDATE SET
                 reason = EXCLUDED.reason,
                 violations = 3,
-                blocked_until = NOW() + INTERVAL '24 hours',
+                blocked_until = EXCLUDED.blocked_until,
                 updated_at = NOW();
             """,
             body.ip,
             body.reason,
+            body.minutes,
         )
+    if _state.rate_limiter is not None:
+        await _state.rate_limiter.set_manual_block(body.ip, True, seconds=body.minutes * 60)
     print(f"[ADMIN] IP bloqueado: {body.ip} | razao: {body.reason}")
     return {"success": True, "ip": body.ip, "reason": body.reason}
 
 
-@router.delete("/blocked-ips/{ip}")
+@router.delete("/blocked-ips/{ip}", include_in_schema=False)
+@router.delete("/api/admin/blocked-ips/{ip}")
 async def delete_blocked_ip(
     _auth=Depends(require_service_token),
     ip: str = None,
 ):
     """Remove um IP da tabela security_blocked_ips, desbloqueando-o imediatamente."""
+    try:
+        ip = str(ipaddress.ip_address(ip))
+    except ValueError:
+        raise HTTPException(422, "IP inválido.")
     pool = _require_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             "DELETE FROM security_blocked_ips WHERE ip = $1",
             ip,
         )
+    if _state.rate_limiter is not None:
+        await _state.rate_limiter.set_manual_block(ip, False)
     print(f"[ADMIN] IP desbloqueado: {ip}")
     return {"success": True, "ip": ip}
+
+
+@router.get("/api/admin/blocked-ips/check")
+async def check_blocked_ip(ip: str, _auth=Depends(require_service_token)):
+    try:
+        ip = str(ipaddress.ip_address(ip))
+    except ValueError:
+        raise HTTPException(422, "IP inválido.")
+    async with _require_pool().acquire() as conn:
+        blocked = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM security_blocked_ips WHERE ip=$1 AND blocked_until > NOW())", ip)
+    return {"blocked": bool(blocked)}
 
 
 # ---- Proxy de autenticacao (login) -------------------------------------
@@ -1157,3 +1187,19 @@ async def admin_challenge_verify(req: ChallengeRequest, _auth=Depends(require_se
     # a linha ainda esta fresca.
     return {"success": bool(row and row["fresh"] and row["solved"])}
 
+
+
+class DeleteAccountRequest(BaseModel):
+    userId: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+@router.post("/api/admin/delete-user-data")
+async def delete_user_data(body: DeleteAccountRequest, request: Request, _auth=Depends(require_service_token)):
+    email = _portal_identity(request)
+    pool = _require_pool()
+    async with pool.acquire() as conn:
+        role = await conn.fetchval("SELECT role FROM admin_users WHERE email=$1", email)
+    if role not in ("admin", "superadmin"):
+        raise HTTPException(403, "Permissão administrativa necessária.")
+    from services.account_deletion import delete_account
+    return await delete_account(pool, body.userId, actor=email, ip=get_client_ip(request))

@@ -1022,14 +1022,14 @@ class TestSmartPosologyAndSanitization(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(med1.requires_human_fill)
         self.assertEqual(med1.confidence_score, 1.0)
 
-        # 2. Medicamento fora do catálogo: NÃO DESTRUTIVO (mantém dados e não força requires_human_fill)
+        # 2. Ausência de catálogo exige conferência humana, mesmo com OCR legível.
         med2 = result.medications[1]
         self.assertEqual(med2.name, "Medicamento Raro Manipulado")
         self.assertEqual(med2.dosage, "12.5mg")
         self.assertEqual(med2.dosage_mg, 12.5)
         self.assertIsNone(med2.ean_barcode)
-        self.assertFalse(med2.requires_human_fill)
-        self.assertEqual(med2.confidence_score, 0.95)
+        self.assertTrue(med2.requires_human_fill)
+        self.assertLessEqual(med2.confidence_score, 0.5)
 
     async def test_analyze_pdf_prescription_deduplicates_copies(self):
         """Valida fusão de 1ª via do paciente e 2ª via da farmácia no PDF digital."""
