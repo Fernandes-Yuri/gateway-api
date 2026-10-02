@@ -597,11 +597,11 @@ async def analyze_prescription(
         safe_filename = re.sub(r"[^a-zA-Z0-9_.-]", "_", base_name)
         unique_filename = f"{uuid.uuid4()}_{safe_filename}"
         target_path = os.path.join(PRESCRIPTION_STORAGE_DIR, unique_filename)
-        with open(target_path, "wb") as target:
-            target.write(content)
         url = f"{_state.public_base_url}/api/files/prescriptions/{unique_filename}"
 
         try:
+            with open(target_path, "wb") as target:
+                target.write(content)
             async with conn.transaction():
                 # Roteamento de Pipeline: PDF Digital (Fluxo A) vs Foto Física (Fluxo B)
                 is_pdf = content_type == "application/pdf" or safe_filename.lower().endswith(".pdf") or content.startswith(b"%PDF")

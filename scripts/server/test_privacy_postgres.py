@@ -1,0 +1,102 @@
+"""Integração real no PostgreSQL efêmero do CI; nunca aceita DSN de produção."""
+import json
+import os
+import tempfile
+import unittest
+import uuid
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlparse
+
+import asyncpg
+from fastapi import HTTPException
+from routers import sync
+from services import account_deletion
+
+ROOT = Path(__file__).resolve().parents[2]
+TEST_DSN = os.getenv("TEST_POSTGRES_URL")
+
+
+@unittest.skipUnless(TEST_DSN, "PostgreSQL efêmero disponível somente no CI")
+class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        parsed = urlparse(TEST_DSN)
+        if parsed.hostname not in ("127.0.0.1", "localhost") or parsed.path != "/braga_privacy_test":
+            raise RuntimeError("O teste aceita apenas o banco local braga_privacy_test")
+        self.schema = "privacy_" + uuid.uuid4().hex
+        self.control = await asyncpg.connect(TEST_DSN)
+        await self.control.execute(f'CREATE SCHEMA "{self.schema}"')
+
+        async def setup(conn):
+            await conn.execute(f'SET search_path TO "{self.schema}", public')
+
+        self.pool = await asyncpg.create_pool(TEST_DSN, min_size=1, max_size=2, setup=setup)
+        async with self.pool.acquire() as conn:
+            await conn.execute((ROOT / "scripts/docker/init_schema.sql").read_text(encoding="utf-8"))
+            for number in (10, 17, 31, 32, 33):
+                migration = next((ROOT / "migrations").glob(f"{number:03d}_*.sql"))
+                await conn.execute(migration.read_text(encoding="utf-8"))
+            await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('paciente','Paciente'),('cuidador','Cuidador')")
+
+    async def asyncTearDown(self):
+        await self.pool.close()
+        await self.control.execute(f'DROP SCHEMA "{self.schema}" CASCADE')
+        await self.control.close()
+
+    async def test_caregiver_deletion_preserves_patient_history_and_patient_deletion_expires_files(self):
+        async with self.pool.acquire() as conn:
+            med = await conn.fetchval("INSERT INTO medications(user_id,name,schedule_time) VALUES ('paciente','Medicamento de teste','08:00') RETURNING id")
+            await conn.execute("INSERT INTO prescriptions(medication_id,patient_id,issued_on,validity_days,prescriber_name,prescriber_crm,confirmed_by) VALUES ($1,'paciente',CURRENT_DATE,30,'Teste','123','cuidador')",med)
+            await conn.execute("INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type) VALUES ('paciente','cuidador','Cuidador','TESTE')")
+            await conn.execute("INSERT INTO medication_logs(user_id,medication_id,taken_at,actor_id) VALUES ('paciente',$1,NOW(),'cuidador')",med)
+            await conn.execute("INSERT INTO symptoms_diary(patient_id,reported_by,reported_at,symptoms_text,input_method) VALUES ('paciente','cuidador',NOW(),'Teste','TEXT')")
+            await conn.execute("INSERT INTO medication_stock_adjustments(medication_id,patient_id,actor_id,new_total_units,idempotency_key) VALUES ($1,'paciente','cuidador',30,'teste')",med)
+            await conn.execute("INSERT INTO prescription_files(filename,patient_id) VALUES ('anexo.pdf','paciente')")
+        with tempfile.TemporaryDirectory() as root, patch.object(account_deletion,"STORAGE_DIR",root), patch.object(account_deletion,"STORAGE_EXAMS_DIR",str(Path(root)/"exams")):
+            result = await account_deletion.delete_account(self.pool,"cuidador",actor="operador de teste")
+            self.assertTrue(result["success"])
+            async with self.pool.acquire() as conn:
+                self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM medications"),1)
+                self.assertIsNone(await conn.fetchval("SELECT confirmed_by FROM prescriptions"))
+                self.assertIsNone(await conn.fetchval("SELECT actor_id FROM care_audit_trail"))
+                self.assertIsNone(await conn.fetchval("SELECT actor_id FROM medication_logs"))
+                self.assertIsNone(await conn.fetchval("SELECT actor_id FROM medication_stock_adjustments"))
+                self.assertIsNone(await conn.fetchval("SELECT reported_by FROM symptoms_diary"))
+            path = Path(root,"prescriptions","anexo.pdf")
+            path.parent.mkdir()
+            path.write_bytes(b"anexo de teste")
+            self.assertTrue((await account_deletion.delete_account(self.pool,"paciente",actor="titular"))["success"])
+            self.assertFalse(path.exists())
+            async with self.pool.acquire() as conn:
+                self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM prescriptions"),0)
+                self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM prescription_files"),0)
+                self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM user_deletion_logs"),2)
+
+    async def test_failed_transaction_rolls_back_every_deletion_and_cleanup_job(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute("INSERT INTO feedbacks(user_id,category,message) VALUES ('paciente','bug','Teste')")
+            await conn.execute("CREATE FUNCTION reject_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'falha de teste'; END $$")
+            await conn.execute("CREATE TRIGGER reject_delete BEFORE DELETE ON profiles FOR EACH ROW EXECUTE FUNCTION reject_delete()")
+        with self.assertRaises(asyncpg.PostgresError):
+            await account_deletion.delete_account(self.pool,"paciente",actor="titular")
+        async with self.pool.acquire() as conn:
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM feedbacks"),1)
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM account_storage_cleanup"),0)
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM user_deletion_logs"),0)
+
+    async def test_feedback_retry_and_legacy_backfill_respect_ownership(self):
+        fid = str(uuid.uuid4())
+        with patch.object(sync._state,"db_pool",self.pool), patch.object(sync._state,"rate_limiter",MagicMock(check=AsyncMock())), patch.object(sync,"get_client_ip",return_value="unknown"):
+            feedback = sync.FeedbackSyncDto(id=fid,userId="paciente",category="bug",message="Teste")
+            for _ in range(2):
+                self.assertEqual((await sync.sync_feedback(feedback,MagicMock(),uid="paciente"))["id"],fid)
+            with self.assertRaises(HTTPException) as error:
+                await sync.sync_feedback(feedback.model_copy(update={"userId":"cuidador"}),MagicMock(),uid="cuidador")
+            self.assertEqual(error.exception.status_code,409)
+        async with self.pool.acquire() as conn:
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM feedbacks"),1)
+            for patient,filename in (("paciente","legado.pdf"),("paciente","ambiguo.pdf"),("cuidador","ambiguo.pdf")):
+                await conn.execute("INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type,details) VALUES ($1,$1,'Teste','PRESCRIPTION_ANALYZED',$2::jsonb)",patient,json.dumps({"file_url":f"https://exemplo.test/api/files/prescriptions/{filename}"}))
+            await conn.execute((ROOT / "migrations/034_prescription_files_legacy.sql").read_text(encoding="utf-8"))
+            self.assertEqual(await conn.fetchval("SELECT patient_id FROM prescription_files WHERE filename='legado.pdf'"),"paciente")
+            self.assertIsNone(await conn.fetchval("SELECT patient_id FROM prescription_files WHERE filename='ambiguo.pdf'"))

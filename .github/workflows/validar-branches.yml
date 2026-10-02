@@ -1,7 +1,7 @@
 name: Validar alterações
 on:
   push:
-    branches: ['feat/t17-04-nome-comunitario']
+    branches: ['master', 'feat/**', 'fix/**']
   pull_request:
     branches: [master]
 permissions:
@@ -9,6 +9,22 @@ permissions:
 jobs:
   validar:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: braga_privacy_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d braga_privacy_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/braga_privacy_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

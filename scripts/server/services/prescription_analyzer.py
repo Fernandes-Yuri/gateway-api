@@ -504,7 +504,7 @@ async def reconcile_and_verify(
     Garante o princípio clínico de tolerância zero com ambiguidades e funde 1ª e 2ª vias idênticas.
     """
     merged_items: list[dict] = []
-    seen_keys: dict[tuple[str, float], dict] = {}
+    seen_keys: dict[tuple, dict] = {}
     duplicates_merged_count = 0
     pages_seen: set[int] = set()
 
@@ -523,7 +523,7 @@ async def reconcile_and_verify(
         ).strip()
         canonical_name = " ".join(canonical_name.split())
         canonical_dose = parse_dosage_mg(raw_dosage) or 0.0
-        key = (canonical_name, canonical_dose)
+        key = (canonical_name, canonical_dose, normalize_text(item.get("frequency") or ""), str(item.get("treatment_duration_days") or ""))
 
         if canonical_name and key in seen_keys:
             existing = seen_keys[key]
@@ -861,7 +861,7 @@ async def analyze_pdf_prescription(pdf_bytes: bytes, db_conn, raw_ocr_text: str 
 
     # Deduplicação de vias / cópias
     merged_items: list[dict] = []
-    seen_keys: dict[tuple[str, float], dict] = {}
+    seen_keys: dict[tuple, dict] = {}
     duplicates_merged_count = 0
 
     for item in extracted_items:
@@ -876,7 +876,7 @@ async def analyze_pdf_prescription(pdf_bytes: bytes, db_conn, raw_ocr_text: str 
         ).strip()
         canonical_name = " ".join(canonical_name.split())
         canonical_dose = parse_dosage_mg(raw_dosage) or 0.0
-        key = (canonical_name, canonical_dose)
+        key = (canonical_name, canonical_dose, normalize_text(item.get("frequency") or ""), str(item.get("treatment_duration_days") or ""))
 
         if canonical_name and key in seen_keys:
             existing = seen_keys[key]

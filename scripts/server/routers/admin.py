@@ -62,7 +62,8 @@ class FeedbackReplyCreate(BaseModel):
 
 class BlockedIpCreate(BaseModel):
     ip: str
-    reason: str
+    reason: str = Field(min_length=1, max_length=500)
+    minutes: int = Field(default=1440, ge=1, le=43200)
 
 
 # ---- Autenticacao ------------------------------------------------------
@@ -548,12 +549,12 @@ async def list_blocked_ips_admin(
 @router.post("/blocked-ips", include_in_schema=False)
 @router.post("/api/admin/blocked-ips")
 async def create_blocked_ip(
+    body: BlockedIpCreate,
     _auth=Depends(require_service_token),
-    body: BlockedIpCreate = None,
 ):
     """Cria ou atualiza um bloqueio de IP manual na tabela security_blocked_ips.
 
-    O IP fica bloqueado por 24h a partir de agora. O campo violations e
+    O prazo padrão é de 24h; o portal pode informar até 30 dias. O campo violations e
     setado para 3 para garantir que o middleware nao desbloqueie
     automaticamente antes do prazo.
     """
@@ -566,18 +567,19 @@ async def create_blocked_ip(
         await conn.execute(
             """
             INSERT INTO security_blocked_ips (ip, reason, violations, blocked_until, created_at, updated_at)
-            VALUES ($1, $2, 3, NOW() + INTERVAL '24 hours', NOW(), NOW())
+            VALUES ($1, $2, 3, NOW() + ($3 * INTERVAL '1 minute'), NOW(), NOW())
             ON CONFLICT (ip) DO UPDATE SET
                 reason = EXCLUDED.reason,
                 violations = 3,
-                blocked_until = NOW() + INTERVAL '24 hours',
+                blocked_until = EXCLUDED.blocked_until,
                 updated_at = NOW();
             """,
             body.ip,
             body.reason,
+            body.minutes,
         )
     if _state.rate_limiter is not None:
-        await _state.rate_limiter.set_manual_block(body.ip, True)
+        await _state.rate_limiter.set_manual_block(body.ip, True, seconds=body.minutes * 60)
     print(f"[ADMIN] IP bloqueado: {body.ip} | razao: {body.reason}")
     return {"success": True, "ip": body.ip, "reason": body.reason}
 
@@ -589,6 +591,10 @@ async def delete_blocked_ip(
     ip: str = None,
 ):
     """Remove um IP da tabela security_blocked_ips, desbloqueando-o imediatamente."""
+    try:
+        ip = str(ipaddress.ip_address(ip))
+    except ValueError:
+        raise HTTPException(422, "IP inválido.")
     pool = _require_pool()
     async with pool.acquire() as conn:
         await conn.execute(
@@ -599,6 +605,18 @@ async def delete_blocked_ip(
         await _state.rate_limiter.set_manual_block(ip, False)
     print(f"[ADMIN] IP desbloqueado: {ip}")
     return {"success": True, "ip": ip}
+
+
+@router.get("/api/admin/blocked-ips/check")
+async def check_blocked_ip(ip: str, _auth=Depends(require_service_token)):
+    try:
+        ip = str(ipaddress.ip_address(ip))
+    except ValueError:
+        raise HTTPException(422, "IP inválido.")
+    async with _require_pool().acquire() as conn:
+        blocked = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM security_blocked_ips WHERE ip=$1 AND blocked_until > NOW())", ip)
+    return {"blocked": bool(blocked)}
 
 
 # ---- Proxy de autenticacao (login) -------------------------------------

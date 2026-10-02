@@ -177,7 +177,8 @@ class FeedbackSyncDto(BaseModel):
                 raise ValueError("Captura inválida ou maior que 1 MB.")
         except ValueError:
             raise ValueError("A captura deve ser uma imagem PNG, JPEG ou WebP em base64 de até 1 MB.")
-        return encoded
+        media_type = "image/png" if content.startswith(b"\x89PNG") else "image/jpeg" if content.startswith(b"\xff\xd8") else "image/webp"
+        return f"data:{media_type};base64,{encoded}"
 
 
 class AuditLogSyncDto(BaseModel):
