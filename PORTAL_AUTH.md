@@ -74,7 +74,9 @@ O session-check administrativo continua validando a versão de `admin_users`,
 fora do bloqueio por UID, conforme a exceção administrativa. Não associar
 contas por nome ou e-mail para suspender um operador.
 
-IPs e restrições exigem identidade assinada e role atual admin/superadmin.
+Listagem/mutações de IP e restrições exigem identidade assinada e role atual
+admin/superadmin. O check booleano de IP continua acessível ao SERVICE_TOKEN
+para a defesa do portal antes do login, sem expor motivos ou auditoria.
 Operações de restrição e IP gravam auditoria na mesma transação. Exclusão
 continua chamando `delete_account`, com `user_deletion_logs` e fila de arquivos.
 O portal não acessa PostgreSQL nessas operações. O IP da auditoria é o
