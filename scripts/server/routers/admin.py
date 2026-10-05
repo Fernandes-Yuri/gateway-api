@@ -617,7 +617,8 @@ async def delete_blocked_ip(
 
 @router.get("/api/admin/blocked-ips/check")
 async def check_blocked_ip(request: Request, ip: str, _auth=Depends(require_service_token)):
-    await _moderation_operator(request)
+    # Consulta somente booleana também usada pela defesa do portal antes do login.
+    # O portal exige sessão/role na tela; mutações e listagem exigem operador aqui.
     try:
         ip = str(ipaddress.ip_address(ip))
     except ValueError:
