@@ -58,3 +58,38 @@ Testes isolados: `cd scripts/server` e
 `python -m unittest test_portal_auth_security -v`. Os testes simulam o
 banco. A migração e os fluxos com PostgreSQL real ainda precisam de
 validação no ambiente de homologação antes da publicação em produção.
+
+## Moderação por UID e IP
+
+A migração `035_user_restrictions.sql` adiciona restrições, auditoria e
+revogação das sessões Firebase por `auth_time`. Aplicar pelo pipeline antes
+do portal. A restrição incrementa `profiles.session_version` e registra
+`session_revoked_at`: sessões anteriores precisam de novo login, inclusive
+após a remoção ou expiração da restrição. Após novo login, `no-sync` permite
+leituras e recusa POST em sync/exams-sync; `read-only` recusa escritas;
+`suspended` recusa acesso autenticado. GET app/latest permanece disponível.
+
+`admin_users` usa identidade própria, sem vínculo por e-mail com Firebase.
+O session-check administrativo continua validando a versão de `admin_users`,
+fora do bloqueio por UID, conforme a exceção administrativa. Não associar
+contas por nome ou e-mail para suspender um operador.
+
+Listagem/mutações de IP e restrições exigem identidade assinada e role atual
+admin/superadmin. O check booleano de IP continua acessível ao SERVICE_TOKEN
+para a defesa do portal antes do login, sem expor motivos ou auditoria.
+Operações de restrição e IP gravam auditoria na mesma transação. Exclusão
+continua chamando `delete_account`, com `user_deletion_logs` e fila de arquivos.
+O portal não acessa PostgreSQL nessas operações. O IP da auditoria é o
+`cf-connecting-ip` observado no gateway (na chamada do portal, pode ser o
+IP de saída do Render); `x-forwarded-for` não é aceito como identidade.
+
+Último login e IPs de acesso Firebase por UID não existem no esquema atual;
+a consulta informa a indisponibilidade. Tokens push e dados clínicos não
+são expostos, apenas metadados dos dispositivos e contagens.
+
+Validação: executar os três módulos de regressão existentes e
+`test_user_moderation`. `test_moderation_postgres` aplica 028, 029 e 035 no
+PostgreSQL efêmero do CI, verifica expiração, revogação e rollback da auditoria.
+Antes do merge, concluir o E2E no portal de homologação com UID/IP de teste,
+incluindo bloqueio/check/desbloqueio, novo login, no-sync/leitura/remoção,
+exclusão com fila pendente e tentativas negativas de UID, duração e role.
