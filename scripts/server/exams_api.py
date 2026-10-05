@@ -54,6 +54,7 @@ class ManualExamCreateRequest(BaseModel):
     category: str = Field("Laboratorial", max_length=100)
     exam_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     items: List[ExamItemInput] = Field(default_factory=list)
+    replace_items: bool = False
     cloud_consent: bool = False
     terms_version: str = ""
     valid_exam_attested: bool = False
@@ -124,6 +125,10 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
                 detail="Banco de dados indisponível no momento."
             )
         return p
+
+    @app.get("/api/exams-sync/capabilities")
+    async def exam_sync_capabilities(uid: str = Depends(firebase_uid)):
+        return {"snapshot_updates": True}
 
     # Compatibilidade Android: os endpoints /api/sync permanecem, mas usam o
     # mesmo módulo, identidade e allowlist das rotas modernas de exames.
@@ -449,6 +454,10 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
                 raise HTTPException(403, "Exame indisponível para esta conta.")
             await record_exam_consent(conn, uid, parsed_exam_id, client_ip, now)
 
+            # Novos clientes enviam o conjunto completo. Clientes antigos mantêm o contrato anterior.
+            if payload.replace_items:
+                await conn.execute("DELETE FROM exam_items WHERE exam_id = $1 AND user_id = $2", parsed_exam_id, uid)
+
             # 2. Insere os parâmetros laboratoriais em lote
             items_count = 0
             for item in payload.items:
@@ -476,6 +485,7 @@ def install_exam_routes(app, get_pool, rate_limiter=None):
             "success": True,
             "exam_id": str(parsed_exam_id),
             "items_created_count": items_count,
+            "snapshot_applied": payload.replace_items,
             "status": "confirmed"
         }
 
