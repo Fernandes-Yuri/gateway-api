@@ -119,6 +119,46 @@ class ExamsApiTests(unittest.TestCase):
         self.conn.fetchrow.assert_called_once()
         self.assertEqual(self.conn.execute.call_count, 3)
 
+    def test_snapshot_replaces_items_only_after_owner_and_consent(self):
+        exam_id = uuid.uuid4()
+        self.conn.fetchrow.return_value = {"id": exam_id}
+        payload = {
+            "exam_id": str(exam_id), "title": "Glicemia", "exam_date": "2026-10-05",
+            "cloud_consent": True, "terms_version": EXAM_TERMS_VERSION,
+            "valid_exam_attested": True, "non_diagnostic_purpose_accepted": True,
+            "replace_items": True,
+            "items": [{"item_key": "glucose", "item_name": "Glicose", "value_numeric": 98,
+                       "value_text": "98", "unit": "mg/dL"}],
+        }
+        for _ in range(2):
+            self.conn.execute.reset_mock()
+            response = self.client.post("/api/exams/manual", json=payload)
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertTrue(response.json()["snapshot_applied"])
+            calls = self.conn.execute.await_args_list
+            self.assertIn("DELETE FROM exam_items", calls[1].args[0])
+            self.assertEqual(calls[1].args[1:], (exam_id, self.user_id))
+            self.assertIn("INSERT INTO exam_items", calls[2].args[0])
+        self.conn.execute.reset_mock()
+        payload["cloud_consent"] = False
+        self.assertEqual(self.client.post("/api/exams/manual", json=payload).status_code, 422)
+        self.conn.execute.assert_not_awaited()
+
+    def test_snapshot_does_not_delete_another_owners_items(self):
+        self.conn.fetchrow.return_value = None
+        response = self.client.post("/api/exams/manual", json={
+            "exam_id": str(uuid.uuid4()), "title": "Exame", "exam_date": "2026-10-05",
+            "replace_items": True, "cloud_consent": True, "terms_version": EXAM_TERMS_VERSION,
+            "valid_exam_attested": True, "non_diagnostic_purpose_accepted": True,
+        })
+        self.assertEqual(response.status_code, 403)
+        self.conn.execute.assert_not_awaited()
+
+    def test_capabilities_announces_snapshot_support(self):
+        response = self.client.get("/api/exams-sync/capabilities")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["snapshot_updates"])
+
     def test_upload_exam_with_cloud_consent_true(self):
         """Valida upload multipart com consentimento de nuvem ativo (CLOUD_STORED)."""
         exam_id = str(uuid.uuid4())
