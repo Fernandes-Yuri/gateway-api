@@ -252,6 +252,8 @@ app.add_middleware(
 )
 
 db_pool: Optional[Any] = None
+from user_moderation import configure_pool as configure_moderation_pool
+configure_moderation_pool(lambda: db_pool)
 
 async def _vip_notify_admin(text: str):
     """doc 10 §4.4: avisa o admin no WhatsApp a cada inscrição VIP nova."""
@@ -300,6 +302,22 @@ async def security_firewall_middleware(request: Request, call_next):
                 "X-RateLimit-Blocked": "true",
             },
         )
+    return await call_next(request)
+
+
+@app.middleware('http')
+async def user_moderation_middleware(request: Request, call_next):
+    """Aplica restrições também às rotas públicas quando recebem identidade Firebase."""
+    path = request.url.path
+    header = request.headers.get('authorization', '')
+    if (path.startswith('/api/') and not path.startswith('/api/admin/') and
+            not (path == '/api/app/latest' and request.method == 'GET') and
+            header.startswith('Bearer ') and header[7:].count('.') == 2):
+        from api_identity import firebase_uid
+        try:
+            await firebase_uid(request)
+        except HTTPException as error:
+            return JSONResponse(status_code=error.status_code, content={'detail': error.detail})
     return await call_next(request)
 
 # =============================================================

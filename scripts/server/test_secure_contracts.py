@@ -58,16 +58,20 @@ class SecureContracts(unittest.IsolatedAsyncioTestCase):
 
     async def test_block_duration_is_shared_with_live_cache(self):
         conn = MagicMock(execute=AsyncMock())
+        conn.transaction.return_value.__aenter__ = AsyncMock()
+        conn.transaction.return_value.__aexit__ = AsyncMock(return_value=False)
         limiter = MagicMock(set_manual_block=AsyncMock())
-        with patch.object(admin._state,"db_pool",Pool(conn)), patch.object(admin._state,"rate_limiter",limiter):
-            await admin.create_blocked_ip(admin.BlockedIpCreate(ip="203.0.113.5",reason="teste",minutes=60))
+        with patch.object(admin._state,"db_pool",Pool(conn)), patch.object(admin._state,"rate_limiter",limiter), patch.object(admin, '_moderation_operator', AsyncMock(return_value='admin@example.test')):
+            from starlette.requests import Request
+            request = Request({'type': 'http', 'method': 'POST', 'path': '/api/admin/blocked-ips', 'headers': []})
+            await admin.create_blocked_ip(admin.BlockedIpCreate(ip="203.0.113.5",reason="teste",minutes=60), request)
         self.assertEqual(conn.execute.call_args.args[-1],60)
         limiter.set_manual_block.assert_awaited_once_with("203.0.113.5",True,seconds=3600)
 
     async def test_active_block_check_queries_authoritative_table(self):
         conn = MagicMock(fetchval=AsyncMock(return_value=True))
-        with patch.object(admin._state,"db_pool",Pool(conn)):
-            self.assertEqual(await admin.check_blocked_ip("203.0.113.5"),{"blocked":True})
+        with patch.object(admin._state,"db_pool",Pool(conn)), patch.object(admin, '_moderation_operator', AsyncMock(return_value='admin@example.test')):
+            self.assertEqual(await admin.check_blocked_ip(MagicMock(), "203.0.113.5"),{"blocked":True})
         self.assertIn("blocked_until > NOW()",conn.fetchval.call_args.args[0])
 
     async def test_patient_owner_and_linked_caregiver_can_read_but_intruder_cannot(self):

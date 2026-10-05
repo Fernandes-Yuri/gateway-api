@@ -27,7 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from security_defense import get_client_ip
+from security_defense import get_client_ip, sanitize_zero_trust_text
 from portal_auth_security import auth_limit, master_step, consume_master
 
 router = APIRouter()
@@ -518,6 +518,7 @@ async def metrics_feature_usage(
 
 @router.get("/api/admin/blocked-ips")
 async def list_blocked_ips_admin(
+    request: Request,
     _auth=Depends(require_service_token),
     limit: int = Query(200, ge=1, le=500),
 ):
@@ -526,6 +527,7 @@ async def list_blocked_ips_admin(
     Essa e a tabela autoritativa: o middleware do gateway bloqueia de
     verdade. A 'blocked_ips' do portal era uma copia divergente.
     """
+    await _moderation_operator(request)
     pool = _require_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -550,6 +552,7 @@ async def list_blocked_ips_admin(
 @router.post("/api/admin/blocked-ips")
 async def create_blocked_ip(
     body: BlockedIpCreate,
+    request: Request,
     _auth=Depends(require_service_token),
 ):
     """Cria ou atualiza um bloqueio de IP manual na tabela security_blocked_ips.
@@ -558,13 +561,17 @@ async def create_blocked_ip(
     setado para 3 para garantir que o middleware nao desbloqueie
     automaticamente antes do prazo.
     """
+    email = await _moderation_operator(request)
+    body.reason = _moderation_reason(body.reason, request)
     try:
         body.ip = str(ipaddress.ip_address(body.ip))
     except ValueError:
         raise HTTPException(422, "IP inválido.")
     pool = _require_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
+        async with conn.transaction():
+            await _moderation_audit(conn, email, request, 'block-ip', body.reason, ip=body.ip)
+            await conn.execute(
             """
             INSERT INTO security_blocked_ips (ip, reason, violations, blocked_until, created_at, updated_at)
             VALUES ($1, $2, 3, NOW() + ($3 * INTERVAL '1 minute'), NOW(), NOW())
@@ -580,27 +587,28 @@ async def create_blocked_ip(
         )
     if _state.rate_limiter is not None:
         await _state.rate_limiter.set_manual_block(body.ip, True, seconds=body.minutes * 60)
-    print(f"[ADMIN] IP bloqueado: {body.ip} | razao: {body.reason}")
+    print(f"[ADMIN] IP bloqueado: {body.ip}")
     return {"success": True, "ip": body.ip, "reason": body.reason}
 
 
 @router.delete("/blocked-ips/{ip}", include_in_schema=False)
 @router.delete("/api/admin/blocked-ips/{ip}")
 async def delete_blocked_ip(
+    request: Request,
     _auth=Depends(require_service_token),
     ip: str = None,
 ):
     """Remove um IP da tabela security_blocked_ips, desbloqueando-o imediatamente."""
+    email = await _moderation_operator(request)
     try:
         ip = str(ipaddress.ip_address(ip))
     except ValueError:
         raise HTTPException(422, "IP inválido.")
     pool = _require_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM security_blocked_ips WHERE ip = $1",
-            ip,
-        )
+        async with conn.transaction():
+            await _moderation_audit(conn, email, request, 'unblock-ip', 'Desbloqueio manual confirmado', ip=ip)
+            await conn.execute("DELETE FROM security_blocked_ips WHERE ip = $1", ip)
     if _state.rate_limiter is not None:
         await _state.rate_limiter.set_manual_block(ip, False)
     print(f"[ADMIN] IP desbloqueado: {ip}")
@@ -608,7 +616,8 @@ async def delete_blocked_ip(
 
 
 @router.get("/api/admin/blocked-ips/check")
-async def check_blocked_ip(ip: str, _auth=Depends(require_service_token)):
+async def check_blocked_ip(request: Request, ip: str, _auth=Depends(require_service_token)):
+    await _moderation_operator(request)
     try:
         ip = str(ipaddress.ip_address(ip))
     except ValueError:
@@ -1193,13 +1202,127 @@ class DeleteAccountRequest(BaseModel):
     userId: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
 
-@router.post("/api/admin/delete-user-data")
-async def delete_user_data(body: DeleteAccountRequest, request: Request, _auth=Depends(require_service_token)):
+async def _moderation_operator(request):
     email = _portal_identity(request)
     pool = _require_pool()
+    await auth_limit(pool, 'moderation', email, 30, 60)
     async with pool.acquire() as conn:
-        role = await conn.fetchval("SELECT role FROM admin_users WHERE email=$1", email)
-    if role not in ("admin", "superadmin"):
-        raise HTTPException(403, "Permissão administrativa necessária.")
+        role = await conn.fetchval('SELECT role FROM admin_users WHERE email=$1', email)
+    if role not in ('admin', 'superadmin'):
+        raise HTTPException(403, 'Permissão administrativa necessária.')
+    return email
+
+
+def _moderation_reason(reason, request):
+    clean = sanitize_zero_trust_text(reason, max_length=500, field_name='motivo',
+                                    ip=get_client_ip(request), rate_limiter=_state.rate_limiter,
+                                    pool=_state.db_pool).strip()
+    if not clean:
+        raise HTTPException(422, 'Motivo obrigatório.')
+    return clean
+
+
+async def _moderation_audit(conn, email, request, action, reason, *, uid=None, ip=None):
+    await conn.execute(
+        'INSERT INTO moderation_audit_log(actor_email,ip,target_uid,target_ip,action,reason) VALUES ($1,$2,$3,$4,$5,$6)',
+        email, get_client_ip(request), uid, ip, action, reason)
+
+
+class UserRestrictionCreate(DeleteAccountRequest):
+    level: str = Field(pattern=r'^(read-only|no-sync|suspended)$')
+    reason: str = Field(min_length=1, max_length=500)
+    minutes: Optional[int] = Field(default=None, ge=1, le=43200)
+
+
+def _validate_uid(uid):
+    import re
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', uid):
+        raise HTTPException(422, 'Use o UID da conta.')
+    return uid
+
+
+@router.get('/api/admin/user-restrictions')
+async def get_user_restriction(request: Request, userId: str, _auth=Depends(require_service_token)):
+    await _moderation_operator(request)
+    _validate_uid(userId)
+    async with _require_pool().acquire() as conn:
+        row = await conn.fetchrow('SELECT * FROM user_restrictions WHERE user_id=$1 AND (expires_at IS NULL OR expires_at>NOW())', userId)
+    return {'success': True, 'data': dict(row) if row else None}
+
+
+@router.post('/api/admin/user-restrictions')
+async def restrict_user(body: UserRestrictionCreate, request: Request, _auth=Depends(require_service_token)):
+    email = await _moderation_operator(request)
+    reason = _moderation_reason(body.reason, request)
+    async with _require_pool().acquire() as conn:
+        async with conn.transaction():
+            version = await conn.fetchval('UPDATE profiles SET session_version=session_version+1,session_revoked_at=NOW() WHERE id=$1 RETURNING session_version', body.userId)
+            if version is None:
+                raise HTTPException(404, 'Conta não encontrada.')
+            await conn.execute('''INSERT INTO user_restrictions(user_id,level,reason,expires_at,created_by)
+                VALUES ($1,$2,$3,NOW()+($4::integer*INTERVAL '1 minute'),$5)
+                ON CONFLICT(user_id) DO UPDATE SET level=EXCLUDED.level,reason=EXCLUDED.reason,
+                expires_at=EXCLUDED.expires_at,created_by=EXCLUDED.created_by,updated_at=NOW()''',
+                body.userId, body.level, reason, body.minutes, email)
+            await _moderation_audit(conn, email, request, body.level, reason, uid=body.userId)
+    return {'success': True, 'session_version': version}
+
+
+@router.delete('/api/admin/user-restrictions/{userId}')
+async def unrestrict_user(userId: str, request: Request, _auth=Depends(require_service_token)):
+    email = await _moderation_operator(request)
+    _validate_uid(userId)
+    async with _require_pool().acquire() as conn:
+        async with conn.transaction():
+            await conn.fetchval('SELECT id FROM profiles WHERE id=$1 FOR UPDATE', userId)
+            await conn.execute('DELETE FROM user_restrictions WHERE user_id=$1', userId)
+            await _moderation_audit(conn, email, request, 'unrestrict', 'Remoção manual confirmada', uid=userId)
+    return {'success': True}
+
+
+@router.get('/api/admin/moderation-history')
+async def moderation_history(request: Request, userId: Optional[str] = None, ip: Optional[str] = None,
+                             _auth=Depends(require_service_token)):
+    await _moderation_operator(request)
+    if (userId is None) == (ip is None):
+        raise HTTPException(422, 'Informe um UID ou um IP.')
+    if userId is not None:
+        _validate_uid(userId)
+    else:
+        try:
+            ip = str(ipaddress.ip_address(ip))
+        except ValueError:
+            raise HTTPException(422, 'IP inválido.')
+    async with _require_pool().acquire() as conn:
+        rows = await conn.fetch('''SELECT actor_email,ip,target_uid,target_ip,action,reason,created_at
+            FROM moderation_audit_log WHERE target_uid=$1 OR target_ip=$2 ORDER BY created_at DESC LIMIT 200''', userId, ip)
+        deletions = await conn.fetch('SELECT admin_email,ip_address,deleted_at,tables_affected FROM user_deletion_logs WHERE user_id=$1 ORDER BY deleted_at DESC LIMIT 100', userId) if userId else []
+        care = await conn.fetch('SELECT actor_id,actor_name,action_type,occurred_at FROM care_audit_trail WHERE patient_id=$1 OR actor_id=$1 ORDER BY occurred_at DESC LIMIT 100', userId) if userId else []
+    return {'success': True, 'data': [dict(r) for r in rows], 'deletions': [dict(r) for r in deletions], 'care': [dict(r) for r in care]}
+
+
+@router.get('/api/admin/user-moderation')
+async def user_moderation_detail(request: Request, userId: str, _auth=Depends(require_service_token)):
+    await _moderation_operator(request)
+    _validate_uid(userId)
+    async with _require_pool().acquire() as conn:
+        profile = await conn.fetchrow('SELECT id,full_name,created_at,session_version FROM profiles WHERE id=$1', userId)
+        if not profile:
+            raise HTTPException(404, 'Conta não encontrada.')
+        family = await conn.fetch("SELECT id,patient_id,caregiver_id,status FROM family_bindings WHERE (patient_id=$1 OR caregiver_id=$1) AND status='ACTIVE'", userId)
+        devices = await conn.fetch('SELECT platform,role,is_active,last_seen_at FROM device_push_tokens WHERE user_id=$1 LIMIT 100', userId)
+        counts = await conn.fetchrow('SELECT (SELECT COUNT(*) FROM exams WHERE user_id=$1) AS exams,(SELECT COUNT(*) FROM feedbacks WHERE user_id=$1) AS feedbacks', userId)
+        restriction = await conn.fetchrow('SELECT * FROM user_restrictions WHERE user_id=$1 AND (expires_at IS NULL OR expires_at>NOW())', userId)
+    return {'success': True, 'profile': dict(profile), 'family': [dict(r) for r in family],
+            'devices': [dict(r) for r in devices], 'counts': dict(counts),
+            'restriction': dict(restriction) if restriction else None,
+            'lastLogin': None, 'recentIps': [], 'unavailable': ['Último login e IPs de acesso não são registrados por UID no esquema atual.']}
+
+
+@router.post("/api/admin/delete-user-data")
+async def delete_user_data(body: DeleteAccountRequest, request: Request, _auth=Depends(require_service_token)):
+    email = await _moderation_operator(request)
+    pool = _require_pool()
+    await auth_limit(pool, 'moderation_delete', email, 5, 60)
     from services.account_deletion import delete_account
     return await delete_account(pool, body.userId, actor=email, ip=get_client_ip(request))
