@@ -28,6 +28,8 @@ async def require_not_restricted(uid, request, *, auth_time=None):
               (level == 'no-sync' and method == 'POST' and
                path.startswith(('/api/sync/', '/api/exams-sync/', '/api/exams/'))))
         if denied:
+            from security_telemetry import mark_signal
+            mark_signal('restricted_access')
             raise HTTPException(401 if level == 'suspended' else 403, row['reason'])
     if auth_time is not None:
         async with pool.acquire() as conn:

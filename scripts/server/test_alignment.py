@@ -5,7 +5,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from security_telemetry import mark_signal
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from profile_contract import validate_profile, profile_upsert
@@ -19,7 +20,8 @@ from api_identity import firebase_uid
 # FamilyMessage permanecem no server.py (consumidos por install_family_routes).
 # Ler ambos para manter a extracao do contrato a par da modularizacao.
 names = {'ProfileSyncDto', 'FamilyBindingSyncDto', 'FamilyMessageSyncDto'}
-namespace = dict(BaseModel=BaseModel, Field=Field, Optional=Optional, List=List)
+namespace = dict(BaseModel=BaseModel, Field=Field, Optional=Optional, List=List,
+                 model_validator=model_validator, mark_signal=mark_signal)
 for _src in ('server.py', 'routers/sync.py'):
     tree = ast.parse((Path(__file__).parent / _src).read_text(encoding='utf-8'))
     _classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name in names]
