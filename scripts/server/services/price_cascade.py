@@ -10,6 +10,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 import httpx
+from services.grocery_baseline import fetch_baseline
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SEED_PATH = _ROOT / "grocery_search_terms.json"
@@ -35,6 +36,10 @@ WHERE grocery_price_cache.source <> 'manual'
   AND grocery_price_cache.updated_at IS NOT DISTINCT FROM $9::timestamptz
 RETURNING food_name
 """
+_BASELINE_ONLY_UPSERT = _UPSERT.replace(
+    "WHERE grocery_price_cache.source <> 'manual'",
+    "WHERE grocery_price_cache.source <> 'manual' AND grocery_price_cache.price_avg IS NULL",
+)
 
 
 def _numero(value):
@@ -109,6 +114,16 @@ def _buscar_preco(previous, now, rates):
     return _estimate_ipca(previous, now, rates)
 
 
+def _baseline_data(entry, now, rates):
+    previous = {"price_avg": entry["price"], "price_min": entry["price"], "price_max": entry["price"],
+                "updated_at": datetime.fromisoformat(entry["data"]).replace(tzinfo=timezone.utc)}
+    return _estimate_ipca(previous, now, rates)
+
+
+def _audit_baseline(entry):
+    print("[grocery_baseline] Cadastrado: " + json.dumps(entry, ensure_ascii=False, separators=(",", ":")))
+
+
 async def atualizar_precos(db_pool):
     resumo = {"atualizados": 0, "sem_preco": 0, "erros": 0}
     if not db_pool:
@@ -129,6 +144,12 @@ async def atualizar_precos(db_pool):
         async with httpx.AsyncClient(follow_redirects=True) as client:
             rates, errors = await _fetch_ipca(client)
             resumo["erros"] += errors
+            missing = [item for item in items if history.get(item["food_name"]) is None or
+                       (history[item["food_name"]]["price_avg"] is None and history[item["food_name"]]["source"] != "manual")]
+            baselines = {}
+            if missing:
+                baselines, errors = await fetch_baseline(client, missing, now)
+                resumo["erros"] += errors
             for item in items:
                 name = item["food_name"]
                 previous = history.get(name)
@@ -137,12 +158,17 @@ async def atualizar_precos(db_pool):
                 await asyncio.sleep(_DELAY_SECONDS)
                 try:
                     data = _buscar_preco(previous, now, rates)
+                    entry = baselines.get(name)
+                    if data is None and entry:
+                        data = _baseline_data(entry, now, rates)
                     data = data or {"avg": None, "min": None, "max": None, "source": "cascade", "count": 0}
                     saved = await db_pool.fetchrow(_UPSERT, name, item["search_term"], data["avg"],
                                                   data["min"], data["max"], data["source"], data["count"],
                                                   data["avg"] is None, previous["updated_at"] if previous else None)
                     if saved:
                         resumo["sem_preco" if data["avg"] is None else "atualizados"] += 1
+                        if entry:
+                            _audit_baseline({**entry, "price_importado": str(data["avg"])})
                 except Exception:
                     resumo["erros"] += 1
                     _LOG.warning("[price_cascade] Erro ao processar item do catálogo")
@@ -159,5 +185,45 @@ async def seed_inicial(db_pool):
                                   VALUES ($1, $2, 'cascade', TRUE) ON CONFLICT (food_name) DO NOTHING""",
                                   [(r["food_name"], r["search_term"]) for r in items])
         _LOG.info("[price_cascade] Seed inicial executado para %s itens", len(items))
+        # Preenchimento inicial em background; não bloquear a inicialização da API.
+        asyncio.create_task(preencher_baseline(db_pool))
     except Exception:
         _LOG.warning("[price_cascade] Aviso no seed inicial")
+
+
+async def preencher_baseline(db_pool):
+    """Preenche apenas nulos; executado na inicialização e refeito pelo job semanal."""
+    if _LOCK.locked():
+        return
+    async with _LOCK:
+        try:
+            items = json.loads(_SEED_PATH.read_text(encoding="utf-8"))
+            rows = await db_pool.fetch("SELECT food_name, price_avg, price_min, price_max, source, updated_at FROM grocery_price_cache")
+            history = {row["food_name"]: row for row in rows}
+            missing = [item for item in items if history.get(item["food_name"]) is None or
+                       (history[item["food_name"]]["price_avg"] is None and history[item["food_name"]]["source"] != "manual")]
+            if not missing:
+                return
+            now = datetime.now(timezone.utc)
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                baselines, errors = await fetch_baseline(client, missing, now)
+                rates, ipca_errors = await _fetch_ipca(client)
+            imported = 0
+            for item in missing:
+                entry = baselines.get(item["food_name"])
+                if not entry:
+                    continue
+                previous = history.get(item["food_name"])
+                try:
+                    data = _baseline_data(entry, now, rates)
+                    saved = await db_pool.fetchrow(_BASELINE_ONLY_UPSERT, item["food_name"], item["search_term"],
+                                                  data["avg"], data["min"], data["max"], "estimated", 0,
+                                                  False, previous["updated_at"] if previous else None)
+                    if saved:
+                        imported += 1
+                        _audit_baseline({**entry, "price_importado": str(data["avg"])})
+                except Exception:
+                    errors += 1
+            print(f"[grocery_baseline] Concluído: importados={imported} sem_fonte={len(missing) - imported} erros={errors + ipca_errors}")
+        except Exception:
+            print("[grocery_baseline] Falha no preenchimento inicial; preços existentes preservados")

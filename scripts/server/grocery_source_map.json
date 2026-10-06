@@ -1,0 +1,1086 @@
+[
+  {
+    "food_name": "Óleo de Abacate Extravirgem"
+  },
+  {
+    "food_name": "Água de Coco Natural"
+  },
+  {
+    "food_name": "Água Saborizada com Pepino, Hortelã e Limão",
+    "ceagesp": [
+      "PEPINO JAPONES"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Abóbora Cabotiá Cozida",
+    "ceagesp": [
+      "ABOBORA JAPONESA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Abóbora Menina Brasileira",
+    "ceagesp": [
+      "ABOBORA PAULISTA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Abacate Hass (Avocado)",
+    "ceagesp": [
+      "ABACATE AVOCADO/HASS/FUERTE"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Abacate Manteiga"
+  },
+  {
+    "food_name": "Abacaxi Pérola",
+    "ceagesp": [
+      "ABACAXI PEROLA"
+    ],
+    "unidade": "UN",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Abobrinha Italiana Grelhada",
+    "ceagesp": [
+      "ABOBRINHA ITALIANA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Acelga Refogada"
+  },
+  {
+    "food_name": "Acerola Fresca",
+    "ceagesp": [
+      "ACEROLA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Agrião d'Água",
+    "ceagesp": [
+      "AGRIAO COMUM"
+    ],
+    "unidade": "MC",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Alcachofra Cozida (Coração)"
+  },
+  {
+    "food_name": "Alcatra Bovina Magra Grelhada"
+  },
+  {
+    "food_name": "Alecrim Fresco",
+    "ceagesp": [
+      "ALECRIM"
+    ],
+    "unidade": "MC",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Alface Crespa",
+    "ceagesp": [
+      "ALFACE CRESPA"
+    ],
+    "unidade": "UN",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Alface Lisa",
+    "ceagesp": [
+      "ALFACE LISA"
+    ],
+    "unidade": "UN",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Alface Roxa",
+    "ceagesp": [
+      "ALFACE ROXA"
+    ],
+    "unidade": "UN",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Alho Fresco Picado",
+    "ceagesp": [
+      "ALHO NACIONAL"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Alho-Poró Fatiado Refogado"
+  },
+  {
+    "food_name": "Almeirão Refogado"
+  },
+  {
+    "food_name": "Amêndoas Cruas sem Sal"
+  },
+  {
+    "food_name": "Amaranto em Flocos"
+  },
+  {
+    "food_name": "Amaranto em Grãos Cozido"
+  },
+  {
+    "food_name": "Ameixa Fresca Roxa",
+    "ceagesp": [
+      "AMEIXA FLA",
+      "AMEIXA IMP."
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Amendoim Torrado sem Sal"
+  },
+  {
+    "food_name": "Amora Preta Silvestre"
+  },
+  {
+    "food_name": "Arroz Integral Agulhinha"
+  },
+  {
+    "food_name": "Arroz Negro Integral"
+  },
+  {
+    "food_name": "Arroz Parboilizado Integral"
+  },
+  {
+    "food_name": "Arroz Vermelho Integral"
+  },
+  {
+    "food_name": "Aspargos Frescos Grelhados",
+    "ceagesp": [
+      "ASPARGO IMP."
+    ],
+    "unidade": "MC",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Atum em Conserva ao Natural (Água)"
+  },
+  {
+    "food_name": "Atum Fresco Grelhado"
+  },
+  {
+    "food_name": "Aveia em Flocos Finos"
+  },
+  {
+    "food_name": "Aveia em Flocos Grossos"
+  },
+  {
+    "food_name": "Azeite de Oliva Extravirgem"
+  },
+  {
+    "food_name": "Azeitona Preta Natural"
+  },
+  {
+    "food_name": "Azeitona Verde em Conserva sem Caroço"
+  },
+  {
+    "food_name": "Bacalhau Dessalgado Cozido"
+  },
+  {
+    "food_name": "Banana-Maçã"
+  },
+  {
+    "food_name": "Banana-Prata"
+  },
+  {
+    "food_name": "Batata-Doce Branca Cozida",
+    "ceagesp": [
+      "BATATA-DOCE BRANCA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Batata-Doce Roxa Cozida",
+    "ceagesp": [
+      "BATATA-DOCE ROXA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Bebida Vegetal de Amêndoas sem Açúcar"
+  },
+  {
+    "food_name": "Bebida Vegetal de Aveia sem Açúcar"
+  },
+  {
+    "food_name": "Berinjela Cozida em Cubos",
+    "ceagesp": [
+      "BERINJELA COMUM"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Bertalha Refogada"
+  },
+  {
+    "food_name": "Beterraba Cozida em Cubos",
+    "ceagesp": [
+      "BETERRABA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Beterraba Crua Ralada",
+    "ceagesp": [
+      "BETERRABA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Brócolis Ninja no Vapor",
+    "ceagesp": [
+      "BROCOLOS NINJA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Brócolis Ramoso Refogado",
+    "ceagesp": [
+      "BROCOLOS RAMOSO"
+    ],
+    "unidade": "MC",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Broto de Alfafa Fresco"
+  },
+  {
+    "food_name": "Broto de Bambu Cozido"
+  },
+  {
+    "food_name": "Broto de Feijão (Moyashi)"
+  },
+  {
+    "food_name": "Cação em Posta Cozido no Molho"
+  },
+  {
+    "food_name": "Cacau Puro em Pó 100% (sem açúcar)"
+  },
+  {
+    "food_name": "Caju Fresco",
+    "ceagesp": [
+      "CAJU"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Camarão Grelhado com Alho e Azeite"
+  },
+  {
+    "food_name": "Canela em Pó do Ceilão"
+  },
+  {
+    "food_name": "Canela em Pau para Infusão"
+  },
+  {
+    "food_name": "Cúrcuma / Açafrão-da-Terra Puro"
+  },
+  {
+    "food_name": "Caqui Fuyu Firme"
+  },
+  {
+    "food_name": "Cará Cozido",
+    "ceagesp": [
+      "CARA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Carambola Doce",
+    "ceagesp": [
+      "CARAMBOLA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Cardamomo em Grãos Triturado"
+  },
+  {
+    "food_name": "Carne de Panela Desfiada sem Gordura"
+  },
+  {
+    "food_name": "Castanha de Caju sem Sal"
+  },
+  {
+    "food_name": "Castanha-do-Pará"
+  },
+  {
+    "food_name": "Cebola Branca Picada",
+    "ceagesp": [
+      "CEBOLA NACIONAL"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Cebola Roxa Crua",
+    "ceagesp": [
+      "CEBOLA ROXA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Cenoura Cozida no Vapor",
+    "ceagesp": [
+      "CENOURA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Cenoura Crua Ralada",
+    "ceagesp": [
+      "CENOURA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Cevadinha em Grãos Cozida"
+  },
+  {
+    "food_name": "Chá de Alecrim Fresco",
+    "ceagesp": [
+      "ALECRIM"
+    ],
+    "unidade": "MC",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Chá de Camomila Flor"
+  },
+  {
+    "food_name": "Chá de Cavalinha"
+  },
+  {
+    "food_name": "Chá de Dente-de-Leão Raiz"
+  },
+  {
+    "food_name": "Chá de Erva-Cidreira / Melissa"
+  },
+  {
+    "food_name": "Chá de Erva-Doce / Funcho"
+  },
+  {
+    "food_name": "Chá de Gengibre com Casca de Limão"
+  },
+  {
+    "food_name": "Chá de Hibisco Flor (Cálice)"
+  },
+  {
+    "food_name": "Chá de Hortelã Fresca",
+    "ceagesp": [
+      "HORTELA"
+    ],
+    "unidade": "MC",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Chá de Melissa Fresca com Casca de Maçã"
+  },
+  {
+    "food_name": "Chá Verde em Folhas (Camellia sinensis)"
+  },
+  {
+    "food_name": "Chocolate Amargo 70% Cacau"
+  },
+  {
+    "food_name": "Chocolate Amargo 85% Cacau"
+  },
+  {
+    "food_name": "Chuchu Cozido no Vapor",
+    "ceagesp": [
+      "CHUCHU"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Coalhada Fresca sem Açúcar"
+  },
+  {
+    "food_name": "Couve de Bruxelas no Vapor",
+    "ceagesp": [
+      "COUVE-DE-BRUXELAS"
+    ],
+    "unidade": "KG",
+    "quantidade": 0.4,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Couve-Flor no Vapor",
+    "ceagesp": [
+      "COUVE-FLOR"
+    ],
+    "unidade": "UN",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Cravo-da-Índia em Grão"
+  },
+  {
+    "food_name": "Cuscuz de Milho Tradicional"
+  },
+  {
+    "food_name": "Erva-Doce em Sementes (Funcho Seco)"
+  },
+  {
+    "food_name": "Ervilha Fresca em Vagem (Torta)",
+    "ceagesp": [
+      "ERVILHA TORTA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Ervilha Seca Partida Cozida"
+  },
+  {
+    "food_name": "Escarola / Chicória Refogada"
+  },
+  {
+    "food_name": "Espinafre Refogado"
+  },
+  {
+    "food_name": "Farelo de Aveia"
+  },
+  {
+    "food_name": "Farelo de Trigo (Fibra de Trigo)"
+  },
+  {
+    "food_name": "Farinha de Banana Verde"
+  },
+  {
+    "food_name": "Farinha de Maracujá"
+  },
+  {
+    "food_name": "Fava Cozida com Ervas"
+  },
+  {
+    "food_name": "Feijão Branco Cozido"
+  },
+  {
+    "food_name": "Feijão Carioca Cozido",
+    "procon": [
+      "FEIJAO CARIOQUINHA (KG)"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1
+  },
+  {
+    "food_name": "Feijão Fradinho Cozido"
+  },
+  {
+    "food_name": "Feijão Preto Cozido"
+  },
+  {
+    "food_name": "Feijão Vermelho Cozido"
+  },
+  {
+    "food_name": "Figo Roxo Fresco",
+    "ceagesp": [
+      "FIGO"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Filé de Badejo Grelhado"
+  },
+  {
+    "food_name": "Filé Mignon Bovino Grelhado"
+  },
+  {
+    "food_name": "Folhas de Couve Manteiga",
+    "ceagesp": [
+      "COUVE MANTEIGA"
+    ],
+    "unidade": "MC",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Frango Desfiado com Cheiro-Verde"
+  },
+  {
+    "food_name": "Gérmen de Trigo Tostado"
+  },
+  {
+    "food_name": "Gengibre Fresco Ralado",
+    "ceagesp": [
+      "GENGIBRE"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Gergelim Branco Integral"
+  },
+  {
+    "food_name": "Gergelim Preto"
+  },
+  {
+    "food_name": "Goiaba Branca com Casca",
+    "ceagesp": [
+      "GOIABA BRANCA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Goiaba Vermelha com Casca",
+    "ceagesp": [
+      "GOIABA VERMELHA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Grão-de-Bico Cozido"
+  },
+  {
+    "food_name": "Granola Artesanal sem Açúcar"
+  },
+  {
+    "food_name": "Hortelã Fresca",
+    "ceagesp": [
+      "HORTELA"
+    ],
+    "unidade": "MC",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Inhame Cozido",
+    "ceagesp": [
+      "INHAME"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Iogurte Natural Desnatado"
+  },
+  {
+    "food_name": "Iogurte Natural Integral (2 Ingredientes)"
+  },
+  {
+    "food_name": "Iogurte Tipo Grego Zero Gordura sem Açúcar"
+  },
+  {
+    "food_name": "Jabuticaba Fresca",
+    "ceagesp": [
+      "JABUTICABA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Jiló Cozido em Fatias",
+    "ceagesp": [
+      "JILO"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Kefir de Leite Artesanal"
+  },
+  {
+    "food_name": "Kiwi Verde"
+  },
+  {
+    "food_name": "Laranja Lima",
+    "ceagesp": [
+      "LARANJA LIMA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Laranja Pêra com Bagaço",
+    "ceagesp": [
+      "LARANJA PERA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Leite Desnatado Pasteurizado"
+  },
+  {
+    "food_name": "Lentilha Marrom Cozida"
+  },
+  {
+    "food_name": "Lentilha Rosa / Laranja Cozida"
+  },
+  {
+    "food_name": "Lima da Pérsia Fresca",
+    "ceagesp": [
+      "LIMA-DA-PERSIA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Linhaça Dourada Moída"
+  },
+  {
+    "food_name": "Linhaça Marrom Moída"
+  },
+  {
+    "food_name": "Lombo Suíno Assado Magro"
+  },
+  {
+    "food_name": "Louro Seco em Folhas"
+  },
+  {
+    "food_name": "Lula Cozida em Anéis com Ervas"
+  },
+  {
+    "food_name": "Maçã Fuji com Casca",
+    "ceagesp": [
+      "MACA FUJI",
+      "MACA FUJI IMP."
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Maçã Gala com Casca",
+    "ceagesp": [
+      "MACA GALA",
+      "MACA GALA IMP."
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Macadâmia Crua"
+  },
+  {
+    "food_name": "Macarrão Integral Cozido"
+  },
+  {
+    "food_name": "Mamão Formosa"
+  },
+  {
+    "food_name": "Mamão Papaia"
+  },
+  {
+    "food_name": "Mandioca / Aipim Cozido",
+    "ceagesp": [
+      "MANDIOCA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Mandioquinha (Batata-Baroa)",
+    "ceagesp": [
+      "MANDIOQUINHA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Manga Palmer",
+    "ceagesp": [
+      "MANGA PALMER"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Manjericão Fresco",
+    "ceagesp": [
+      "MANJERICAO"
+    ],
+    "unidade": "MC",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Músculo Bovino Cozido em Pedaços"
+  },
+  {
+    "food_name": "Músculo Bovino Moído com Legumes"
+  },
+  {
+    "food_name": "Maracujá Azedo (Polpa)"
+  },
+  {
+    "food_name": "Massa de Arroz Integral Cozida"
+  },
+  {
+    "food_name": "Massa de Grão-de-Bico Cozida"
+  },
+  {
+    "food_name": "Melão Amarelo",
+    "ceagesp": [
+      "MELAO AMARELO"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Melancia",
+    "ceagesp": [
+      "MELANCIA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Merluza Assada com Tomate e Ervas",
+    "ceagesp": [
+      "FILE DE MERLUZA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Mexerica Ponkan"
+  },
+  {
+    "food_name": "Milheto em Grãos Cozido"
+  },
+  {
+    "food_name": "Milho Verde na Espiga Cozido"
+  },
+  {
+    "food_name": "Mirtilo (Blueberry) Fresco"
+  },
+  {
+    "food_name": "Morango Fresco"
+  },
+  {
+    "food_name": "Mostarda em Grãos Artesanal (sem açúcar)"
+  },
+  {
+    "food_name": "Nabo Branco Fatiado"
+  },
+  {
+    "food_name": "Nozes Chilenas"
+  },
+  {
+    "food_name": "Noz-Moscada Ralada na Hora"
+  },
+  {
+    "food_name": "Omelete de Claras com Ervas"
+  },
+  {
+    "food_name": "Orégano Seco Puro"
+  },
+  {
+    "food_name": "Ovo Caipira Cozido"
+  },
+  {
+    "food_name": "Ovo Caipira Mexido no Azeite"
+  },
+  {
+    "food_name": "Ovo Caipira Pochê"
+  },
+  {
+    "food_name": "Páprica Defumada"
+  },
+  {
+    "food_name": "Páprica Doce Pura (sem corante)"
+  },
+  {
+    "food_name": "Palmito Pupunha Fresco Cozido"
+  },
+  {
+    "food_name": "Pasta de Amendoim Integral 100%"
+  },
+  {
+    "food_name": "Patinho Bovino Moído Magro"
+  },
+  {
+    "food_name": "Peito de Frango Grelhado em Tiras"
+  },
+  {
+    "food_name": "Pepino Japonês Fatiado",
+    "ceagesp": [
+      "PEPINO JAPONES"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Pera Williams",
+    "ceagesp": [
+      "PERA WILLIAMS IMP."
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Pescada Branca Grelhada"
+  },
+  {
+    "food_name": "Pimentão Amarelo Fatiado",
+    "ceagesp": [
+      "PIMENTAO AMARELO"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Pimentão Vermelho",
+    "ceagesp": [
+      "PIMENTAO VERMELHO"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Pimenta-do-Reino Moída na Hora"
+  },
+  {
+    "food_name": "Pitanga Vermelha"
+  },
+  {
+    "food_name": "Polenta de Milho Cozida"
+  },
+  {
+    "food_name": "Psyllium Puro em Pó"
+  },
+  {
+    "food_name": "Queijo Cottage"
+  },
+  {
+    "food_name": "Queijo Meia Cura em Dose Controlada"
+  },
+  {
+    "food_name": "Queijo Minas Frescal Light"
+  },
+  {
+    "food_name": "Queijo Ricota Fresca"
+  },
+  {
+    "food_name": "Quiabo Refogado",
+    "ceagesp": [
+      "QUIABO"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Quinoa em Flocos"
+  },
+  {
+    "food_name": "Quinoa em Grãos Cozida"
+  },
+  {
+    "food_name": "Rabanete Fatiado Cru"
+  },
+  {
+    "food_name": "Rúcula Selvagem"
+  },
+  {
+    "food_name": "Repolho Roxo Cru Fatiado",
+    "ceagesp": [
+      "REPOLHO ROXO"
+    ],
+    "unidade": "UN",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Repolho Verde Refogado",
+    "ceagesp": [
+      "REPOLHO LISO"
+    ],
+    "unidade": "UN",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Salmão Grelhado com Limão"
+  },
+  {
+    "food_name": "Sardinha em Conserva ao Molho de Tomate"
+  },
+  {
+    "food_name": "Sardinha Fresca Grelhada",
+    "ceagesp": [
+      "SARDINHA LAGES"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Semente de Chia"
+  },
+  {
+    "food_name": "Sementes de Abóbora Tostadas"
+  },
+  {
+    "food_name": "Sementes de Girassol Descascadas"
+  },
+  {
+    "food_name": "Sobrecoxa de Frango sem Pele Assada"
+  },
+  {
+    "food_name": "Soja Verde em Grãos (Edamame)"
+  },
+  {
+    "food_name": "Suco de Limão Siciliano Fresco",
+    "ceagesp": [
+      "LIMAO SICILIANO",
+      "LIMAO SICILIANO IMP."
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Suco de Limão Tahiti Fresco",
+    "ceagesp": [
+      "LIMAO TAITI"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Taioba Refogada"
+  },
+  {
+    "food_name": "Tilápia / Saint Peter Grelhada",
+    "ceagesp": [
+      "FILE DE TILAPIA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Tofu Firme Orgânico Grelhado"
+  },
+  {
+    "food_name": "Tomate Cereja Doce"
+  },
+  {
+    "food_name": "Tomate Italiano com Casca"
+  },
+  {
+    "food_name": "Tomilho Seco / Fresco"
+  },
+  {
+    "food_name": "Trigo em Grão Integral Cozido"
+  },
+  {
+    "food_name": "Uva Crimson sem Semente",
+    "ceagesp": [
+      "UVA CRIMSON"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Uva Roxa Niágara",
+    "ceagesp": [
+      "UVA NIAGARA"
+    ],
+    "unidade": "KG",
+    "quantidade": 1,
+    "fator_varejo": 1.6
+  },
+  {
+    "food_name": "Vagem Manteiga Cozida"
+  },
+  {
+    "food_name": "Vinagre de Maçã Orgânico Não Filtrado"
+  }
+]

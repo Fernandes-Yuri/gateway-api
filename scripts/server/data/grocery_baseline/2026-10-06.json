@@ -1,0 +1,2704 @@
+[
+  {
+    "food_name": "Água Saborizada com Pepino, Hortelã e Limão",
+    "search_term": "pepino japones kg",
+    "price": "3.62",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "PEPINO JAPONES",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "1.32",
+        "avg": "1.56",
+        "max": "1.8",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "PEPINO JAPONES",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "1.99",
+        "avg": "2.26",
+        "max": "2.54",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "PEPINO JAPONES",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "2.73",
+        "avg": "3.01",
+        "max": "3.29",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Abóbora Cabotiá Cozida",
+    "search_term": "abobora cabotica kg",
+    "price": "4.22",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ABOBORA JAPONESA",
+        "classe": "-",
+        "unidade": "KG",
+        "min": "2.25",
+        "avg": "2.64",
+        "max": "3.02",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Abóbora Menina Brasileira",
+    "search_term": "abobora menina brasileira kg",
+    "price": "2.42",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ABOBORA PAULISTA",
+        "classe": "-",
+        "unidade": "KG",
+        "min": "1.33",
+        "avg": "1.51",
+        "max": "1.63",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Abacate Hass (Avocado)",
+    "search_term": "abacate hass kg",
+    "price": "19.09",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ABACATE AVOCADO/HASS/FUERTE",
+        "classe": "A",
+        "unidade": "KG",
+        "min": "10.67",
+        "avg": "11.93",
+        "max": "13.19",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Abacaxi Pérola",
+    "search_term": "abacaxi perola unidade",
+    "price": "7.07",
+    "data": "2026-10-05",
+    "unidade": "UN",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ABACAXI PEROLA",
+        "classe": "08 FRUTOS",
+        "unidade": "UN",
+        "min": "5.76",
+        "avg": "6.26",
+        "max": "6.75",
+        "peso_kg": "1.8",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "ABACAXI PEROLA",
+        "classe": "10 FRUTOS",
+        "unidade": "UN",
+        "min": "3.99",
+        "avg": "4.42",
+        "max": "4.85",
+        "peso_kg": "1.4",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "ABACAXI PEROLA",
+        "classe": "12 FRUTOS",
+        "unidade": "UN",
+        "min": "3.11",
+        "avg": "3.38",
+        "max": "3.6",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Abobrinha Italiana Grelhada",
+    "search_term": "abobrinha italiana kg",
+    "price": "3.10",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ABOBRINHA ITALIANA",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "1.11",
+        "avg": "1.31",
+        "max": "1.49",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "ABOBRINHA ITALIANA",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "1.66",
+        "avg": "1.94",
+        "max": "2.22",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "ABOBRINHA ITALIANA",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "2.28",
+        "avg": "2.58",
+        "max": "2.87",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Acerola Fresca",
+    "search_term": "acerola fresca kg",
+    "price": "24.53",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ACEROLA",
+        "classe": "-",
+        "unidade": "KG",
+        "min": "13.19",
+        "avg": "15.33",
+        "max": "17.29",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Agrião d'Água",
+    "search_term": "agriao maco",
+    "price": "4.79",
+    "data": "2026-10-05",
+    "unidade": "MC",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "AGRIAO COMUM",
+        "classe": "20 MAÇOS",
+        "unidade": "ENG",
+        "min": "53.52",
+        "avg": "59.92",
+        "max": "65.43",
+        "peso_kg": "12",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Alecrim Fresco",
+    "search_term": "alecrim fresco maco",
+    "price": "9.73",
+    "data": "2026-10-05",
+    "unidade": "MC",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ALECRIM",
+        "classe": "-",
+        "unidade": "MC",
+        "min": "5.08",
+        "avg": "6.08",
+        "max": "7.08",
+        "peso_kg": "0.25",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Alface Crespa",
+    "search_term": "alface crespa unidade",
+    "price": "3.81",
+    "data": "2026-10-05",
+    "unidade": "UN",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ALFACE CRESPA",
+        "classe": "18 UNIDADES",
+        "unidade": "ENG",
+        "min": "37.83",
+        "avg": "42.82",
+        "max": "47.82",
+        "peso_kg": "7",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Alface Lisa",
+    "search_term": "alface lisa unidade",
+    "price": "2.94",
+    "data": "2026-10-05",
+    "unidade": "UN",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ALFACE LISA",
+        "classe": "18 UNIDADES",
+        "unidade": "ENG",
+        "min": "29.68",
+        "avg": "33.13",
+        "max": "35.84",
+        "peso_kg": "8",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Alface Roxa",
+    "search_term": "alface roxa unidade",
+    "price": "3.84",
+    "data": "2026-10-05",
+    "unidade": "UN",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ALFACE ROXA",
+        "classe": "18 UNIDADES",
+        "unidade": "ENG",
+        "min": "38.72",
+        "avg": "43.17",
+        "max": "47.33",
+        "peso_kg": "7",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Alho Fresco Picado",
+    "search_term": "alho cabeca kg",
+    "price": "36.50",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ALHO NACIONAL",
+        "classe": "TIPO 5",
+        "unidade": "KG",
+        "min": "16.27",
+        "avg": "17.28",
+        "max": "18.28",
+        "peso_kg": "1",
+        "grupo": "DIVERSOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "ALHO NACIONAL",
+        "classe": "TIPO 6",
+        "unidade": "KG",
+        "min": "20.5",
+        "avg": "21.53",
+        "max": "22.5",
+        "peso_kg": "1",
+        "grupo": "DIVERSOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "ALHO NACIONAL",
+        "classe": "TIPO 7",
+        "unidade": "KG",
+        "min": "23.09",
+        "avg": "24.1",
+        "max": "25.11",
+        "peso_kg": "1",
+        "grupo": "DIVERSOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "ALHO NACIONAL",
+        "classe": "TIPO 8",
+        "unidade": "KG",
+        "min": "27.39",
+        "avg": "28.16",
+        "max": "28.94",
+        "peso_kg": "1",
+        "grupo": "DIVERSOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Ameixa Fresca Roxa",
+    "search_term": "ameixa fresca kg",
+    "price": "15.62",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "AMEIXA FLA",
+        "classe": "CALIBRE 2",
+        "unidade": "KG",
+        "min": "6.44",
+        "avg": "7.26",
+        "max": "8.09",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "AMEIXA FLA",
+        "classe": "CALIBRE 3",
+        "unidade": "KG",
+        "min": "8.09",
+        "avg": "8.93",
+        "max": "9.76",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "AMEIXA FLA",
+        "classe": "CALIBRE 4",
+        "unidade": "KG",
+        "min": "9.76",
+        "avg": "10.59",
+        "max": "11.43",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "AMEIXA IMP.",
+        "classe": "48 A 56 FRUTOS",
+        "unidade": "KG",
+        "min": "14.44",
+        "avg": "15",
+        "max": "15.56",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Aspargos Frescos Grelhados",
+    "search_term": "aspargos frescos maco",
+    "price": "40.75",
+    "data": "2026-10-05",
+    "unidade": "MC",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ASPARGO IMP.",
+        "classe": "-",
+        "unidade": "MC",
+        "min": "24.32",
+        "avg": "25.47",
+        "max": "26.76",
+        "peso_kg": "0.5",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Batata-Doce Branca Cozida",
+    "search_term": "batata doce branca kg",
+    "price": "4.64",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "BATATA-DOCE BRANCA",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "2.61",
+        "avg": "2.9",
+        "max": "3.16",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BATATA-DOCE BRANCA",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "3.5",
+        "avg": "3.79",
+        "max": "4.05",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BATATA-DOCE BRANCA",
+        "classe": "G",
+        "unidade": "KG",
+        "min": "1.85",
+        "avg": "2.05",
+        "max": "2.28",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Batata-Doce Roxa Cozida",
+    "search_term": "batata doce roxa kg",
+    "price": "3.70",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "BATATA-DOCE ROXA",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "2.03",
+        "avg": "2.31",
+        "max": "2.6",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BATATA-DOCE ROXA",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "2.96",
+        "avg": "3.24",
+        "max": "3.51",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BATATA-DOCE ROXA",
+        "classe": "G",
+        "unidade": "KG",
+        "min": "1.29",
+        "avg": "1.47",
+        "max": "1.67",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Berinjela Cozida em Cubos",
+    "search_term": "berinjela kg",
+    "price": "5.44",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "BERINJELA COMUM",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "2.01",
+        "avg": "2.3",
+        "max": "2.59",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BERINJELA COMUM",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "3.03",
+        "avg": "3.4",
+        "max": "3.77",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BERINJELA COMUM",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "4.08",
+        "avg": "4.44",
+        "max": "4.78",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Beterraba Cozida em Cubos",
+    "search_term": "beterraba kg",
+    "price": "3.10",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "BETERRABA",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "1.68",
+        "avg": "1.81",
+        "max": "1.92",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BETERRABA",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "1.97",
+        "avg": "2.07",
+        "max": "2.21",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BETERRABA",
+        "classe": "ESPECIAL",
+        "unidade": "KG",
+        "min": "2.23",
+        "avg": "2.36",
+        "max": "2.47",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BETERRABA",
+        "classe": "G",
+        "unidade": "KG",
+        "min": "1.41",
+        "avg": "1.49",
+        "max": "1.65",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Beterraba Crua Ralada",
+    "search_term": "beterraba kg",
+    "price": "3.10",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "BETERRABA",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "1.68",
+        "avg": "1.81",
+        "max": "1.92",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BETERRABA",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "1.97",
+        "avg": "2.07",
+        "max": "2.21",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BETERRABA",
+        "classe": "ESPECIAL",
+        "unidade": "KG",
+        "min": "2.23",
+        "avg": "2.36",
+        "max": "2.47",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "BETERRABA",
+        "classe": "G",
+        "unidade": "KG",
+        "min": "1.41",
+        "avg": "1.49",
+        "max": "1.65",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Brócolis Ninja no Vapor",
+    "search_term": "brocolis ninja kg",
+    "price": "5.85",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "BROCOLOS NINJA",
+        "classe": "08 CABEÇAS",
+        "unidade": "ENG",
+        "min": "39.28",
+        "avg": "43.88",
+        "max": "47.92",
+        "peso_kg": "12",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Brócolis Ramoso Refogado",
+    "search_term": "brocolis ramoso maco",
+    "price": "9.83",
+    "data": "2026-10-05",
+    "unidade": "MC",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "BROCOLOS RAMOSO",
+        "classe": "12 MAÇOS",
+        "unidade": "ENG",
+        "min": "63.17",
+        "avg": "73.69",
+        "max": "84.2",
+        "peso_kg": "15",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Caju Fresco",
+    "search_term": "caju fresco kg",
+    "price": "22.89",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "CAJU",
+        "classe": "03 A 04 FRUTOS",
+        "unidade": "KG",
+        "min": "14.81",
+        "avg": "16.11",
+        "max": "17.41",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CAJU",
+        "classe": "05 A 06 FRUTOS",
+        "unidade": "KG",
+        "min": "11.24",
+        "avg": "12.5",
+        "max": "13.83",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Cará Cozido",
+    "search_term": "cara inhame kg",
+    "price": "5.46",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "CARA",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "3.72",
+        "avg": "4.08",
+        "max": "4.45",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CARA",
+        "classe": "G",
+        "unidade": "KG",
+        "min": "2.3",
+        "avg": "2.75",
+        "max": "3.21",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Carambola Doce",
+    "search_term": "carambola kg",
+    "price": "18.59",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "CARAMBOLA",
+        "classe": "-",
+        "unidade": "KG",
+        "min": "9.4",
+        "avg": "11.62",
+        "max": "13.87",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Cebola Branca Picada",
+    "search_term": "cebola branca kg",
+    "price": "7.46",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "CEBOLA NACIONAL",
+        "classe": "CAIXA 2",
+        "unidade": "KG",
+        "min": "3.92",
+        "avg": "4.15",
+        "max": "4.4",
+        "peso_kg": "1",
+        "grupo": "DIVERSOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CEBOLA NACIONAL",
+        "classe": "CAIXA 3",
+        "unidade": "KG",
+        "min": "4.91",
+        "avg": "5.16",
+        "max": "5.39",
+        "peso_kg": "1",
+        "grupo": "DIVERSOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CEBOLA NACIONAL",
+        "classe": "CAIXA 4",
+        "unidade": "KG",
+        "min": "4.43",
+        "avg": "4.66",
+        "max": "4.9",
+        "peso_kg": "1",
+        "grupo": "DIVERSOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Cebola Roxa Crua",
+    "search_term": "cebola roxa kg",
+    "price": "8.45",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "CEBOLA ROXA",
+        "classe": "CAIXA 2",
+        "unidade": "KG",
+        "min": "4.32",
+        "avg": "4.58",
+        "max": "4.82",
+        "peso_kg": "1",
+        "grupo": "DIVERSOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CEBOLA ROXA",
+        "classe": "CAIXA 3",
+        "unidade": "KG",
+        "min": "5.53",
+        "avg": "5.78",
+        "max": "6.03",
+        "peso_kg": "1",
+        "grupo": "DIVERSOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CEBOLA ROXA",
+        "classe": "CAIXA 4",
+        "unidade": "KG",
+        "min": "5.03",
+        "avg": "5.28",
+        "max": "5.53",
+        "peso_kg": "1",
+        "grupo": "DIVERSOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Cenoura Cozida no Vapor",
+    "search_term": "cenoura kg",
+    "price": "5.05",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "CENOURA",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "2.84",
+        "avg": "3",
+        "max": "3.16",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CENOURA",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "3.17",
+        "avg": "3.31",
+        "max": "3.45",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CENOURA",
+        "classe": "ESPECIAL",
+        "unidade": "KG",
+        "min": "3.46",
+        "avg": "3.61",
+        "max": "3.75",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CENOURA",
+        "classe": "G",
+        "unidade": "KG",
+        "min": "2.53",
+        "avg": "2.65",
+        "max": "2.8",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Cenoura Crua Ralada",
+    "search_term": "cenoura kg",
+    "price": "5.05",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "CENOURA",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "2.84",
+        "avg": "3",
+        "max": "3.16",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CENOURA",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "3.17",
+        "avg": "3.31",
+        "max": "3.45",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CENOURA",
+        "classe": "ESPECIAL",
+        "unidade": "KG",
+        "min": "3.46",
+        "avg": "3.61",
+        "max": "3.75",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CENOURA",
+        "classe": "G",
+        "unidade": "KG",
+        "min": "2.53",
+        "avg": "2.65",
+        "max": "2.8",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Chá de Alecrim Fresco",
+    "search_term": "alecrim fresco maco",
+    "price": "9.73",
+    "data": "2026-10-05",
+    "unidade": "MC",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ALECRIM",
+        "classe": "-",
+        "unidade": "MC",
+        "min": "5.08",
+        "avg": "6.08",
+        "max": "7.08",
+        "peso_kg": "0.25",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Chá de Hortelã Fresca",
+    "search_term": "hortela fresca maco",
+    "price": "9.04",
+    "data": "2026-10-05",
+    "unidade": "MC",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "HORTELA",
+        "classe": "MAÇO A",
+        "unidade": "MC",
+        "min": "4.66",
+        "avg": "5.65",
+        "max": "6.66",
+        "peso_kg": "0.15",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Chuchu Cozido no Vapor",
+    "search_term": "chuchu kg",
+    "price": "2.19",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "CHUCHU",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "0.81",
+        "avg": "0.94",
+        "max": "1.06",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CHUCHU",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "1.17",
+        "avg": "1.37",
+        "max": "1.55",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "CHUCHU",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "1.59",
+        "avg": "1.79",
+        "max": "1.99",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Couve de Bruxelas no Vapor",
+    "search_term": "couve bruxelas 400g",
+    "price": "29.44",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "0.4",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "COUVE-DE-BRUXELAS",
+        "classe": "-",
+        "unidade": "PCT",
+        "min": "10.5",
+        "avg": "11.5",
+        "max": "12.5",
+        "peso_kg": "0.25",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Couve-Flor no Vapor",
+    "search_term": "couve flor unidade",
+    "price": "7.31",
+    "data": "2026-10-05",
+    "unidade": "UN",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "COUVE-FLOR",
+        "classe": "08 CABEÇAS",
+        "unidade": "ENG",
+        "min": "32.44",
+        "avg": "36.55",
+        "max": "40.14",
+        "peso_kg": "12",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Ervilha Fresca em Vagem (Torta)",
+    "search_term": "ervilha torta vagem kg",
+    "price": "32.70",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "ERVILHA TORTA",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "10.69",
+        "avg": "12.73",
+        "max": "14.75",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "ERVILHA TORTA",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "17.28",
+        "avg": "20.44",
+        "max": "23.6",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "ERVILHA TORTA",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "25.95",
+        "avg": "28.74",
+        "max": "32.13",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Feijão Carioca Cozido",
+    "search_term": "feijao carioca 1kg",
+    "price": "8.63",
+    "data": "2026-08-31",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1",
+    "cotacoes": [
+      {
+        "produto": "FEIJAO CARIOQUINHA (KG)",
+        "classe": "Varejo PROCON-SP/DIEESE",
+        "unidade": "KG",
+        "min": "8.63",
+        "avg": "8.63",
+        "max": "8.63",
+        "peso_kg": "1",
+        "grupo": "PROCON",
+        "data": "2026-08-31",
+        "url": "https://www.procon.sp.gov.br/wp-content/uploads/2026/09/CB-agosto-2026-com-comparativo-anual.pdf"
+      }
+    ]
+  },
+  {
+    "food_name": "Figo Roxo Fresco",
+    "search_term": "figo fresco kg",
+    "price": "73.90",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "FIGO",
+        "classe": "08 FRUTOS",
+        "unidade": "KG",
+        "min": "46.71",
+        "avg": "51.58",
+        "max": "56.38",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "FIGO",
+        "classe": "10 FRUTOS",
+        "unidade": "KG",
+        "min": "35.4",
+        "avg": "40.79",
+        "max": "46.14",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Folhas de Couve Manteiga",
+    "search_term": "couve manteiga maco",
+    "price": "2.67",
+    "data": "2026-10-05",
+    "unidade": "MC",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "COUVE MANTEIGA",
+        "classe": "A (24 MÇS)",
+        "unidade": "ENG",
+        "min": "42.65",
+        "avg": "45.38",
+        "max": "47.23",
+        "peso_kg": "10",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "COUVE MANTEIGA",
+        "classe": "B (24 MÇS)",
+        "unidade": "ENG",
+        "min": "33.69",
+        "avg": "34.68",
+        "max": "35.68",
+        "peso_kg": "10",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Gengibre Fresco Ralado",
+    "search_term": "gengibre fresco kg",
+    "price": "5.58",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "GENGIBRE",
+        "classe": "A",
+        "unidade": "KG",
+        "min": "2.59",
+        "avg": "3.49",
+        "max": "4.26",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Goiaba Branca com Casca",
+    "search_term": "goiaba branca kg",
+    "price": "7.41",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "GOIABA BRANCA",
+        "classe": "09 A 12 FRUTOS",
+        "unidade": "KG",
+        "min": "4.97",
+        "avg": "5.15",
+        "max": "5.37",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "GOIABA BRANCA",
+        "classe": "15 FRUTOS",
+        "unidade": "KG",
+        "min": "4.42",
+        "avg": "4.63",
+        "max": "4.82",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "GOIABA BRANCA",
+        "classe": "18 FRUTOS",
+        "unidade": "KG",
+        "min": "4.01",
+        "avg": "4.2",
+        "max": "4.42",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Goiaba Vermelha com Casca",
+    "search_term": "goiaba vermelha kg",
+    "price": "8.00",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "GOIABA VERMELHA",
+        "classe": "09 A 12 FRUTOS",
+        "unidade": "KG",
+        "min": "5.4",
+        "avg": "5.71",
+        "max": "5.95",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "GOIABA VERMELHA",
+        "classe": "15 FRUTOS",
+        "unidade": "KG",
+        "min": "4.74",
+        "avg": "5",
+        "max": "5.31",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "GOIABA VERMELHA",
+        "classe": "18 FRUTOS",
+        "unidade": "KG",
+        "min": "4.14",
+        "avg": "4.46",
+        "max": "4.7",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Hortelã Fresca",
+    "search_term": "hortela fresca maco",
+    "price": "9.04",
+    "data": "2026-10-05",
+    "unidade": "MC",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "HORTELA",
+        "classe": "MAÇO A",
+        "unidade": "MC",
+        "min": "4.66",
+        "avg": "5.65",
+        "max": "6.66",
+        "peso_kg": "0.15",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Inhame Cozido",
+    "search_term": "inhame kg",
+    "price": "5.57",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "INHAME",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "2.03",
+        "avg": "2.28",
+        "max": "2.56",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "INHAME",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "3.16",
+        "avg": "3.48",
+        "max": "3.81",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "INHAME",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "4.4",
+        "avg": "4.72",
+        "max": "5.04",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Jabuticaba Fresca",
+    "search_term": "jabuticaba fresca kg",
+    "price": "32.54",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "JABUTICABA",
+        "classe": "CXT 1 KG",
+        "unidade": "KG",
+        "min": "17.41",
+        "avg": "20.34",
+        "max": "23.78",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Jiló Cozido em Fatias",
+    "search_term": "jilo kg",
+    "price": "9.74",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "JILO",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "3.52",
+        "avg": "4.03",
+        "max": "4.56",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "JILO",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "5.56",
+        "avg": "6.09",
+        "max": "6.61",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "JILO",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "7.42",
+        "avg": "7.97",
+        "max": "8.52",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Laranja Lima",
+    "search_term": "laranja lima kg",
+    "price": "3.97",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "LARANJA LIMA",
+        "classe": "09 A 12 DZ",
+        "unidade": "KG",
+        "min": "2.72",
+        "avg": "2.94",
+        "max": "3.14",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "LARANJA LIMA",
+        "classe": "13 A 15 DZ",
+        "unidade": "KG",
+        "min": "2.25",
+        "avg": "2.48",
+        "max": "2.71",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "LARANJA LIMA",
+        "classe": "16 A 21 DZ",
+        "unidade": "KG",
+        "min": "1.82",
+        "avg": "2.03",
+        "max": "2.23",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Laranja Pêra com Bagaço",
+    "search_term": "laranja pera kg",
+    "price": "2.85",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "LARANJA PERA",
+        "classe": "09 A 12 DZ",
+        "unidade": "KG",
+        "min": "1.99",
+        "avg": "2.15",
+        "max": "2.31",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "LARANJA PERA",
+        "classe": "13 A 15 DZ",
+        "unidade": "KG",
+        "min": "1.64",
+        "avg": "1.78",
+        "max": "1.91",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "LARANJA PERA",
+        "classe": "16 A 21 DZ",
+        "unidade": "KG",
+        "min": "1.37",
+        "avg": "1.45",
+        "max": "1.55",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Lima da Pérsia Fresca",
+    "search_term": "lima persia kg",
+    "price": "4.18",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "LIMA-DA-PERSIA",
+        "classe": "A (09/10 DZ)",
+        "unidade": "KG",
+        "min": "3.01",
+        "avg": "3.31",
+        "max": "3.59",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "LIMA-DA-PERSIA",
+        "classe": "B (13/15 DZ)",
+        "unidade": "KG",
+        "min": "2.32",
+        "avg": "2.61",
+        "max": "2.91",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "LIMA-DA-PERSIA",
+        "classe": "C (18/24 DZ)",
+        "unidade": "KG",
+        "min": "1.7",
+        "avg": "1.95",
+        "max": "2.17",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Maçã Fuji com Casca",
+    "search_term": "maca fuji kg",
+    "price": "11.28",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "MACA FUJI",
+        "classe": "110 A 135 FRUTOS",
+        "unidade": "KG",
+        "min": "6.23",
+        "avg": "6.45",
+        "max": "6.69",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MACA FUJI",
+        "classe": "150 A 180 FRUTOS",
+        "unidade": "KG",
+        "min": "5.59",
+        "avg": "5.89",
+        "max": "6.16",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MACA FUJI",
+        "classe": "80 A 100 FRUTOS",
+        "unidade": "KG",
+        "min": "6.76",
+        "avg": "7.05",
+        "max": "7.34",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MACA FUJI IMP.",
+        "classe": "120 A 150 FRUTOS",
+        "unidade": "KG",
+        "min": "6.94",
+        "avg": "7.22",
+        "max": "7.5",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MACA FUJI IMP.",
+        "classe": "80 A 110 FRUTOS",
+        "unidade": "KG",
+        "min": "7.78",
+        "avg": "8.06",
+        "max": "8.33",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Maçã Gala com Casca",
+    "search_term": "maca gala kg",
+    "price": "11.81",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "MACA GALA",
+        "classe": "110 A 135 FRUTOS",
+        "unidade": "KG",
+        "min": "6.46",
+        "avg": "6.69",
+        "max": "6.93",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MACA GALA",
+        "classe": "150 A 180 FRUTOS",
+        "unidade": "KG",
+        "min": "5.8",
+        "avg": "6.08",
+        "max": "6.37",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MACA GALA",
+        "classe": "80 A 100 FRUTOS",
+        "unidade": "KG",
+        "min": "7.01",
+        "avg": "7.38",
+        "max": "7.74",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MACA GALA IMP.",
+        "classe": "120 A 150 FRUTOS",
+        "unidade": "KG",
+        "min": "7.85",
+        "avg": "8.02",
+        "max": "8.2",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MACA GALA IMP.",
+        "classe": "80 A 110 FRUTOS",
+        "unidade": "KG",
+        "min": "8.67",
+        "avg": "9.07",
+        "max": "9.45",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Mandioca / Aipim Cozido",
+    "search_term": "mandioca aipim kg",
+    "price": "2.51",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "MANDIOCA",
+        "classe": "GRAÚDA",
+        "unidade": "KG",
+        "min": "1.66",
+        "avg": "1.74",
+        "max": "1.79",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MANDIOCA",
+        "classe": "MÉDIA",
+        "unidade": "KG",
+        "min": "1.55",
+        "avg": "1.57",
+        "max": "1.62",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MANDIOCA",
+        "classe": "MIÚDA",
+        "unidade": "KG",
+        "min": "1.39",
+        "avg": "1.44",
+        "max": "1.45",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Mandioquinha (Batata-Baroa)",
+    "search_term": "mandioquinha batata baroa kg",
+    "price": "6.60",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "MANDIOQUINHA",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "2.5",
+        "avg": "2.76",
+        "max": "3.01",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MANDIOQUINHA",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "3.32",
+        "avg": "3.66",
+        "max": "4.02",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MANDIOQUINHA",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "4.17",
+        "avg": "4.59",
+        "max": "5.01",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MANDIOQUINHA",
+        "classe": "ESPECIAL",
+        "unidade": "KG",
+        "min": "5.07",
+        "avg": "5.48",
+        "max": "5.86",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Manga Palmer",
+    "search_term": "manga palmer kg",
+    "price": "4.73",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "MANGA PALMER",
+        "classe": "08 A 10 FRUTOS",
+        "unidade": "KG",
+        "min": "3.24",
+        "avg": "3.36",
+        "max": "3.49",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MANGA PALMER",
+        "classe": "12 FRUTOS",
+        "unidade": "KG",
+        "min": "2.98",
+        "avg": "3.07",
+        "max": "3.19",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MANGA PALMER",
+        "classe": "13 A 15 FRUTOS",
+        "unidade": "KG",
+        "min": "2.73",
+        "avg": "2.84",
+        "max": "2.94",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MANGA PALMER",
+        "classe": "18 FRUTOS",
+        "unidade": "KG",
+        "min": "2.48",
+        "avg": "2.58",
+        "max": "2.7",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Manjericão Fresco",
+    "search_term": "manjericao fresco maco",
+    "price": "6.62",
+    "data": "2026-10-05",
+    "unidade": "MC",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "MANJERICAO",
+        "classe": "-",
+        "unidade": "MC",
+        "min": "3.27",
+        "avg": "4.14",
+        "max": "5.03",
+        "peso_kg": "0.15",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Melão Amarelo",
+    "search_term": "melao amarelo kg",
+    "price": "6.46",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "MELAO AMARELO",
+        "classe": "05 A 07 FRUTOS",
+        "unidade": "KG",
+        "min": "4.35",
+        "avg": "4.48",
+        "max": "4.61",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MELAO AMARELO",
+        "classe": "08 A 09 FRUTOS",
+        "unidade": "KG",
+        "min": "4.06",
+        "avg": "4.19",
+        "max": "4.31",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MELAO AMARELO",
+        "classe": "10 A 12 FRUTOS",
+        "unidade": "KG",
+        "min": "3.81",
+        "avg": "3.89",
+        "max": "3.99",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MELAO AMARELO",
+        "classe": "ACIMA DE 13 FRUTOS",
+        "unidade": "KG",
+        "min": "3.58",
+        "avg": "3.7",
+        "max": "3.8",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Melancia",
+    "search_term": "melancia kg",
+    "price": "2.90",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "MELANCIA",
+        "classe": "GRAÚDA (MAIOR QUE 10 KG)",
+        "unidade": "KG",
+        "min": "2.06",
+        "avg": "2.2",
+        "max": "2.31",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MELANCIA",
+        "classe": "MÉDIA ( DE 7 A 10 KG)",
+        "unidade": "KG",
+        "min": "1.7",
+        "avg": "1.81",
+        "max": "1.9",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "MELANCIA",
+        "classe": "MIÚDA (MENOR QUE 7 KG)",
+        "unidade": "KG",
+        "min": "1.24",
+        "avg": "1.35",
+        "max": "1.45",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Merluza Assada com Tomate e Ervas",
+    "search_term": "merluza file kg",
+    "price": "43.20",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "FILE DE MERLUZA",
+        "classe": "-",
+        "unidade": "KG",
+        "min": "26",
+        "avg": "27",
+        "max": "28",
+        "peso_kg": "1",
+        "grupo": "PESCADOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Pepino Japonês Fatiado",
+    "search_term": "pepino japones kg",
+    "price": "3.62",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "PEPINO JAPONES",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "1.32",
+        "avg": "1.56",
+        "max": "1.8",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "PEPINO JAPONES",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "1.99",
+        "avg": "2.26",
+        "max": "2.54",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "PEPINO JAPONES",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "2.73",
+        "avg": "3.01",
+        "max": "3.29",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Pera Williams",
+    "search_term": "pera williams kg",
+    "price": "15.67",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "PERA WILLIAMS IMP.",
+        "classe": "120 - 150 FRUTOS",
+        "unidade": "KG",
+        "min": "8.31",
+        "avg": "8.52",
+        "max": "8.72",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "PERA WILLIAMS IMP.",
+        "classe": "80 - 110 FRUTOS",
+        "unidade": "KG",
+        "min": "10.61",
+        "avg": "11.07",
+        "max": "11.48",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Pimentão Amarelo Fatiado",
+    "search_term": "pimentao amarelo kg",
+    "price": "11.17",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "PIMENTAO AMARELO",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "4.59",
+        "avg": "5.03",
+        "max": "5.49",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "PIMENTAO AMARELO",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "6.19",
+        "avg": "6.98",
+        "max": "7.76",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "PIMENTAO AMARELO",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "8.53",
+        "avg": "9.15",
+        "max": "9.75",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Pimentão Vermelho",
+    "search_term": "pimentao vermelho kg",
+    "price": "10.69",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "PIMENTAO VERMELHO",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "4.26",
+        "avg": "4.71",
+        "max": "5.15",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "PIMENTAO VERMELHO",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "5.96",
+        "avg": "6.68",
+        "max": "7.39",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "PIMENTAO VERMELHO",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "8.19",
+        "avg": "8.83",
+        "max": "9.44",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Quiabo Refogado",
+    "search_term": "quiabo kg",
+    "price": "11.42",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "QUIABO",
+        "classe": "1A",
+        "unidade": "KG",
+        "min": "4.45",
+        "avg": "4.9",
+        "max": "5.33",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "QUIABO",
+        "classe": "2A",
+        "unidade": "KG",
+        "min": "6.54",
+        "avg": "7.14",
+        "max": "7.75",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "QUIABO",
+        "classe": "3A",
+        "unidade": "KG",
+        "min": "8.55",
+        "avg": "9.17",
+        "max": "9.79",
+        "peso_kg": "1",
+        "grupo": "LEGUMES",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Repolho Roxo Cru Fatiado",
+    "search_term": "repolho roxo unidade",
+    "price": "5.15",
+    "data": "2026-10-05",
+    "unidade": "UN",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "REPOLHO ROXO",
+        "classe": "12/14 CABEÇAS",
+        "unidade": "ENG",
+        "min": "37.29",
+        "avg": "41.87",
+        "max": "46.23",
+        "peso_kg": "20",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Repolho Verde Refogado",
+    "search_term": "repolho verde unidade",
+    "price": "3.24",
+    "data": "2026-10-05",
+    "unidade": "UN",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "REPOLHO LISO",
+        "classe": "12/14 CABEÇAS",
+        "unidade": "ENG",
+        "min": "22.96",
+        "avg": "26.35",
+        "max": "30.29",
+        "peso_kg": "20",
+        "grupo": "VERDURAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Sardinha Fresca Grelhada",
+    "search_term": "sardinha fresca kg",
+    "price": "5.92",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "SARDINHA LAGES",
+        "classe": "-",
+        "unidade": "KG",
+        "min": "3.5",
+        "avg": "3.7",
+        "max": "4",
+        "peso_kg": "1",
+        "grupo": "PESCADOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Suco de Limão Siciliano Fresco",
+    "search_term": "limao siciliano kg",
+    "price": "10.84",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "LIMAO SICILIANO",
+        "classe": "-",
+        "unidade": "KG",
+        "min": "5.04",
+        "avg": "5.55",
+        "max": "6.08",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "LIMAO SICILIANO IMP.",
+        "classe": "-",
+        "unidade": "KG",
+        "min": "7.33",
+        "avg": "8",
+        "max": "8.67",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Suco de Limão Tahiti Fresco",
+    "search_term": "limao tahiti kg",
+    "price": "11.26",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "LIMAO TAITI",
+        "classe": "15 A 18 DZ",
+        "unidade": "KG",
+        "min": "7.63",
+        "avg": "7.92",
+        "max": "8.2",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "LIMAO TAITI",
+        "classe": "21 A 27 DZ",
+        "unidade": "KG",
+        "min": "6.76",
+        "avg": "7.04",
+        "max": "7.32",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "LIMAO TAITI",
+        "classe": "ACIMA DE 31 DZ",
+        "unidade": "KG",
+        "min": "5.83",
+        "avg": "6.15",
+        "max": "6.4",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Tilápia / Saint Peter Grelhada",
+    "search_term": "tilapia file kg",
+    "price": "66.48",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "FILE DE TILAPIA",
+        "classe": "-",
+        "unidade": "KG",
+        "min": "40.91",
+        "avg": "41.55",
+        "max": "42.21",
+        "peso_kg": "1",
+        "grupo": "PESCADOS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Uva Crimson sem Semente",
+    "search_term": "uva crimson sem semente kg",
+    "price": "17.59",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "UVA CRIMSON",
+        "classe": "A",
+        "unidade": "KG",
+        "min": "11",
+        "avg": "11.6",
+        "max": "12.01",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "UVA CRIMSON",
+        "classe": "B",
+        "unidade": "KG",
+        "min": "10",
+        "avg": "10.39",
+        "max": "10.99",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  },
+  {
+    "food_name": "Uva Roxa Niágara",
+    "search_term": "uva niagara roxa kg",
+    "price": "16.13",
+    "data": "2026-10-05",
+    "unidade": "KG",
+    "quantidade": "1",
+    "fator_varejo": "1.6",
+    "cotacoes": [
+      {
+        "produto": "UVA NIAGARA",
+        "classe": "A",
+        "unidade": "KG",
+        "min": "9.98",
+        "avg": "10.94",
+        "max": "11.83",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      },
+      {
+        "produto": "UVA NIAGARA",
+        "classe": "B",
+        "unidade": "KG",
+        "min": "8.51",
+        "avg": "9.22",
+        "max": "9.94",
+        "peso_kg": "1",
+        "grupo": "FRUTAS",
+        "data": "2026-10-05",
+        "url": "https://ceagesp.gov.br/cotacoes/"
+      }
+    ]
+  }
+]
