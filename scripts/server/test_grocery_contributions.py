@@ -88,16 +88,18 @@ class ContributionSqlTests(unittest.IsolatedAsyncioTestCase):
         if parsed.hostname not in ("localhost", "127.0.0.1") or parsed.path != "/braga_privacy_test":
             raise RuntimeError("Somente banco local de teste permitido")
         self.conn = await asyncpg.connect(dsn)
-        await self.conn.execute("CREATE TEMP TABLE profiles(id VARCHAR(128) PRIMARY KEY); CREATE TEMP TABLE grocery_price_cache(food_name TEXT PRIMARY KEY)")
+        await self.conn.execute("CREATE TEMP TABLE profiles(id VARCHAR(128) PRIMARY KEY); CREATE TEMP TABLE grocery_price_cache(food_name TEXT PRIMARY KEY, source TEXT, price_avg NUMERIC)")
         sql = (Path(__file__).resolve().parents[2] / "migrations/037_grocery_price_contributions.sql").read_text()
         await self.conn.execute(sql.replace("CREATE TABLE IF NOT EXISTS grocery_price_contributions", "CREATE TEMP TABLE IF NOT EXISTS grocery_price_contributions"))
-        await self.conn.execute("INSERT INTO grocery_price_cache VALUES ('Feijão Carioca Cozido')")
+        migration = (Path(__file__).resolve().parents[2] / "migrations/038_grocery_ingredients.sql").read_text()
+        await self.conn.execute(migration.replace("CREATE TABLE IF NOT EXISTS grocery_ingredients", "CREATE TEMP TABLE IF NOT EXISTS grocery_ingredients"))
+        await self.conn.execute("INSERT INTO grocery_price_cache(food_name) VALUES ('Feijão Carioca Cozido')")
         await self.conn.executemany("INSERT INTO profiles VALUES ($1)", [(f"user-{i}",) for i in range(8)])
 
     async def asyncTearDown(self): await self.conn.close()
 
     async def report(self, user, price, unit="kg", day=TODAY):
-        await self.conn.execute(UPSERT_SQL, user, "Feijão Carioca Cozido", Decimal(price), Decimal("1"), unit, unit, Decimal(price), "SP", day)
+        await self.conn.execute(UPSERT_SQL, user, "Feijão Carioca Cozido", Decimal(price), Decimal("1"), unit, unit, Decimal(price), "SP", day, "feijao-carioca")
 
     async def test_distinct_people_minimum_latest_outliers_units_and_account_deletion(self):
         for i in range(4): await self.report(f"user-{i}", "10")

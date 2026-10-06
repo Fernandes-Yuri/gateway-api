@@ -214,7 +214,7 @@ class PriceSqlTests(unittest.IsolatedAsyncioTestCase):
         await self.conn.execute("""CREATE TEMP TABLE grocery_price_cache (
             food_name TEXT PRIMARY KEY, search_term TEXT NOT NULL, price_avg NUMERIC(10,2),
             price_min NUMERIC(10,2), price_max NUMERIC(10,2), source TEXT NOT NULL,
-            results_count INT, updated_at TIMESTAMPTZ DEFAULT now(), needs_manual BOOLEAN)""")
+            results_count INT, updated_at TIMESTAMPTZ DEFAULT now(), needs_manual BOOLEAN, price_unit TEXT)""")
 
     async def asyncTearDown(self):
         await self.conn.close()

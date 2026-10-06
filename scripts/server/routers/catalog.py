@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from security_defense import get_client_ip
 from api_identity import firebase_uid
+from services.ingredient_catalog import prices_for_ingredients
 from services.grocery_contributions import GroceryPriceContribution, AVERAGES_SQL, UPSERT_SQL
 
 router = APIRouter()
@@ -63,6 +64,7 @@ class GroceryPriceItemDto(BaseModel):
 
 
 class ManualPriceUpdate(BaseModel):
+    price_unit: Optional[Literal["kg", "L", "un"]] = None
     price: float = Field(..., gt=0, le=99999999.99, multiple_of=0.01, allow_inf_nan=False, description="Preço unitário ou de embalagem em Reais (BRL)")
 
 
@@ -73,7 +75,7 @@ VALUES ($1, $1, $2, $2, $2, 'manual', 0, FALSE, now())
 ON CONFLICT (food_name) DO UPDATE SET
     price_avg = EXCLUDED.price_avg, price_min = EXCLUDED.price_min,
     price_max = EXCLUDED.price_max, source = 'manual', results_count = 0,
-    needs_manual = FALSE, updated_at = now()
+    needs_manual = FALSE, price_unit = NULL, updated_at = now()
 """
 
 _BASELINE_UPSERT = _MANUAL_UPSERT.replace("'manual'", "'estimated'") + "\nWHERE grocery_price_cache.source <> 'manual' RETURNING food_name"
@@ -100,7 +102,7 @@ async def import_grocery_prices(request: Request, mode: Literal["manual", "basel
             # Detectar pelo cabeçalho: uma linha com colunas extras não invalida as demais.
             delimiter = next((sep for sep in (",", ";")
                               if next(csv.reader(io.StringIO(text), delimiter=sep), []) in
-                              (["food_name", "price"], ["price", "food_name"])), None)
+                              (["food_name", "price"], ["price", "food_name"], ["food_name", "price", "price_unit"])), None)
             if delimiter is None:
                 raise ValueError("Cabeçalho esperado: food_name,price")
             reader = csv.DictReader(io.StringIO(text), delimiter=delimiter, strict=True)
@@ -109,7 +111,7 @@ async def import_grocery_prices(request: Request, mode: Literal["manual", "basel
             raise ValueError("Informe entre 1 e 5000 linhas")
     except (ValueError, UnicodeError, csv.Error):
         raise HTTPException(422, "CSV ou JSON inválido. Use food_name e price.")
-    valid, details, seen = [], [], set()
+    valid, details, seen, units = [], [], set(), {}
     for index, row in enumerate(rows, 1):
         try:
             if not isinstance(row, dict):
@@ -125,9 +127,10 @@ async def import_grocery_prices(request: Request, mode: Literal["manual", "basel
                 raise ValueError("Preço ou colunas inválidos")
             if isinstance(value, str):
                 value = value.strip().replace(",", ".")
-            model = ManualPriceUpdate(price=value)
+            model = ManualPriceUpdate(price=value, price_unit=row.get("price_unit"))
             valid.append((name, Decimal(str(model.price))))
             seen.add(name)
+            units[name] = model.price_unit
         except (ValueError, TypeError):
             details.append({"linha": index, "erro": "Nome, preço ou colunas inválidos; preço deve ser positivo com até duas casas decimais e nome único."})
     if valid:
@@ -145,6 +148,9 @@ async def import_grocery_prices(request: Request, mode: Literal["manual", "basel
                             else:
                                 details.append({"food_name": name, "erro": "Preço manual preservado."})
                         valid = imported
+                    for name, _price in valid:
+                        if units.get(name):
+                            await conn.execute("UPDATE grocery_price_cache SET price_unit=$2 WHERE food_name=$1", name, units[name])
         except Exception:
             raise HTTPException(500, "Falha ao importar preços; nenhuma linha do lote foi gravada.")
     print(f"[ADMIN-CATALOG] Importação {mode}: importados={len(valid)} erros={len(details)}")
@@ -280,7 +286,10 @@ async def update_grocery_price_manual(
 
     try:
         async with _state.db_pool.acquire() as conn:
-            await conn.execute(_MANUAL_UPSERT, food_name, Decimal(str(body.price)))
+            async with conn.transaction():
+                await conn.execute(_MANUAL_UPSERT, food_name, Decimal(str(body.price)))
+                if body.price_unit:
+                    await conn.execute("UPDATE grocery_price_cache SET price_unit=$2 WHERE food_name=$1", food_name, body.price_unit)
         return {"success": True, "food_name": food_name, "price": body.price}
     except Exception as e:
         raise HTTPException(500, f"Erro ao atualizar preço manual: {e}")
@@ -321,7 +330,7 @@ async def contribute_grocery_price(body: GroceryPriceContribution, request: Requ
                 if count >= 30:
                     raise HTTPException(429, "Limite diário de contribuições atingido. Tente amanhã.")
                 await conn.execute(UPSERT_SQL, uid, body.food_name, body.amount_paid,
-                    body.quantity, body.unit, unit, price, body.state, body.purchase_date)
+                    body.quantity, body.unit, unit, price, body.state, body.purchase_date, body.ingredient_slug)
         return {"success": True, "unit": unit, "price_per_unit": round(float(price), 4),
                 "message": "Contribuição recebida. Obrigado por ajudar!"}
     except HTTPException:
@@ -345,3 +354,14 @@ async def get_community_grocery_prices():
             "notice": "Média das compras informadas pelos participantes; pode variar por região, loja e data."}
     except Exception:
         raise HTTPException(503, "Referências colaborativas indisponíveis no momento.")
+
+
+@router.get("/api/catalog/grocery-ingredients")
+async def get_grocery_ingredients():
+    if not _state.db_pool:
+        raise HTTPException(503, "Preços de referência indisponíveis no momento.")
+    try:
+        return {"version": 1, "ingredients": await prices_for_ingredients(_state.db_pool, AVERAGES_SQL),
+                "notice": "Estimativas para planejamento; valores variam por região, loja e data."}
+    except Exception:
+        raise HTTPException(503, "Preços de referência indisponíveis no momento.")

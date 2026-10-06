@@ -39,7 +39,9 @@ RETURNING food_name
 _BASELINE_ONLY_UPSERT = _UPSERT.replace(
     "WHERE grocery_price_cache.source <> 'manual'",
     "WHERE grocery_price_cache.source <> 'manual' AND grocery_price_cache.price_avg IS NULL",
-)
+).replace("results_count, updated_at, needs_manual)", "results_count, updated_at, needs_manual, price_unit)").replace(
+    "now(), $8)", "now(), $8, 'kg')"
+).replace("    results_count = EXCLUDED.results_count,", "    price_unit = 'kg', results_count = EXCLUDED.results_count,")
 
 
 def _numero(value):
@@ -162,7 +164,7 @@ async def atualizar_precos(db_pool):
                     if data is None and entry:
                         data = _baseline_data(entry, now, rates)
                     data = data or {"avg": None, "min": None, "max": None, "source": "cascade", "count": 0}
-                    saved = await db_pool.fetchrow(_UPSERT, name, item["search_term"], data["avg"],
+                    saved = await db_pool.fetchrow(_BASELINE_ONLY_UPSERT if entry else _UPSERT, name, item["search_term"], data["avg"],
                                                   data["min"], data["max"], data["source"], data["count"],
                                                   data["avg"] is None, previous["updated_at"] if previous else None)
                     if saved:
