@@ -15,3 +15,12 @@ releases/*.apk
 storage/
 scripts/server/storage/
 
+
+# Documentação operacional arquivada na Contexto
+/PORTAL_AUTH.md
+/SECURITY_ACTIVITY.md
+/scripts/server/GROCERY_PRICES.md
+/scripts/server/README_EMAIL_E_OTP.md
+# Artefatos de distribuição ficam fora do Git
+*.apk
+*.aab
