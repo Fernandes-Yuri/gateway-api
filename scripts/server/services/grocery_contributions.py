@@ -14,8 +14,10 @@ STATES = set("AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO 
 def normalize_name(value):
     return " ".join("".join(c for c in unicodedata.normalize("NFD", value) if not unicodedata.combining(c)).casefold().split())
 
-KNOWN_FOODS = {normalize_name(x["food_name"]): x["food_name"] for x in json.loads(
-    (Path(__file__).resolve().parents[1] / "grocery_search_terms.json").read_text(encoding="utf-8"))}
+_FOOD_DATA = json.loads((Path(__file__).resolve().parents[1] / "grocery_search_terms.json").read_text(encoding="utf-8"))
+KNOWN_FOODS = {normalize_name(x["food_name"]): x["food_name"] for x in _FOOD_DATA}
+# Pacotes de pesos diferentes não podem compartilhar uma referência por unidade.
+UNIT_FOODS = {x["food_name"] for x in _FOOD_DATA if any(term in x["search_term"] for term in ("duzia", "unidade", "maco"))}
 
 class GroceryPriceContribution(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -60,6 +62,8 @@ class GroceryPriceContribution(BaseModel):
         return value
 
     def normalized(self):
+        if self.unit == "un" and self.food_name not in UNIT_FOODS:
+            raise ValueError("Para produtos embalados, informe o peso ou volume total, não a quantidade de pacotes.")
         if self.unit == "un" and self.quantity != self.quantity.to_integral_value():
             raise ValueError("A quantidade em unidades deve ser inteira.")
         unit = {"g": "kg", "ml": "L"}.get(self.unit, self.unit)

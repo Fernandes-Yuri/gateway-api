@@ -22,7 +22,7 @@ class ContributionValidationTests(unittest.TestCase):
         self.assertEqual(GroceryPriceContribution(**data).normalized(), ("kg", Decimal("16")))
         data.update(unit="ml")
         self.assertEqual(GroceryPriceContribution(**data).normalized(), ("L", Decimal("16")))
-        data.update(unit="un", quantity="12", amount_paid="12")
+        data.update(food_name="Ovo Caipira Cozido", unit="un", quantity="12", amount_paid="12")
         self.assertEqual(GroceryPriceContribution(**data).normalized(), ("un", Decimal("1")))
 
     def test_rejects_invalid_values_dates_unknown_food_and_fractional_units(self):
@@ -33,7 +33,9 @@ class ContributionValidationTests(unittest.TestCase):
             data = payload(); data[key] = value
             with self.subTest(key=key, value=value), self.assertRaises((ValidationError, ValueError)):
                 GroceryPriceContribution(**data).normalized()
-        data = payload(); data.update(unit="un", quantity="1.5")
+        data = payload(); data.update(food_name="Ovo Caipira Cozido", unit="un", quantity="1.5")
+        with self.assertRaises(ValueError): GroceryPriceContribution(**data).normalized()
+        data = payload(); data.update(unit="un", quantity="1")
         with self.assertRaises(ValueError): GroceryPriceContribution(**data).normalized()
 
 class ContributionRouteTests(unittest.TestCase):
