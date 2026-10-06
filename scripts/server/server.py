@@ -413,7 +413,7 @@ async def startup():
                 print(f"[Startup] Aviso: função expire_pending_confirmations() indisponível: {e}")
 
             try:
-                from services.meli_price_fetcher import seed_inicial
+                from services.price_cascade import seed_inicial
                 await seed_inicial(db_pool)
             except Exception as e:
                 print(f"[Startup] Aviso ao rodar seed_inicial de alimentos: {e}")
@@ -530,19 +530,19 @@ async def startup():
                     args=[_periodo], id=_id,
                     replace_existing=True, max_instances=1, coalesce=True,
                 )
-            async def _meli_price_refresh_job():
+            async def _price_cascade_job():
                 try:
-                    from services.meli_price_fetcher import atualizar_precos
+                    from services.price_cascade import atualizar_precos
                     await atualizar_precos(db_pool)
                 except Exception as err:
-                    print(f"[MELI] Falha no job semanal de preços: {err}")
+                    print(f"[price_cascade] Falha no job semanal de preços: {err}")
 
             retention_scheduler.add_job(
-                _meli_price_refresh_job,
+                _price_cascade_job,
                 CronTrigger(day_of_week="mon", hour=3, minute=0, timezone="America/Sao_Paulo"),
                 id="meli_grocery_price_weekly", replace_existing=True, max_instances=1, coalesce=True,
             )
-            print("[Scheduler] Rotinas pró-ativas registradas: 09h00, 14h30, 20h30. Job semanal Meli registrado: Seg 03h00.")
+            print("[Scheduler] Rotinas pró-ativas registradas: 09h00, 14h30, 20h30. Job semanal IPCA registrado: Seg 03h00.")
             retention_scheduler.start()
 
     if HAS_WHATSAPP and hasattr(whatsapp_router, "init_fast_lane_audio_cache"):
