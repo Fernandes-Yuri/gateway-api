@@ -2,8 +2,44 @@
 
 O job de segunda-feira às 03:00 America/Sao_Paulo usa a API pública SIDRA,
 tabela 1737, variável 63. Não consulta MELI e não exige nova chave ou pacote.
-CONAB/CEAGESP/PROCON/DIEESE ficam para uma segunda fase: não há feed CSV
-estável verificado para conectar nesta implementação.
+O preenchimento inicial usa a consulta HTML pública da CEAGESP e o PDF mensal
+PROCON-SP/DIEESE. CONAB e outras fontes ainda não têm integração verificada.
+
+## Baseline automático
+
+Na inicialização, após o seed, uma tarefa em background preenche somente
+preços nulos. O job semanal também tenta as fontes para itens ainda nulos.
+Registros com preço e registros manuais nunca são substituídos pelo coletor
+de baseline. A gravação protege alterações concorrentes por `updated_at`.
+
+`grocery_source_map.json` registra correspondências explícitas com os termos
+comerciais do seed, unidade de destino, quantidade e fator. Não há fuzzy
+matching nem equivalência de peixe inteiro com filé ou de arroz branco com
+integral. Na consulta real de 06/10/2026, foram obtidos 70 baselines de 220
+itens: 69 CEAGESP e 1 PROCON. Os 150 restantes continuam pendentes, até que
+uma fonte e uma conversão verificáveis sejam acrescentadas ao mapa.
+
+CEAGESP: seleciona datas publicadas de até 7 dias, consulta cinco categorias,
+verifica cabeçalho/data/grupo e faixas positivas. Usa a mediana dos preços
+comuns por classificação, com fator de varejo padrão 1,6. Conversões usam
+peso da embalagem ou contagem declarada no boletim; intervalos de contagem
+usam o ponto médio. PROCON: só PDFs do domínio oficial, relatório de até
+90 dias; atualmente mapeia apenas feijão carioquinha, com fator 1. Ambos são
+referências regionais de São Paulo, não médias nacionais medidas.
+
+Ao cadastrar, corrige a cotação desde a data observada por IPCA e grava
+`source='estimated'`. O log `[grocery_baseline] Cadastrado` registra fonte,
+data, cotações originais, unidade, quantidade, fator e valor efetivamente
+gravado. As evidências iniciais e a lista sem fonte ficam em
+`data/grocery_baseline/`. O CSV de evidência contém valores na data da fonte;
+a importação simples desse CSV não aplica automaticamente correção desde
+a data da cotação. Prefira o preenchimento automático implementado.
+
+O catálogo original contém unidades/embalagens diferentes das descrições
+do Android em alguns itens. Esta implementação preserva o preço de referência
+da unidade comercial do seed e não calcula o custo da porção semanal. A
+normalização de embalagens/quantidades no cliente exige trabalho separado;
+não interpretar a soma como orçamento exato das embalagens exibidas.
 
 Preços existentes são corrigidos pelo produto das taxas mensais, proporcional
 ao tempo transcorrido em cada mês UTC desde `updated_at`. Assim, uma execução

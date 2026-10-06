@@ -1,0 +1,602 @@
+[
+  {
+    "food_name": "Óleo de Abacate Extravirgem",
+    "search_term": "oleo abacate extravirgem"
+  },
+  {
+    "food_name": "Água de Coco Natural",
+    "search_term": "agua de coco natural 1l"
+  },
+  {
+    "food_name": "Abacate Manteiga",
+    "search_term": "abacate manteiga kg"
+  },
+  {
+    "food_name": "Acelga Refogada",
+    "search_term": "acelga maco"
+  },
+  {
+    "food_name": "Alcachofra Cozida (Coração)",
+    "search_term": "alcachofra conserva coração"
+  },
+  {
+    "food_name": "Alcatra Bovina Magra Grelhada",
+    "search_term": "alcatra bovina kg"
+  },
+  {
+    "food_name": "Alho-Poró Fatiado Refogado",
+    "search_term": "alho poro unidade"
+  },
+  {
+    "food_name": "Almeirão Refogado",
+    "search_term": "almeirao maco"
+  },
+  {
+    "food_name": "Amêndoas Cruas sem Sal",
+    "search_term": "amendoas cruas sem sal 500g"
+  },
+  {
+    "food_name": "Amaranto em Flocos",
+    "search_term": "amaranto flocos 500g"
+  },
+  {
+    "food_name": "Amaranto em Grãos Cozido",
+    "search_term": "amaranto graos 500g"
+  },
+  {
+    "food_name": "Amendoim Torrado sem Sal",
+    "search_term": "amendoim torrado sem sal 500g"
+  },
+  {
+    "food_name": "Amora Preta Silvestre",
+    "search_term": "amora preta bandeja"
+  },
+  {
+    "food_name": "Arroz Integral Agulhinha",
+    "search_term": "arroz integral agulhinha 5kg"
+  },
+  {
+    "food_name": "Arroz Negro Integral",
+    "search_term": "arroz negro integral 1kg"
+  },
+  {
+    "food_name": "Arroz Parboilizado Integral",
+    "search_term": "arroz parboilizado integral 5kg"
+  },
+  {
+    "food_name": "Arroz Vermelho Integral",
+    "search_term": "arroz vermelho integral 1kg"
+  },
+  {
+    "food_name": "Atum em Conserva ao Natural (Água)",
+    "search_term": "atum lata agua natural"
+  },
+  {
+    "food_name": "Atum Fresco Grelhado",
+    "search_term": "atum fresco posta kg"
+  },
+  {
+    "food_name": "Aveia em Flocos Finos",
+    "search_term": "aveia flocos finos 500g"
+  },
+  {
+    "food_name": "Aveia em Flocos Grossos",
+    "search_term": "aveia flocos grossos 500g"
+  },
+  {
+    "food_name": "Azeite de Oliva Extravirgem",
+    "search_term": "azeite oliva extravirgem 500ml"
+  },
+  {
+    "food_name": "Azeitona Preta Natural",
+    "search_term": "azeitona preta pote"
+  },
+  {
+    "food_name": "Azeitona Verde em Conserva sem Caroço",
+    "search_term": "azeitona verde sem caroco pote"
+  },
+  {
+    "food_name": "Bacalhau Dessalgado Cozido",
+    "search_term": "bacalhau dessalgado kg"
+  },
+  {
+    "food_name": "Banana-Maçã",
+    "search_term": "banana maca duzia"
+  },
+  {
+    "food_name": "Banana-Prata",
+    "search_term": "banana prata duzia"
+  },
+  {
+    "food_name": "Bebida Vegetal de Amêndoas sem Açúcar",
+    "search_term": "leite amendoas sem acucar 1l"
+  },
+  {
+    "food_name": "Bebida Vegetal de Aveia sem Açúcar",
+    "search_term": "leite aveia sem acucar 1l"
+  },
+  {
+    "food_name": "Bertalha Refogada",
+    "search_term": "bertalha maco"
+  },
+  {
+    "food_name": "Broto de Alfafa Fresco",
+    "search_term": "broto alfafa bandeja"
+  },
+  {
+    "food_name": "Broto de Bambu Cozido",
+    "search_term": "broto bambu conserva"
+  },
+  {
+    "food_name": "Broto de Feijão (Moyashi)",
+    "search_term": "moyashi broto feijao bandeja"
+  },
+  {
+    "food_name": "Cação em Posta Cozido no Molho",
+    "search_term": "cacao posta kg"
+  },
+  {
+    "food_name": "Cacau Puro em Pó 100% (sem açúcar)",
+    "search_term": "cacau po 100% sem acucar 200g"
+  },
+  {
+    "food_name": "Camarão Grelhado com Alho e Azeite",
+    "search_term": "camarao limpo kg"
+  },
+  {
+    "food_name": "Canela em Pó do Ceilão",
+    "search_term": "canela po ceilao 100g"
+  },
+  {
+    "food_name": "Canela em Pau para Infusão",
+    "search_term": "canela pau 100g"
+  },
+  {
+    "food_name": "Cúrcuma / Açafrão-da-Terra Puro",
+    "search_term": "curcuma acafrao terra po 100g"
+  },
+  {
+    "food_name": "Caqui Fuyu Firme",
+    "search_term": "caqui fuyu unidade"
+  },
+  {
+    "food_name": "Cardamomo em Grãos Triturado",
+    "search_term": "cardamomo graos 50g"
+  },
+  {
+    "food_name": "Carne de Panela Desfiada sem Gordura",
+    "search_term": "paleta bovina kg"
+  },
+  {
+    "food_name": "Castanha de Caju sem Sal",
+    "search_term": "castanha caju sem sal 500g"
+  },
+  {
+    "food_name": "Castanha-do-Pará",
+    "search_term": "castanha para 500g"
+  },
+  {
+    "food_name": "Cevadinha em Grãos Cozida",
+    "search_term": "cevadinha graos 500g"
+  },
+  {
+    "food_name": "Chá de Camomila Flor",
+    "search_term": "cha camomila sachê caixa"
+  },
+  {
+    "food_name": "Chá de Cavalinha",
+    "search_term": "cha cavalinha sachê caixa"
+  },
+  {
+    "food_name": "Chá de Dente-de-Leão Raiz",
+    "search_term": "cha dente leao erva 50g"
+  },
+  {
+    "food_name": "Chá de Erva-Cidreira / Melissa",
+    "search_term": "cha melissa erva cidreira sachê"
+  },
+  {
+    "food_name": "Chá de Erva-Doce / Funcho",
+    "search_term": "cha erva doce funcho sachê"
+  },
+  {
+    "food_name": "Chá de Gengibre com Casca de Limão",
+    "search_term": "cha gengibre limao sachê caixa"
+  },
+  {
+    "food_name": "Chá de Hibisco Flor (Cálice)",
+    "search_term": "cha hibisco flor 100g"
+  },
+  {
+    "food_name": "Chá de Melissa Fresca com Casca de Maçã",
+    "search_term": "melissa fresca maco"
+  },
+  {
+    "food_name": "Chá Verde em Folhas (Camellia sinensis)",
+    "search_term": "cha verde folhas 100g"
+  },
+  {
+    "food_name": "Chocolate Amargo 70% Cacau",
+    "search_term": "chocolate amargo 70% cacau barra"
+  },
+  {
+    "food_name": "Chocolate Amargo 85% Cacau",
+    "search_term": "chocolate amargo 85% cacau barra"
+  },
+  {
+    "food_name": "Coalhada Fresca sem Açúcar",
+    "search_term": "coalhada fresca 500g"
+  },
+  {
+    "food_name": "Cravo-da-Índia em Grão",
+    "search_term": "cravo india graos 50g"
+  },
+  {
+    "food_name": "Cuscuz de Milho Tradicional",
+    "search_term": "cuscuz milho 1kg"
+  },
+  {
+    "food_name": "Erva-Doce em Sementes (Funcho Seco)",
+    "search_term": "erva doce sementes funcho 50g"
+  },
+  {
+    "food_name": "Ervilha Seca Partida Cozida",
+    "search_term": "ervilha seca partida 500g"
+  },
+  {
+    "food_name": "Escarola / Chicória Refogada",
+    "search_term": "escarola chicoria maco"
+  },
+  {
+    "food_name": "Espinafre Refogado",
+    "search_term": "espinafre maco"
+  },
+  {
+    "food_name": "Farelo de Aveia",
+    "search_term": "farelo aveia 500g"
+  },
+  {
+    "food_name": "Farelo de Trigo (Fibra de Trigo)",
+    "search_term": "farelo trigo 500g"
+  },
+  {
+    "food_name": "Farinha de Banana Verde",
+    "search_term": "farinha banana verde 500g"
+  },
+  {
+    "food_name": "Farinha de Maracujá",
+    "search_term": "farinha maracuja 250g"
+  },
+  {
+    "food_name": "Fava Cozida com Ervas",
+    "search_term": "fava seca 500g"
+  },
+  {
+    "food_name": "Feijão Branco Cozido",
+    "search_term": "feijao branco 1kg"
+  },
+  {
+    "food_name": "Feijão Fradinho Cozido",
+    "search_term": "feijao fradinho 1kg"
+  },
+  {
+    "food_name": "Feijão Preto Cozido",
+    "search_term": "feijao preto 1kg"
+  },
+  {
+    "food_name": "Feijão Vermelho Cozido",
+    "search_term": "feijao vermelho 1kg"
+  },
+  {
+    "food_name": "Filé de Badejo Grelhado",
+    "search_term": "badejo file kg"
+  },
+  {
+    "food_name": "Filé Mignon Bovino Grelhado",
+    "search_term": "file mignon bovino kg"
+  },
+  {
+    "food_name": "Frango Desfiado com Cheiro-Verde",
+    "search_term": "peito frango bandeja 1kg"
+  },
+  {
+    "food_name": "Gérmen de Trigo Tostado",
+    "search_term": "germen trigo tostado 200g"
+  },
+  {
+    "food_name": "Gergelim Branco Integral",
+    "search_term": "gergelim branco 250g"
+  },
+  {
+    "food_name": "Gergelim Preto",
+    "search_term": "gergelim preto 250g"
+  },
+  {
+    "food_name": "Grão-de-Bico Cozido",
+    "search_term": "grao de bico 1kg"
+  },
+  {
+    "food_name": "Granola Artesanal sem Açúcar",
+    "search_term": "granola sem acucar 500g"
+  },
+  {
+    "food_name": "Iogurte Natural Desnatado",
+    "search_term": "iogurte natural desnatado 1kg"
+  },
+  {
+    "food_name": "Iogurte Natural Integral (2 Ingredientes)",
+    "search_term": "iogurte natural integral 1kg"
+  },
+  {
+    "food_name": "Iogurte Tipo Grego Zero Gordura sem Açúcar",
+    "search_term": "iogurte grego zero gordura sem acucar"
+  },
+  {
+    "food_name": "Kefir de Leite Artesanal",
+    "search_term": "kefir leite artesanal 500ml"
+  },
+  {
+    "food_name": "Kiwi Verde",
+    "search_term": "kiwi verde unidade"
+  },
+  {
+    "food_name": "Leite Desnatado Pasteurizado",
+    "search_term": "leite desnatado 1l"
+  },
+  {
+    "food_name": "Lentilha Marrom Cozida",
+    "search_term": "lentilha marrom 500g"
+  },
+  {
+    "food_name": "Lentilha Rosa / Laranja Cozida",
+    "search_term": "lentilha laranja 500g"
+  },
+  {
+    "food_name": "Linhaça Dourada Moída",
+    "search_term": "linhaca dourada moida 500g"
+  },
+  {
+    "food_name": "Linhaça Marrom Moída",
+    "search_term": "linhaca marrom moida 500g"
+  },
+  {
+    "food_name": "Lombo Suíno Assado Magro",
+    "search_term": "lombo suino kg"
+  },
+  {
+    "food_name": "Louro Seco em Folhas",
+    "search_term": "louro seco folhas 10g"
+  },
+  {
+    "food_name": "Lula Cozida em Anéis com Ervas",
+    "search_term": "lula limpa kg"
+  },
+  {
+    "food_name": "Macadâmia Crua",
+    "search_term": "macadamia crua 200g"
+  },
+  {
+    "food_name": "Macarrão Integral Cozido",
+    "search_term": "macarrao integral 500g"
+  },
+  {
+    "food_name": "Mamão Formosa",
+    "search_term": "mamao formosa unidade"
+  },
+  {
+    "food_name": "Mamão Papaia",
+    "search_term": "mamao papaia unidade"
+  },
+  {
+    "food_name": "Músculo Bovino Cozido em Pedaços",
+    "search_term": "musculo bovino kg"
+  },
+  {
+    "food_name": "Músculo Bovino Moído com Legumes",
+    "search_term": "musculo bovino moido kg"
+  },
+  {
+    "food_name": "Maracujá Azedo (Polpa)",
+    "search_term": "maracuja polpa 1kg"
+  },
+  {
+    "food_name": "Massa de Arroz Integral Cozida",
+    "search_term": "macarrao arroz integral 500g"
+  },
+  {
+    "food_name": "Massa de Grão-de-Bico Cozida",
+    "search_term": "macarrao grao de bico 250g"
+  },
+  {
+    "food_name": "Mexerica Ponkan",
+    "search_term": "mexerica ponkan kg"
+  },
+  {
+    "food_name": "Milheto em Grãos Cozido",
+    "search_term": "milheto graos 500g"
+  },
+  {
+    "food_name": "Milho Verde na Espiga Cozido",
+    "search_term": "milho verde espiga"
+  },
+  {
+    "food_name": "Mirtilo (Blueberry) Fresco",
+    "search_term": "mirtilo blueberry bandeja"
+  },
+  {
+    "food_name": "Morango Fresco",
+    "search_term": "morango bandeja"
+  },
+  {
+    "food_name": "Mostarda em Grãos Artesanal (sem açúcar)",
+    "search_term": "mostarda graos pote"
+  },
+  {
+    "food_name": "Nabo Branco Fatiado",
+    "search_term": "nabo branco kg"
+  },
+  {
+    "food_name": "Nozes Chilenas",
+    "search_term": "nozes chilenas 500g"
+  },
+  {
+    "food_name": "Noz-Moscada Ralada na Hora",
+    "search_term": "noz moscada inteira 50g"
+  },
+  {
+    "food_name": "Omelete de Claras com Ervas",
+    "search_term": "claras ovo pasteurizado 500ml"
+  },
+  {
+    "food_name": "Orégano Seco Puro",
+    "search_term": "oregano seco puro 30g"
+  },
+  {
+    "food_name": "Ovo Caipira Cozido",
+    "search_term": "ovos caipira duzia"
+  },
+  {
+    "food_name": "Ovo Caipira Mexido no Azeite",
+    "search_term": "ovos caipira duzia"
+  },
+  {
+    "food_name": "Ovo Caipira Pochê",
+    "search_term": "ovos caipira duzia"
+  },
+  {
+    "food_name": "Páprica Defumada",
+    "search_term": "paprica defumada 100g"
+  },
+  {
+    "food_name": "Páprica Doce Pura (sem corante)",
+    "search_term": "paprica doce 100g"
+  },
+  {
+    "food_name": "Palmito Pupunha Fresco Cozido",
+    "search_term": "palmito pupunha fresco kg"
+  },
+  {
+    "food_name": "Pasta de Amendoim Integral 100%",
+    "search_term": "pasta amendoim integral 500g"
+  },
+  {
+    "food_name": "Patinho Bovino Moído Magro",
+    "search_term": "patinho moido bandeja 500g"
+  },
+  {
+    "food_name": "Peito de Frango Grelhado em Tiras",
+    "search_term": "peito frango bandeja 500g"
+  },
+  {
+    "food_name": "Pescada Branca Grelhada",
+    "search_term": "pescada branca file kg"
+  },
+  {
+    "food_name": "Pimenta-do-Reino Moída na Hora",
+    "search_term": "pimenta reino moida 100g"
+  },
+  {
+    "food_name": "Pitanga Vermelha",
+    "search_term": "pitanga vermelha kg"
+  },
+  {
+    "food_name": "Polenta de Milho Cozida",
+    "search_term": "fubá flocão milho 1kg"
+  },
+  {
+    "food_name": "Psyllium Puro em Pó",
+    "search_term": "psyllium po 200g"
+  },
+  {
+    "food_name": "Queijo Cottage",
+    "search_term": "queijo cottage 400g"
+  },
+  {
+    "food_name": "Queijo Meia Cura em Dose Controlada",
+    "search_term": "queijo meia cura kg"
+  },
+  {
+    "food_name": "Queijo Minas Frescal Light",
+    "search_term": "queijo minas frescal light 500g"
+  },
+  {
+    "food_name": "Queijo Ricota Fresca",
+    "search_term": "ricota fresca 500g"
+  },
+  {
+    "food_name": "Quinoa em Flocos",
+    "search_term": "quinoa flocos 500g"
+  },
+  {
+    "food_name": "Quinoa em Grãos Cozida",
+    "search_term": "quinoa graos 500g"
+  },
+  {
+    "food_name": "Rabanete Fatiado Cru",
+    "search_term": "rabanete maco"
+  },
+  {
+    "food_name": "Rúcula Selvagem",
+    "search_term": "rucula maco"
+  },
+  {
+    "food_name": "Salmão Grelhado com Limão",
+    "search_term": "salmao file kg"
+  },
+  {
+    "food_name": "Sardinha em Conserva ao Molho de Tomate",
+    "search_term": "sardinha lata molho tomate"
+  },
+  {
+    "food_name": "Semente de Chia",
+    "search_term": "semente chia 500g"
+  },
+  {
+    "food_name": "Sementes de Abóbora Tostadas",
+    "search_term": "semente abobora descascada 250g"
+  },
+  {
+    "food_name": "Sementes de Girassol Descascadas",
+    "search_term": "semente girassol descascada 250g"
+  },
+  {
+    "food_name": "Sobrecoxa de Frango sem Pele Assada",
+    "search_term": "sobrecoxa frango sem pele kg"
+  },
+  {
+    "food_name": "Soja Verde em Grãos (Edamame)",
+    "search_term": "edamame soja verde 400g"
+  },
+  {
+    "food_name": "Taioba Refogada",
+    "search_term": "taioba maco"
+  },
+  {
+    "food_name": "Tofu Firme Orgânico Grelhado",
+    "search_term": "tofu firme organico 300g"
+  },
+  {
+    "food_name": "Tomate Cereja Doce",
+    "search_term": "tomate cereja bandeja"
+  },
+  {
+    "food_name": "Tomate Italiano com Casca",
+    "search_term": "tomate italiano kg"
+  },
+  {
+    "food_name": "Tomilho Seco / Fresco",
+    "search_term": "tomilho seco 20g"
+  },
+  {
+    "food_name": "Trigo em Grão Integral Cozido",
+    "search_term": "trigo graos integral 500g"
+  },
+  {
+    "food_name": "Vagem Manteiga Cozida",
+    "search_term": "vagem manteiga kg"
+  },
+  {
+    "food_name": "Vinagre de Maçã Orgânico Não Filtrado",
+    "search_term": "vinagre maca organico nao filtrado 500ml"
+  }
+]

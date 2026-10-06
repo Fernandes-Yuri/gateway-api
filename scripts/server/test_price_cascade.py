@@ -61,6 +61,11 @@ class EstimateTests(unittest.TestCase):
 
 
 class JobTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        baseline_patch = patch.object(prices, "fetch_baseline", new=AsyncMock(return_value=({}, 0)))
+        baseline_patch.start()
+        self.addCleanup(baseline_patch.stop)
+
     async def test_sidra_and_http_failure(self):
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(
                 200, json=[{}, {"D3C": "202601", "V": "0.30"}]))) as client:
