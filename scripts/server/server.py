@@ -602,6 +602,8 @@ async def scheduled_proactive_job(periodo: str):
 @app.on_event("shutdown")
 async def shutdown():
     global db_pool
+    if globals().get('security_telemetry'):
+        await security_telemetry.stop()
     if globals().get("retention_scheduler"):
         retention_scheduler.shutdown(wait=False)
     if db_pool:
@@ -907,6 +909,10 @@ dataset_module.configure_state(
 # ver routers/app.py (Fase A passo 3): /api/app/latest, /api/app/download,
 # /api/app/version, /api/app/notify-update, /
 # RELEASES_DIR vem de `config`.
+
+from security_telemetry import install as install_security_telemetry
+security_telemetry = install_security_telemetry(app, lambda: db_pool)
+admin_router._state.telemetry = security_telemetry
 
 if os.path.isdir(app_router.ONBOARDING_DIR):
     app.mount("/", StaticFiles(directory=app_router.ONBOARDING_DIR, html=True), name="onboarding")

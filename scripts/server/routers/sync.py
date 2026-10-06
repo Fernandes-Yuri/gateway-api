@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api_identity import firebase_uid, require_owner, require_family_access
 from config import STORAGE_DIR, PUBLIC_API_BASE_URL
@@ -40,7 +40,18 @@ logger = logging.getLogger(__name__)
 # MODELOS PYDANTIC (migrados do monolito)
 # =============================================================
 class ProfileSyncDto(BaseModel):
-    id: str
+    id: str = Field(min_length=1, max_length=128, pattern=r'^[A-Za-z0-9_-]+$')
+
+    @model_validator(mode='before')
+    @classmethod
+    def reject_server_fields(cls, value):
+        reserved = {'session_version', 'sessionVersion', 'session_revoked_at', 'isAdmin',
+                    'adminRole', 'moderation_status', 'moderationStatus'}
+        if isinstance(value, dict) and reserved.intersection(value):
+            from security_telemetry import mark_signal
+            mark_signal('forbidden_fields')
+            raise ValueError('O perfil contém campo reservado ao servidor.')
+        return value
     fullName: str
     birthDate: Optional[str] = None
     gender: Optional[str] = None

@@ -38,6 +38,7 @@ class _AppState:
 
     db_pool = None
     rate_limiter = None
+    telemetry = None
 
 
 _state = _AppState()
@@ -1233,6 +1234,76 @@ class UserRestrictionCreate(DeleteAccountRequest):
     level: str = Field(pattern=r'^(read-only|no-sync|suspended)$')
     reason: str = Field(min_length=1, max_length=500)
     minutes: Optional[int] = Field(default=None, ge=1, le=43200)
+
+
+@router.get('/api/admin/security-activity')
+async def security_activity(request: Request, groupBy: str = Query('ip', pattern='^(ip|uid)$'),
+                            minutes: int = Query(60, ge=15, le=1440),
+                            limit: int = Query(100, ge=1, le=200),
+                            _auth=Depends(require_service_token)):
+    await _moderation_operator(request)
+    column = 'ip' if groupBy == 'ip' else 'user_id'
+    from security_telemetry import SIGNALS
+    async with _require_pool().acquire() as conn:
+        rows = await conn.fetch(f'''WITH recent AS (
+            SELECT *, greatest(0,1-extract(epoch FROM (NOW()-occurred_at))/900.0)*weight AS risk
+            FROM security_request_events WHERE occurred_at > NOW()-($1::integer*INTERVAL '1 minute')
+        ), minute_counts AS (
+            SELECT {column} AS target,date_trunc('minute',occurred_at) AS minute,COUNT(*) AS requests
+            FROM recent GROUP BY {column},date_trunc('minute',occurred_at)
+        ) SELECT {column} AS target,COUNT(*) AS requests,
+            COUNT(*) FILTER(WHERE status>=400 AND status<500) AS refused,
+            MIN(occurred_at) AS first_seen,MAX(occurred_at) AS last_seen,
+            SUM(risk)::double precision AS score,
+            array_remove(array_agg(DISTINCT ip),NULL) AS ips,
+            array_remove(array_agg(DISTINCT user_id),NULL) AS uids,
+            array_remove(array_agg(DISTINCT country),NULL) AS countries,
+            array_remove(array_agg(DISTINCT region),NULL) AS regions,
+            array_agg(DISTINCT signal) FILTER(WHERE weight>0) AS signals,
+            (SELECT MAX(requests) FROM minute_counts m WHERE m.target=recent.{column}) AS peak_per_minute
+            FROM recent WHERE {column} IS NOT NULL AND {column}<>'unknown'
+            GROUP BY {column} HAVING SUM(weight)>0
+            ORDER BY score DESC,last_seen DESC LIMIT $2''', minutes, limit)
+    data = []
+    for row in rows:
+        item = dict(row)
+        item['level'] = 'high' if item['score'] >= 60 else 'attention' if item['score'] >= 20 else 'normal'
+        item['reasons'] = [SIGNALS[s][0] for s in (item.pop('signals') or []) if s in SIGNALS]
+        for key in ('ips', 'uids', 'countries', 'regions'):
+            item[key] = item[key][:10]
+        data.append(item)
+    return {'success': True, 'data': data, 'minutes': minutes,
+            'riskWindowMinutes': 15, 'thresholds': {'attention': 20, 'high': 60},
+            'telemetry': _state.telemetry.health() if _state.telemetry else None}
+
+
+@router.get('/api/admin/security-events')
+async def security_events(request: Request, ip: Optional[str] = None, userId: Optional[str] = None,
+                          minutes: int = Query(60, ge=15, le=1440),
+                          limit: int = Query(100, ge=1, le=200),
+                          _auth=Depends(require_service_token)):
+    await _moderation_operator(request)
+    if userId is not None:
+        _validate_uid(userId)
+    if ip is not None:
+        try:
+            ip = str(ipaddress.ip_address(ip))
+        except ValueError:
+            raise HTTPException(422, 'IP inválido.')
+    from security_telemetry import SIGNALS
+    async with _require_pool().acquire() as conn:
+        rows = await conn.fetch('''SELECT request_id,occurred_at,ip,user_id,country,region,
+            route,method,status,duration_ms,signal,app_version,ray_id,connection_ip,source
+            FROM security_request_events
+            WHERE occurred_at>NOW()-($1::integer*INTERVAL '1 minute')
+                AND ($2::text IS NULL OR ip=$2) AND ($3::text IS NULL OR user_id=$3)
+            ORDER BY occurred_at DESC,id DESC LIMIT $4''', minutes, ip, userId, limit)
+    data = []
+    for row in rows:
+        item = dict(row)
+        item['reason'] = SIGNALS.get(item['signal'], ('Evento recebido', 0))[0]
+        data.append(item)
+    return {'success': True, 'data': data}
 
 
 def _validate_uid(uid):
