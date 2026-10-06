@@ -1,0 +1,5265 @@
+{
+  "version": 1,
+  "quantity_policy": "planned_purchase_without_assumed_cooking_yields",
+  "ingredients": [
+    {
+      "slug": "oleo-de-abacate-extravirgem",
+      "name": "Óleo de Abacate Extravirgem",
+      "unit": "L",
+      "step": 500,
+      "minimum": 500,
+      "aliases": [
+        "Óleo de Abacate Extravirgem"
+      ],
+      "food_ids": [
+        "food_187"
+      ]
+    },
+    {
+      "slug": "agua-de-coco-natural",
+      "name": "Água de Coco Natural",
+      "unit": "L",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Água de Coco Natural"
+      ],
+      "food_ids": [
+        "food_060"
+      ]
+    },
+    {
+      "slug": "abobora-cabotia",
+      "name": "Abóbora Cabotiá",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Abóbora Cabotiá Cozida"
+      ],
+      "food_ids": [
+        "food_104"
+      ]
+    },
+    {
+      "slug": "abobora-menina-brasileira",
+      "name": "Abóbora Menina Brasileira",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Abóbora Menina Brasileira"
+      ],
+      "food_ids": [
+        "food_105"
+      ]
+    },
+    {
+      "slug": "abacate-hass-avocado",
+      "name": "Abacate Hass (Avocado)",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Abacate Hass (Avocado)"
+      ],
+      "food_ids": [
+        "food_043"
+      ]
+    },
+    {
+      "slug": "abacate-manteiga",
+      "name": "Abacate Manteiga",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Abacate Manteiga"
+      ],
+      "food_ids": [
+        "food_042"
+      ]
+    },
+    {
+      "slug": "abacaxi-perola",
+      "name": "Abacaxi Pérola",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Abacaxi Pérola"
+      ],
+      "food_ids": [
+        "food_035"
+      ]
+    },
+    {
+      "slug": "abobrinha-italiana",
+      "name": "Abobrinha Italiana",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Abobrinha Italiana Grelhada"
+      ],
+      "food_ids": [
+        "food_092"
+      ]
+    },
+    {
+      "slug": "acelga",
+      "name": "Acelga",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Acelga Refogada"
+      ],
+      "food_ids": [
+        "food_070"
+      ]
+    },
+    {
+      "slug": "acerola-fresca",
+      "name": "Acerola Fresca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Acerola Fresca"
+      ],
+      "food_ids": [
+        "food_051"
+      ]
+    },
+    {
+      "slug": "agriao-d-agua",
+      "name": "Agrião d'Água",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Agrião d'Água"
+      ],
+      "food_ids": [
+        "food_066"
+      ]
+    },
+    {
+      "slug": "alcachofra-coracao",
+      "name": "Alcachofra (Coração)",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Alcachofra Cozida (Coração)"
+      ],
+      "food_ids": [
+        "food_118"
+      ]
+    },
+    {
+      "slug": "alcatra-bovina-magra",
+      "name": "Alcatra Bovina Magra",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Alcatra Bovina Magra Grelhada"
+      ],
+      "food_ids": [
+        "food_154"
+      ]
+    },
+    {
+      "slug": "alecrim-fresco",
+      "name": "Alecrim Fresco",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Alecrim Fresco"
+      ],
+      "food_ids": [
+        "food_083"
+      ]
+    },
+    {
+      "slug": "alface-crespa",
+      "name": "Alface Crespa",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Alface Crespa"
+      ],
+      "food_ids": [
+        "food_062"
+      ]
+    },
+    {
+      "slug": "alface-lisa",
+      "name": "Alface Lisa",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Alface Lisa"
+      ],
+      "food_ids": [
+        "food_063"
+      ]
+    },
+    {
+      "slug": "alface-roxa",
+      "name": "Alface Roxa",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Alface Roxa"
+      ],
+      "food_ids": [
+        "food_064"
+      ]
+    },
+    {
+      "slug": "alho",
+      "name": "Alho",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Alho Fresco Picado"
+      ],
+      "food_ids": [
+        "food_103"
+      ]
+    },
+    {
+      "slug": "alho-poro",
+      "name": "Alho-Poró",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Alho-Poró Fatiado Refogado"
+      ],
+      "food_ids": [
+        "food_080"
+      ]
+    },
+    {
+      "slug": "almeirao",
+      "name": "Almeirão",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Almeirão Refogado"
+      ],
+      "food_ids": [
+        "food_069"
+      ]
+    },
+    {
+      "slug": "amendoas-cruas-sem-sal",
+      "name": "Amêndoas Cruas sem Sal",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Amêndoas Cruas sem Sal"
+      ],
+      "food_ids": [
+        "food_022"
+      ]
+    },
+    {
+      "slug": "amaranto-em-flocos",
+      "name": "Amaranto em Flocos",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Amaranto em Flocos"
+      ],
+      "food_ids": [
+        "food_015"
+      ]
+    },
+    {
+      "slug": "amaranto-em-graos",
+      "name": "Amaranto em Grãos",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Amaranto em Grãos Cozido"
+      ],
+      "food_ids": [
+        "food_138"
+      ]
+    },
+    {
+      "slug": "ameixa-fresca-roxa",
+      "name": "Ameixa Fresca Roxa",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Ameixa Fresca Roxa"
+      ],
+      "food_ids": [
+        "food_049"
+      ]
+    },
+    {
+      "slug": "amendoim-torrado-sem-sal",
+      "name": "Amendoim Torrado sem Sal",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Amendoim Torrado sem Sal"
+      ],
+      "food_ids": [
+        "food_023"
+      ]
+    },
+    {
+      "slug": "amora-preta-silvestre",
+      "name": "Amora Preta Silvestre",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Amora Preta Silvestre"
+      ],
+      "food_ids": [
+        "food_054"
+      ]
+    },
+    {
+      "slug": "arroz-integral-agulhinha",
+      "name": "Arroz Integral Agulhinha",
+      "unit": "kg",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Arroz Integral Agulhinha"
+      ],
+      "food_ids": [
+        "food_132"
+      ]
+    },
+    {
+      "slug": "arroz-negro-integral",
+      "name": "Arroz Negro Integral",
+      "unit": "kg",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Arroz Negro Integral"
+      ],
+      "food_ids": [
+        "food_135"
+      ]
+    },
+    {
+      "slug": "arroz-parboilizado-integral",
+      "name": "Arroz Parboilizado Integral",
+      "unit": "kg",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Arroz Parboilizado Integral"
+      ],
+      "food_ids": [
+        "food_133"
+      ]
+    },
+    {
+      "slug": "arroz-vermelho-integral",
+      "name": "Arroz Vermelho Integral",
+      "unit": "kg",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Arroz Vermelho Integral"
+      ],
+      "food_ids": [
+        "food_134"
+      ]
+    },
+    {
+      "slug": "aspargos-frescos",
+      "name": "Aspargos Frescos",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Aspargos Frescos Grelhados"
+      ],
+      "food_ids": [
+        "food_117"
+      ]
+    },
+    {
+      "slug": "atum-em-conserva-ao-natural-agua",
+      "name": "Atum em Conserva ao Natural (Água)",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Atum em Conserva ao Natural (Água)"
+      ],
+      "food_ids": [
+        "food_159"
+      ]
+    },
+    {
+      "slug": "atum-fresco",
+      "name": "Atum Fresco",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Atum Fresco Grelhado"
+      ],
+      "food_ids": [
+        "food_160"
+      ]
+    },
+    {
+      "slug": "aveia-em-flocos-finos",
+      "name": "Aveia em Flocos Finos",
+      "unit": "kg",
+      "step": 250,
+      "minimum": 250,
+      "aliases": [
+        "Aveia em Flocos Finos"
+      ],
+      "food_ids": [
+        "food_004"
+      ]
+    },
+    {
+      "slug": "aveia-em-flocos-grossos",
+      "name": "Aveia em Flocos Grossos",
+      "unit": "kg",
+      "step": 250,
+      "minimum": 250,
+      "aliases": [
+        "Aveia em Flocos Grossos"
+      ],
+      "food_ids": [
+        "food_005"
+      ]
+    },
+    {
+      "slug": "azeite-de-oliva-extravirgem",
+      "name": "Azeite de Oliva Extravirgem",
+      "unit": "L",
+      "step": 500,
+      "minimum": 500,
+      "aliases": [
+        "Azeite de Oliva Extravirgem"
+      ],
+      "food_ids": [
+        "food_186"
+      ]
+    },
+    {
+      "slug": "azeitona-preta-natural",
+      "name": "Azeitona Preta Natural",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Azeitona Preta Natural"
+      ],
+      "food_ids": [
+        "food_189"
+      ]
+    },
+    {
+      "slug": "azeitona-verde-em-conserva-sem-caroco",
+      "name": "Azeitona Verde em Conserva sem Caroço",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Azeitona Verde em Conserva sem Caroço"
+      ],
+      "food_ids": [
+        "food_188"
+      ]
+    },
+    {
+      "slug": "bacalhau-dessalgado",
+      "name": "Bacalhau Dessalgado",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Bacalhau Dessalgado Cozido"
+      ],
+      "food_ids": [
+        "food_166"
+      ]
+    },
+    {
+      "slug": "banana-maca",
+      "name": "Banana-Maçã",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Banana-Maçã"
+      ],
+      "food_ids": [
+        "food_027"
+      ]
+    },
+    {
+      "slug": "banana-prata",
+      "name": "Banana-Prata",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Banana-Prata"
+      ],
+      "food_ids": [
+        "food_026"
+      ]
+    },
+    {
+      "slug": "batata-doce-branca",
+      "name": "Batata-Doce Branca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Batata-Doce Branca Cozida"
+      ],
+      "food_ids": [
+        "food_107"
+      ]
+    },
+    {
+      "slug": "batata-doce-roxa",
+      "name": "Batata-Doce Roxa",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Batata-Doce Roxa Cozida"
+      ],
+      "food_ids": [
+        "food_106"
+      ]
+    },
+    {
+      "slug": "bebida-vegetal-de-amendoas-sem-acucar",
+      "name": "Bebida Vegetal de Amêndoas sem Açúcar",
+      "unit": "L",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Bebida Vegetal de Amêndoas sem Açúcar"
+      ],
+      "food_ids": [
+        "food_175"
+      ]
+    },
+    {
+      "slug": "bebida-vegetal-de-aveia-sem-acucar",
+      "name": "Bebida Vegetal de Aveia sem Açúcar",
+      "unit": "L",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Bebida Vegetal de Aveia sem Açúcar"
+      ],
+      "food_ids": [
+        "food_176"
+      ]
+    },
+    {
+      "slug": "berinjela",
+      "name": "Berinjela",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Berinjela Cozida em Cubos"
+      ],
+      "food_ids": [
+        "food_093"
+      ]
+    },
+    {
+      "slug": "bertalha",
+      "name": "Bertalha",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Bertalha Refogada"
+      ],
+      "food_ids": [
+        "food_077"
+      ]
+    },
+    {
+      "slug": "beterraba",
+      "name": "Beterraba",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Beterraba Cozida em Cubos",
+        "Beterraba Crua Ralada"
+      ],
+      "food_ids": [
+        "food_087",
+        "food_086"
+      ]
+    },
+    {
+      "slug": "brocolis-ninja",
+      "name": "Brócolis Ninja",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Brócolis Ninja no Vapor"
+      ],
+      "food_ids": [
+        "food_073"
+      ]
+    },
+    {
+      "slug": "brocolis-ramoso",
+      "name": "Brócolis Ramoso",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Brócolis Ramoso Refogado"
+      ],
+      "food_ids": [
+        "food_074"
+      ]
+    },
+    {
+      "slug": "broto-de-alfafa-fresco",
+      "name": "Broto de Alfafa Fresco",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Broto de Alfafa Fresco"
+      ],
+      "food_ids": [
+        "food_079"
+      ]
+    },
+    {
+      "slug": "broto-de-bambu",
+      "name": "Broto de Bambu",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Broto de Bambu Cozido"
+      ],
+      "food_ids": [
+        "food_120"
+      ]
+    },
+    {
+      "slug": "broto-de-feijao-moyashi",
+      "name": "Broto de Feijão (Moyashi)",
+      "unit": "kg",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Broto de Feijão (Moyashi)"
+      ],
+      "food_ids": [
+        "food_078"
+      ]
+    },
+    {
+      "slug": "cacau-puro-em-po-100-sem-acucar",
+      "name": "Cacau Puro em Pó 100% (sem açúcar)",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Cacau Puro em Pó 100% (sem açúcar)"
+      ],
+      "food_ids": [
+        "food_211"
+      ]
+    },
+    {
+      "slug": "caju-fresco",
+      "name": "Caju Fresco",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Caju Fresco"
+      ],
+      "food_ids": [
+        "food_050"
+      ]
+    },
+    {
+      "slug": "canela-em-po-do-ceilao",
+      "name": "Canela em Pó do Ceilão",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Canela em Pó do Ceilão"
+      ],
+      "food_ids": [
+        "food_190"
+      ]
+    },
+    {
+      "slug": "canela-em-pau-para-infusao",
+      "name": "Canela em Pau para Infusão",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Canela em Pau para Infusão"
+      ],
+      "food_ids": [
+        "food_191"
+      ]
+    },
+    {
+      "slug": "curcuma-acafrao-da-terra-puro",
+      "name": "Cúrcuma / Açafrão-da-Terra Puro",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Cúrcuma / Açafrão-da-Terra Puro"
+      ],
+      "food_ids": [
+        "food_192"
+      ]
+    },
+    {
+      "slug": "caqui-fuyu-firme",
+      "name": "Caqui Fuyu Firme",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Caqui Fuyu Firme"
+      ],
+      "food_ids": [
+        "food_058"
+      ]
+    },
+    {
+      "slug": "cara",
+      "name": "Cará",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Cará Cozido"
+      ],
+      "food_ids": [
+        "food_109"
+      ]
+    },
+    {
+      "slug": "carambola-doce",
+      "name": "Carambola Doce",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Carambola Doce"
+      ],
+      "food_ids": [
+        "food_057"
+      ]
+    },
+    {
+      "slug": "cardamomo-em-graos-triturado",
+      "name": "Cardamomo em Grãos Triturado",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Cardamomo em Grãos Triturado"
+      ],
+      "food_ids": [
+        "food_218"
+      ]
+    },
+    {
+      "slug": "castanha-de-caju-sem-sal",
+      "name": "Castanha de Caju sem Sal",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Castanha de Caju sem Sal"
+      ],
+      "food_ids": [
+        "food_020"
+      ]
+    },
+    {
+      "slug": "castanha-do-para",
+      "name": "Castanha-do-Pará",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Castanha-do-Pará"
+      ],
+      "food_ids": [
+        "food_019"
+      ]
+    },
+    {
+      "slug": "cebola-branca",
+      "name": "Cebola Branca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Cebola Branca Picada"
+      ],
+      "food_ids": [
+        "food_101"
+      ]
+    },
+    {
+      "slug": "cebola-roxa",
+      "name": "Cebola Roxa",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Cebola Roxa Crua"
+      ],
+      "food_ids": [
+        "food_102"
+      ]
+    },
+    {
+      "slug": "cenoura",
+      "name": "Cenoura",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Cenoura Cozida no Vapor",
+        "Cenoura Crua Ralada"
+      ],
+      "food_ids": [
+        "food_089",
+        "food_088"
+      ]
+    },
+    {
+      "slug": "cevadinha-em-graos",
+      "name": "Cevadinha em Grãos",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Cevadinha em Grãos Cozida"
+      ],
+      "food_ids": [
+        "food_140"
+      ]
+    },
+    {
+      "slug": "cha-de-alecrim-fresco",
+      "name": "Chá de Alecrim Fresco",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chá de Alecrim Fresco"
+      ],
+      "food_ids": [
+        "food_203"
+      ]
+    },
+    {
+      "slug": "cha-de-camomila-flor",
+      "name": "Chá de Camomila Flor",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chá de Camomila Flor"
+      ],
+      "food_ids": [
+        "food_200"
+      ]
+    },
+    {
+      "slug": "cha-de-cavalinha",
+      "name": "Chá de Cavalinha",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chá de Cavalinha"
+      ],
+      "food_ids": [
+        "food_207"
+      ]
+    },
+    {
+      "slug": "cha-de-dente-de-leao-raiz",
+      "name": "Chá de Dente-de-Leão Raiz",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chá de Dente-de-Leão Raiz"
+      ],
+      "food_ids": [
+        "food_219"
+      ]
+    },
+    {
+      "slug": "cha-de-erva-cidreira-melissa",
+      "name": "Chá de Erva-Cidreira / Melissa",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chá de Erva-Cidreira / Melissa"
+      ],
+      "food_ids": [
+        "food_201"
+      ]
+    },
+    {
+      "slug": "cha-de-erva-doce-funcho",
+      "name": "Chá de Erva-Doce / Funcho",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chá de Erva-Doce / Funcho"
+      ],
+      "food_ids": [
+        "food_205"
+      ]
+    },
+    {
+      "slug": "cha-de-hibisco-flor-calice",
+      "name": "Chá de Hibisco Flor (Cálice)",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chá de Hibisco Flor (Cálice)"
+      ],
+      "food_ids": [
+        "food_204"
+      ]
+    },
+    {
+      "slug": "cha-de-hortela-fresca",
+      "name": "Chá de Hortelã Fresca",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chá de Hortelã Fresca"
+      ],
+      "food_ids": [
+        "food_202"
+      ]
+    },
+    {
+      "slug": "cha-verde-em-folhas-camellia-sinensis",
+      "name": "Chá Verde em Folhas (Camellia sinensis)",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chá Verde em Folhas (Camellia sinensis)"
+      ],
+      "food_ids": [
+        "food_199"
+      ]
+    },
+    {
+      "slug": "chocolate-amargo-70-cacau",
+      "name": "Chocolate Amargo 70% Cacau",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chocolate Amargo 70% Cacau"
+      ],
+      "food_ids": [
+        "food_213"
+      ]
+    },
+    {
+      "slug": "chocolate-amargo-85-cacau",
+      "name": "Chocolate Amargo 85% Cacau",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chocolate Amargo 85% Cacau"
+      ],
+      "food_ids": [
+        "food_212"
+      ]
+    },
+    {
+      "slug": "chuchu",
+      "name": "Chuchu",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Chuchu Cozido no Vapor"
+      ],
+      "food_ids": [
+        "food_094"
+      ]
+    },
+    {
+      "slug": "coalhada-fresca-sem-acucar",
+      "name": "Coalhada Fresca sem Açúcar",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Coalhada Fresca sem Açúcar"
+      ],
+      "food_ids": [
+        "food_170"
+      ]
+    },
+    {
+      "slug": "couve-de-bruxelas",
+      "name": "Couve de Bruxelas",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Couve de Bruxelas no Vapor"
+      ],
+      "food_ids": [
+        "food_119"
+      ]
+    },
+    {
+      "slug": "couve-flor",
+      "name": "Couve-Flor",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Couve-Flor no Vapor"
+      ],
+      "food_ids": [
+        "food_075"
+      ]
+    },
+    {
+      "slug": "cravo-da-india-em-grao",
+      "name": "Cravo-da-Índia em Grão",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Cravo-da-Índia em Grão"
+      ],
+      "food_ids": [
+        "food_195"
+      ]
+    },
+    {
+      "slug": "cuscuz-de-milho-tradicional",
+      "name": "Cuscuz de Milho Tradicional",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Cuscuz de Milho Tradicional"
+      ],
+      "food_ids": [
+        "food_141"
+      ]
+    },
+    {
+      "slug": "erva-doce-em-sementes-funcho-seco",
+      "name": "Erva-Doce em Sementes (Funcho Seco)",
+      "unit": "kg",
+      "step": 150,
+      "minimum": 150,
+      "aliases": [
+        "Erva-Doce em Sementes (Funcho Seco)"
+      ],
+      "food_ids": [
+        "food_216"
+      ]
+    },
+    {
+      "slug": "ervilha-fresca-em-vagem-torta",
+      "name": "Ervilha Fresca em Vagem (Torta)",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Ervilha Fresca em Vagem (Torta)"
+      ],
+      "food_ids": [
+        "food_115"
+      ]
+    },
+    {
+      "slug": "ervilha-seca-partida",
+      "name": "Ervilha Seca Partida",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Ervilha Seca Partida Cozida"
+      ],
+      "food_ids": [
+        "food_129"
+      ]
+    },
+    {
+      "slug": "escarola-chicoria",
+      "name": "Escarola / Chicória",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Escarola / Chicória Refogada"
+      ],
+      "food_ids": [
+        "food_068"
+      ]
+    },
+    {
+      "slug": "espinafre",
+      "name": "Espinafre",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Espinafre Refogado"
+      ],
+      "food_ids": [
+        "food_067"
+      ]
+    },
+    {
+      "slug": "farelo-de-aveia",
+      "name": "Farelo de Aveia",
+      "unit": "kg",
+      "step": 250,
+      "minimum": 250,
+      "aliases": [
+        "Farelo de Aveia"
+      ],
+      "food_ids": [
+        "food_001"
+      ]
+    },
+    {
+      "slug": "farelo-de-trigo-fibra-de-trigo",
+      "name": "Farelo de Trigo (Fibra de Trigo)",
+      "unit": "kg",
+      "step": 250,
+      "minimum": 250,
+      "aliases": [
+        "Farelo de Trigo (Fibra de Trigo)"
+      ],
+      "food_ids": [
+        "food_018"
+      ]
+    },
+    {
+      "slug": "farinha-de-banana-verde",
+      "name": "Farinha de Banana Verde",
+      "unit": "kg",
+      "step": 250,
+      "minimum": 250,
+      "aliases": [
+        "Farinha de Banana Verde"
+      ],
+      "food_ids": [
+        "food_011"
+      ]
+    },
+    {
+      "slug": "farinha-de-maracuja",
+      "name": "Farinha de Maracujá",
+      "unit": "kg",
+      "step": 250,
+      "minimum": 250,
+      "aliases": [
+        "Farinha de Maracujá"
+      ],
+      "food_ids": [
+        "food_012"
+      ]
+    },
+    {
+      "slug": "feijao-branco",
+      "name": "Feijão Branco",
+      "unit": "kg",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Feijão Branco Cozido"
+      ],
+      "food_ids": [
+        "food_124"
+      ]
+    },
+    {
+      "slug": "feijao-carioca",
+      "name": "Feijão Carioca",
+      "unit": "kg",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Feijão Carioca Cozido"
+      ],
+      "food_ids": [
+        "food_121"
+      ]
+    },
+    {
+      "slug": "feijao-fradinho",
+      "name": "Feijão Fradinho",
+      "unit": "kg",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Feijão Fradinho Cozido"
+      ],
+      "food_ids": [
+        "food_123"
+      ]
+    },
+    {
+      "slug": "feijao-preto",
+      "name": "Feijão Preto",
+      "unit": "kg",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Feijão Preto Cozido"
+      ],
+      "food_ids": [
+        "food_122"
+      ]
+    },
+    {
+      "slug": "feijao-vermelho",
+      "name": "Feijão Vermelho",
+      "unit": "kg",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Feijão Vermelho Cozido"
+      ],
+      "food_ids": [
+        "food_125"
+      ]
+    },
+    {
+      "slug": "figo-roxo-fresco",
+      "name": "Figo Roxo Fresco",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Figo Roxo Fresco"
+      ],
+      "food_ids": [
+        "food_056"
+      ]
+    },
+    {
+      "slug": "file-de-badejo",
+      "name": "Filé de Badejo",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Filé de Badejo Grelhado"
+      ],
+      "food_ids": [
+        "food_182"
+      ]
+    },
+    {
+      "slug": "file-mignon-bovino",
+      "name": "Filé Mignon Bovino",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Filé Mignon Bovino Grelhado"
+      ],
+      "food_ids": [
+        "food_153"
+      ]
+    },
+    {
+      "slug": "folhas-de-couve-manteiga",
+      "name": "Folhas de Couve Manteiga",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Folhas de Couve Manteiga"
+      ],
+      "food_ids": [
+        "food_061"
+      ]
+    },
+    {
+      "slug": "germen-de-trigo-tostado",
+      "name": "Gérmen de Trigo Tostado",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Gérmen de Trigo Tostado"
+      ],
+      "food_ids": [
+        "food_014"
+      ]
+    },
+    {
+      "slug": "gengibre",
+      "name": "Gengibre",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Gengibre Fresco Ralado"
+      ],
+      "food_ids": [
+        "food_193"
+      ]
+    },
+    {
+      "slug": "gergelim-branco-integral",
+      "name": "Gergelim Branco Integral",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Gergelim Branco Integral"
+      ],
+      "food_ids": [
+        "food_009"
+      ]
+    },
+    {
+      "slug": "gergelim-preto",
+      "name": "Gergelim Preto",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Gergelim Preto"
+      ],
+      "food_ids": [
+        "food_010"
+      ]
+    },
+    {
+      "slug": "goiaba-branca-com-casca",
+      "name": "Goiaba Branca com Casca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Goiaba Branca com Casca"
+      ],
+      "food_ids": [
+        "food_041"
+      ]
+    },
+    {
+      "slug": "goiaba-vermelha-com-casca",
+      "name": "Goiaba Vermelha com Casca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Goiaba Vermelha com Casca"
+      ],
+      "food_ids": [
+        "food_040"
+      ]
+    },
+    {
+      "slug": "grao-de-bico",
+      "name": "Grão-de-Bico",
+      "unit": "kg",
+      "step": 500,
+      "minimum": 500,
+      "aliases": [
+        "Grão-de-Bico Cozido"
+      ],
+      "food_ids": [
+        "food_128"
+      ]
+    },
+    {
+      "slug": "granola-artesanal-sem-acucar",
+      "name": "Granola Artesanal sem Açúcar",
+      "unit": "kg",
+      "step": 250,
+      "minimum": 250,
+      "aliases": [
+        "Granola Artesanal sem Açúcar"
+      ],
+      "food_ids": [
+        "food_017"
+      ]
+    },
+    {
+      "slug": "hortela-fresca",
+      "name": "Hortelã Fresca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Hortelã Fresca"
+      ],
+      "food_ids": [
+        "food_082"
+      ]
+    },
+    {
+      "slug": "inhame",
+      "name": "Inhame",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Inhame Cozido"
+      ],
+      "food_ids": [
+        "food_108"
+      ]
+    },
+    {
+      "slug": "iogurte-natural-desnatado",
+      "name": "Iogurte Natural Desnatado",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Iogurte Natural Desnatado"
+      ],
+      "food_ids": [
+        "food_169"
+      ]
+    },
+    {
+      "slug": "iogurte-natural-integral-2-ingredientes",
+      "name": "Iogurte Natural Integral (2 Ingredientes)",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Iogurte Natural Integral (2 Ingredientes)"
+      ],
+      "food_ids": [
+        "food_168"
+      ]
+    },
+    {
+      "slug": "iogurte-tipo-grego-zero-gordura-sem-acucar",
+      "name": "Iogurte Tipo Grego Zero Gordura sem Açúcar",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Iogurte Tipo Grego Zero Gordura sem Açúcar"
+      ],
+      "food_ids": [
+        "food_185"
+      ]
+    },
+    {
+      "slug": "jabuticaba-fresca",
+      "name": "Jabuticaba Fresca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Jabuticaba Fresca"
+      ],
+      "food_ids": [
+        "food_052"
+      ]
+    },
+    {
+      "slug": "jilo",
+      "name": "Jiló",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Jiló Cozido em Fatias"
+      ],
+      "food_ids": [
+        "food_097"
+      ]
+    },
+    {
+      "slug": "kefir-de-leite-artesanal",
+      "name": "Kefir de Leite Artesanal",
+      "unit": "L",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Kefir de Leite Artesanal"
+      ],
+      "food_ids": [
+        "food_178"
+      ]
+    },
+    {
+      "slug": "kiwi-verde",
+      "name": "Kiwi Verde",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Kiwi Verde"
+      ],
+      "food_ids": [
+        "food_048"
+      ]
+    },
+    {
+      "slug": "laranja-lima",
+      "name": "Laranja Lima",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Laranja Lima"
+      ],
+      "food_ids": [
+        "food_038"
+      ]
+    },
+    {
+      "slug": "laranja-pera-com-bagaco",
+      "name": "Laranja Pêra com Bagaço",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Laranja Pêra com Bagaço"
+      ],
+      "food_ids": [
+        "food_037"
+      ]
+    },
+    {
+      "slug": "leite-desnatado-pasteurizado",
+      "name": "Leite Desnatado Pasteurizado",
+      "unit": "L",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Leite Desnatado Pasteurizado"
+      ],
+      "food_ids": [
+        "food_174"
+      ]
+    },
+    {
+      "slug": "lentilha-marrom",
+      "name": "Lentilha Marrom",
+      "unit": "kg",
+      "step": 500,
+      "minimum": 500,
+      "aliases": [
+        "Lentilha Marrom Cozida"
+      ],
+      "food_ids": [
+        "food_126"
+      ]
+    },
+    {
+      "slug": "lentilha-rosa-laranja",
+      "name": "Lentilha Rosa / Laranja",
+      "unit": "kg",
+      "step": 500,
+      "minimum": 500,
+      "aliases": [
+        "Lentilha Rosa / Laranja Cozida"
+      ],
+      "food_ids": [
+        "food_127"
+      ]
+    },
+    {
+      "slug": "lima-da-persia-fresca",
+      "name": "Lima da Pérsia Fresca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Lima da Pérsia Fresca"
+      ],
+      "food_ids": [
+        "food_059"
+      ]
+    },
+    {
+      "slug": "linhaca-dourada-moida",
+      "name": "Linhaça Dourada Moída",
+      "unit": "kg",
+      "step": 150,
+      "minimum": 150,
+      "aliases": [
+        "Linhaça Dourada Moída"
+      ],
+      "food_ids": [
+        "food_003"
+      ]
+    },
+    {
+      "slug": "linhaca-marrom-moida",
+      "name": "Linhaça Marrom Moída",
+      "unit": "kg",
+      "step": 150,
+      "minimum": 150,
+      "aliases": [
+        "Linhaça Marrom Moída"
+      ],
+      "food_ids": [
+        "food_006"
+      ]
+    },
+    {
+      "slug": "lombo-suino-assado-magro",
+      "name": "Lombo Suíno Assado Magro",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Lombo Suíno Assado Magro"
+      ],
+      "food_ids": [
+        "food_156"
+      ]
+    },
+    {
+      "slug": "louro-seco-em-folhas",
+      "name": "Louro Seco em Folhas",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Louro Seco em Folhas"
+      ],
+      "food_ids": [
+        "food_215"
+      ]
+    },
+    {
+      "slug": "maca-fuji-com-casca",
+      "name": "Maçã Fuji com Casca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Maçã Fuji com Casca"
+      ],
+      "food_ids": [
+        "food_029"
+      ]
+    },
+    {
+      "slug": "maca-gala-com-casca",
+      "name": "Maçã Gala com Casca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Maçã Gala com Casca"
+      ],
+      "food_ids": [
+        "food_028"
+      ]
+    },
+    {
+      "slug": "macadamia-crua",
+      "name": "Macadâmia Crua",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Macadâmia Crua"
+      ],
+      "food_ids": [
+        "food_025"
+      ]
+    },
+    {
+      "slug": "macarrao-integral",
+      "name": "Macarrão Integral",
+      "unit": "kg",
+      "step": 500,
+      "minimum": 500,
+      "aliases": [
+        "Macarrão Integral Cozido"
+      ],
+      "food_ids": [
+        "food_143"
+      ]
+    },
+    {
+      "slug": "mamao-formosa",
+      "name": "Mamão Formosa",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Mamão Formosa"
+      ],
+      "food_ids": [
+        "food_032"
+      ]
+    },
+    {
+      "slug": "mamao-papaia",
+      "name": "Mamão Papaia",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Mamão Papaia"
+      ],
+      "food_ids": [
+        "food_031"
+      ]
+    },
+    {
+      "slug": "mandioca-aipim",
+      "name": "Mandioca / Aipim",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Mandioca / Aipim Cozido"
+      ],
+      "food_ids": [
+        "food_111"
+      ]
+    },
+    {
+      "slug": "mandioquinha-batata-baroa",
+      "name": "Mandioquinha (Batata-Baroa)",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Mandioquinha (Batata-Baroa)"
+      ],
+      "food_ids": [
+        "food_110"
+      ]
+    },
+    {
+      "slug": "manga-palmer",
+      "name": "Manga Palmer",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Manga Palmer"
+      ],
+      "food_ids": [
+        "food_036"
+      ]
+    },
+    {
+      "slug": "manjericao-fresco",
+      "name": "Manjericão Fresco",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Manjericão Fresco"
+      ],
+      "food_ids": [
+        "food_081"
+      ]
+    },
+    {
+      "slug": "musculo-bovino",
+      "name": "Músculo Bovino",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Músculo Bovino Cozido em Pedaços"
+      ],
+      "food_ids": [
+        "food_155"
+      ]
+    },
+    {
+      "slug": "maracuja-azedo-polpa",
+      "name": "Maracujá Azedo (Polpa)",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Maracujá Azedo (Polpa)"
+      ],
+      "food_ids": [
+        "food_047"
+      ]
+    },
+    {
+      "slug": "massa-de-arroz-integral",
+      "name": "Massa de Arroz Integral",
+      "unit": "kg",
+      "step": 1000,
+      "minimum": 1000,
+      "aliases": [
+        "Massa de Arroz Integral Cozida"
+      ],
+      "food_ids": [
+        "food_144"
+      ]
+    },
+    {
+      "slug": "massa-de-grao-de-bico",
+      "name": "Massa de Grão-de-Bico",
+      "unit": "kg",
+      "step": 500,
+      "minimum": 500,
+      "aliases": [
+        "Massa de Grão-de-Bico Cozida"
+      ],
+      "food_ids": [
+        "food_145"
+      ]
+    },
+    {
+      "slug": "melao-amarelo",
+      "name": "Melão Amarelo",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Melão Amarelo"
+      ],
+      "food_ids": [
+        "food_033"
+      ]
+    },
+    {
+      "slug": "melancia",
+      "name": "Melancia",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Melancia"
+      ],
+      "food_ids": [
+        "food_034"
+      ]
+    },
+    {
+      "slug": "mexerica-ponkan",
+      "name": "Mexerica Ponkan",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Mexerica Ponkan"
+      ],
+      "food_ids": [
+        "food_039"
+      ]
+    },
+    {
+      "slug": "milheto-em-graos",
+      "name": "Milheto em Grãos",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Milheto em Grãos Cozido"
+      ],
+      "food_ids": [
+        "food_137"
+      ]
+    },
+    {
+      "slug": "milho-verde-na-espiga",
+      "name": "Milho Verde na Espiga",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Milho Verde na Espiga Cozido"
+      ],
+      "food_ids": [
+        "food_116"
+      ]
+    },
+    {
+      "slug": "mirtilo-blueberry-fresco",
+      "name": "Mirtilo (Blueberry) Fresco",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Mirtilo (Blueberry) Fresco"
+      ],
+      "food_ids": [
+        "food_055"
+      ]
+    },
+    {
+      "slug": "morango-fresco",
+      "name": "Morango Fresco",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Morango Fresco"
+      ],
+      "food_ids": [
+        "food_044"
+      ]
+    },
+    {
+      "slug": "mostarda-em-graos-artesanal-sem-acucar",
+      "name": "Mostarda em Grãos Artesanal (sem açúcar)",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Mostarda em Grãos Artesanal (sem açúcar)"
+      ],
+      "food_ids": [
+        "food_214"
+      ]
+    },
+    {
+      "slug": "nabo-branco",
+      "name": "Nabo Branco",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Nabo Branco Fatiado"
+      ],
+      "food_ids": [
+        "food_114"
+      ]
+    },
+    {
+      "slug": "nozes-chilenas",
+      "name": "Nozes Chilenas",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Nozes Chilenas"
+      ],
+      "food_ids": [
+        "food_021"
+      ]
+    },
+    {
+      "slug": "noz-moscada-ralada-na-hora",
+      "name": "Noz-Moscada Ralada na Hora",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Noz-Moscada Ralada na Hora"
+      ],
+      "food_ids": [
+        "food_196"
+      ]
+    },
+    {
+      "slug": "oregano-seco-puro",
+      "name": "Orégano Seco Puro",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Orégano Seco Puro"
+      ],
+      "food_ids": [
+        "food_085"
+      ]
+    },
+    {
+      "slug": "ovo-caipira",
+      "name": "Ovo Caipira",
+      "unit": "un",
+      "step": 12,
+      "minimum": 12,
+      "aliases": [
+        "Ovo Caipira Cozido",
+        "Ovo Caipira Pochê",
+        "Ovo Caipira Mexido no Azeite"
+      ],
+      "food_ids": [
+        "food_146",
+        "food_181",
+        "food_147"
+      ]
+    },
+    {
+      "slug": "paprica-defumada",
+      "name": "Páprica Defumada",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Páprica Defumada"
+      ],
+      "food_ids": [
+        "food_198"
+      ]
+    },
+    {
+      "slug": "paprica-doce-pura-sem-corante",
+      "name": "Páprica Doce Pura (sem corante)",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Páprica Doce Pura (sem corante)"
+      ],
+      "food_ids": [
+        "food_197"
+      ]
+    },
+    {
+      "slug": "palmito-pupunha-fresco",
+      "name": "Palmito Pupunha Fresco",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Palmito Pupunha Fresco Cozido"
+      ],
+      "food_ids": [
+        "food_112"
+      ]
+    },
+    {
+      "slug": "pasta-de-amendoim-integral-100",
+      "name": "Pasta de Amendoim Integral 100%",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Pasta de Amendoim Integral 100%"
+      ],
+      "food_ids": [
+        "food_024"
+      ]
+    },
+    {
+      "slug": "patinho-bovino-moido-magro",
+      "name": "Patinho Bovino Moído Magro",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Patinho Bovino Moído Magro"
+      ],
+      "food_ids": [
+        "food_152"
+      ]
+    },
+    {
+      "slug": "peito-de-frango",
+      "name": "Peito de Frango",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Peito de Frango Grelhado em Tiras",
+        "Frango Desfiado com Cheiro-Verde"
+      ],
+      "food_ids": [
+        "food_149",
+        "food_151"
+      ]
+    },
+    {
+      "slug": "pepino-japones",
+      "name": "Pepino Japonês",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Pepino Japonês Fatiado"
+      ],
+      "food_ids": [
+        "food_098"
+      ]
+    },
+    {
+      "slug": "pera-williams",
+      "name": "Pera Williams",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Pera Williams"
+      ],
+      "food_ids": [
+        "food_030"
+      ]
+    },
+    {
+      "slug": "pescada-branca",
+      "name": "Pescada Branca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Pescada Branca Grelhada"
+      ],
+      "food_ids": [
+        "food_163"
+      ]
+    },
+    {
+      "slug": "pimentao-amarelo",
+      "name": "Pimentão Amarelo",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Pimentão Amarelo Fatiado"
+      ],
+      "food_ids": [
+        "food_099"
+      ]
+    },
+    {
+      "slug": "pimentao-vermelho",
+      "name": "Pimentão Vermelho",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Pimentão Vermelho"
+      ],
+      "food_ids": [
+        "food_100"
+      ]
+    },
+    {
+      "slug": "pimenta-do-reino-moida-na-hora",
+      "name": "Pimenta-do-Reino Moída na Hora",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Pimenta-do-Reino Moída na Hora"
+      ],
+      "food_ids": [
+        "food_194"
+      ]
+    },
+    {
+      "slug": "pitanga-vermelha",
+      "name": "Pitanga Vermelha",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Pitanga Vermelha"
+      ],
+      "food_ids": [
+        "food_053"
+      ]
+    },
+    {
+      "slug": "polenta-de-milho",
+      "name": "Polenta de Milho",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Polenta de Milho Cozida"
+      ],
+      "food_ids": [
+        "food_142"
+      ]
+    },
+    {
+      "slug": "psyllium-puro-em-po",
+      "name": "Psyllium Puro em Pó",
+      "unit": "kg",
+      "step": 150,
+      "minimum": 150,
+      "aliases": [
+        "Psyllium Puro em Pó"
+      ],
+      "food_ids": [
+        "food_013"
+      ]
+    },
+    {
+      "slug": "queijo-cottage",
+      "name": "Queijo Cottage",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Queijo Cottage"
+      ],
+      "food_ids": [
+        "food_173"
+      ]
+    },
+    {
+      "slug": "queijo-meia-cura-em-dose-controlada",
+      "name": "Queijo Meia Cura em Dose Controlada",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Queijo Meia Cura em Dose Controlada"
+      ],
+      "food_ids": [
+        "food_179"
+      ]
+    },
+    {
+      "slug": "queijo-minas-frescal-light",
+      "name": "Queijo Minas Frescal Light",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Queijo Minas Frescal Light"
+      ],
+      "food_ids": [
+        "food_171"
+      ]
+    },
+    {
+      "slug": "queijo-ricota-fresca",
+      "name": "Queijo Ricota Fresca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Queijo Ricota Fresca"
+      ],
+      "food_ids": [
+        "food_172"
+      ]
+    },
+    {
+      "slug": "quiabo",
+      "name": "Quiabo",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Quiabo Refogado"
+      ],
+      "food_ids": [
+        "food_096"
+      ]
+    },
+    {
+      "slug": "quinoa-em-flocos",
+      "name": "Quinoa em Flocos",
+      "unit": "kg",
+      "step": 250,
+      "minimum": 250,
+      "aliases": [
+        "Quinoa em Flocos"
+      ],
+      "food_ids": [
+        "food_016"
+      ]
+    },
+    {
+      "slug": "quinoa-em-graos",
+      "name": "Quinoa em Grãos",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Quinoa em Grãos Cozida"
+      ],
+      "food_ids": [
+        "food_136"
+      ]
+    },
+    {
+      "slug": "rabanete-fatiado-cru",
+      "name": "Rabanete Fatiado Cru",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Rabanete Fatiado Cru"
+      ],
+      "food_ids": [
+        "food_113"
+      ]
+    },
+    {
+      "slug": "rucula-selvagem",
+      "name": "Rúcula Selvagem",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Rúcula Selvagem"
+      ],
+      "food_ids": [
+        "food_065"
+      ]
+    },
+    {
+      "slug": "repolho-roxo-cru",
+      "name": "Repolho Roxo Cru",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Repolho Roxo Cru Fatiado"
+      ],
+      "food_ids": [
+        "food_072"
+      ]
+    },
+    {
+      "slug": "repolho-verde",
+      "name": "Repolho Verde",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Repolho Verde Refogado"
+      ],
+      "food_ids": [
+        "food_071"
+      ]
+    },
+    {
+      "slug": "sardinha-em-conserva-ao-molho-de-tomate",
+      "name": "Sardinha em Conserva ao Molho de Tomate",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Sardinha em Conserva ao Molho de Tomate"
+      ],
+      "food_ids": [
+        "food_158"
+      ]
+    },
+    {
+      "slug": "sardinha-fresca",
+      "name": "Sardinha Fresca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Sardinha Fresca Grelhada"
+      ],
+      "food_ids": [
+        "food_157"
+      ]
+    },
+    {
+      "slug": "semente-de-chia",
+      "name": "Semente de Chia",
+      "unit": "kg",
+      "step": 150,
+      "minimum": 150,
+      "aliases": [
+        "Semente de Chia"
+      ],
+      "food_ids": [
+        "food_002"
+      ]
+    },
+    {
+      "slug": "sementes-de-abobora-tostadas",
+      "name": "Sementes de Abóbora Tostadas",
+      "unit": "kg",
+      "step": 150,
+      "minimum": 150,
+      "aliases": [
+        "Sementes de Abóbora Tostadas"
+      ],
+      "food_ids": [
+        "food_007"
+      ]
+    },
+    {
+      "slug": "sementes-de-girassol-descascadas",
+      "name": "Sementes de Girassol Descascadas",
+      "unit": "kg",
+      "step": 150,
+      "minimum": 150,
+      "aliases": [
+        "Sementes de Girassol Descascadas"
+      ],
+      "food_ids": [
+        "food_008"
+      ]
+    },
+    {
+      "slug": "sobrecoxa-de-frango-sem-pele",
+      "name": "Sobrecoxa de Frango sem Pele",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Sobrecoxa de Frango sem Pele Assada"
+      ],
+      "food_ids": [
+        "food_150"
+      ]
+    },
+    {
+      "slug": "soja-verde-em-graos-edamame",
+      "name": "Soja Verde em Grãos (Edamame)",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Soja Verde em Grãos (Edamame)"
+      ],
+      "food_ids": [
+        "food_130"
+      ]
+    },
+    {
+      "slug": "limao-siciliano",
+      "name": "Limão Siciliano",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Suco de Limão Siciliano Fresco"
+      ],
+      "food_ids": [
+        "food_210"
+      ]
+    },
+    {
+      "slug": "limao-tahiti",
+      "name": "Limão Tahiti",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Suco de Limão Tahiti Fresco"
+      ],
+      "food_ids": [
+        "food_209"
+      ]
+    },
+    {
+      "slug": "taioba",
+      "name": "Taioba",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Taioba Refogada"
+      ],
+      "food_ids": [
+        "food_076"
+      ]
+    },
+    {
+      "slug": "tilapia-saint-peter",
+      "name": "Tilápia / Saint Peter",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Tilápia / Saint Peter Grelhada"
+      ],
+      "food_ids": [
+        "food_162"
+      ]
+    },
+    {
+      "slug": "tofu-firme-organico",
+      "name": "Tofu Firme Orgânico",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Tofu Firme Orgânico Grelhado"
+      ],
+      "food_ids": [
+        "food_177"
+      ]
+    },
+    {
+      "slug": "tomate-cereja-doce",
+      "name": "Tomate Cereja Doce",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Tomate Cereja Doce"
+      ],
+      "food_ids": [
+        "food_091"
+      ]
+    },
+    {
+      "slug": "tomate-italiano-com-casca",
+      "name": "Tomate Italiano com Casca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Tomate Italiano com Casca"
+      ],
+      "food_ids": [
+        "food_090"
+      ]
+    },
+    {
+      "slug": "tomilho-seco-fresco",
+      "name": "Tomilho Seco / Fresco",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Tomilho Seco / Fresco"
+      ],
+      "food_ids": [
+        "food_084"
+      ]
+    },
+    {
+      "slug": "trigo-em-grao-integral",
+      "name": "Trigo em Grão Integral",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Trigo em Grão Integral Cozido"
+      ],
+      "food_ids": [
+        "food_139"
+      ]
+    },
+    {
+      "slug": "uva-crimson-sem-semente",
+      "name": "Uva Crimson sem Semente",
+      "unit": "kg",
+      "step": 150,
+      "minimum": 150,
+      "aliases": [
+        "Uva Crimson sem Semente"
+      ],
+      "food_ids": [
+        "food_046"
+      ]
+    },
+    {
+      "slug": "uva-roxa-niagara",
+      "name": "Uva Roxa Niágara",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Uva Roxa Niágara"
+      ],
+      "food_ids": [
+        "food_045"
+      ]
+    },
+    {
+      "slug": "vagem-manteiga",
+      "name": "Vagem Manteiga",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Vagem Manteiga Cozida"
+      ],
+      "food_ids": [
+        "food_095"
+      ]
+    },
+    {
+      "slug": "vinagre-de-maca-organico-nao-filtrado",
+      "name": "Vinagre de Maçã Orgânico Não Filtrado",
+      "unit": "L",
+      "step": 500,
+      "minimum": 500,
+      "aliases": [
+        "Vinagre de Maçã Orgânico Não Filtrado"
+      ],
+      "food_ids": [
+        "food_208"
+      ]
+    },
+    {
+      "slug": "cacao-em-posta",
+      "name": "Cação em Posta",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Cação em Posta Cozido no Molho"
+      ],
+      "food_ids": [
+        "food_165"
+      ]
+    },
+    {
+      "slug": "camarao",
+      "name": "Camarão",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Camarão Grelhado com Alho e Azeite"
+      ],
+      "food_ids": [
+        "food_167"
+      ]
+    },
+    {
+      "slug": "fava",
+      "name": "Fava",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Fava Cozida com Ervas"
+      ],
+      "food_ids": [
+        "food_131"
+      ]
+    },
+    {
+      "slug": "lula",
+      "name": "Lula",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Lula Cozida em Anéis com Ervas"
+      ],
+      "food_ids": [
+        "food_183"
+      ]
+    },
+    {
+      "slug": "musculo-bovino-moido",
+      "name": "Músculo Bovino Moído",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Músculo Bovino Moído com Legumes"
+      ],
+      "food_ids": [
+        "food_180"
+      ]
+    },
+    {
+      "slug": "merluza",
+      "name": "Merluza",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Merluza Assada com Tomate e Ervas"
+      ],
+      "food_ids": [
+        "food_164"
+      ]
+    },
+    {
+      "slug": "claras-de-ovo",
+      "name": "Claras de Ovo",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Omelete de Claras com Ervas"
+      ],
+      "food_ids": [
+        "food_148"
+      ]
+    },
+    {
+      "slug": "salmao",
+      "name": "Salmão",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Salmão Grelhado com Limão"
+      ],
+      "food_ids": [
+        "food_161"
+      ]
+    },
+    {
+      "slug": "paleta-bovina",
+      "name": "Paleta Bovina",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 500,
+      "aliases": [
+        "Carne de Panela Desfiada sem Gordura"
+      ],
+      "food_ids": [
+        "food_184"
+      ]
+    },
+    {
+      "slug": "cha-gengibre-limao-saches",
+      "name": "Chá de Gengibre e Limão em Sachês",
+      "unit": "kg",
+      "step": 50,
+      "minimum": 50,
+      "aliases": [
+        "Chá de Gengibre com Casca de Limão"
+      ],
+      "food_ids": [
+        "food_206"
+      ]
+    },
+    {
+      "slug": "melissa-fresca",
+      "name": "Melissa Fresca",
+      "unit": "kg",
+      "step": 1,
+      "minimum": 50,
+      "aliases": [
+        "Chá de Melissa Fresca com Casca de Maçã"
+      ],
+      "food_ids": [
+        "food_217"
+      ]
+    }
+  ],
+  "foods": [
+    {
+      "food_id": "food_187",
+      "food_name": "Óleo de Abacate Extravirgem",
+      "preparation": "produto",
+      "ingredient_slug": "oleo-de-abacate-extravirgem",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "oleo-de-abacate-extravirgem"
+      ]
+    },
+    {
+      "food_id": "food_060",
+      "food_name": "Água de Coco Natural",
+      "preparation": "produto",
+      "ingredient_slug": "agua-de-coco-natural",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "agua-de-coco-natural"
+      ]
+    },
+    {
+      "food_id": "food_220",
+      "food_name": "Água Saborizada com Pepino, Hortelã e Limão",
+      "preparation": "infusão",
+      "ingredient_slug": null,
+      "shopping_enabled": false,
+      "preparation_components": [
+        "Pepino Japonês",
+        "Hortelã Fresca",
+        "Limão"
+      ],
+      "shopping_components": [
+        "pepino-japones",
+        "hortela-fresca",
+        "limao-tahiti"
+      ]
+    },
+    {
+      "food_id": "food_104",
+      "food_name": "Abóbora Cabotiá Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "abobora-cabotia",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "abobora-cabotia"
+      ]
+    },
+    {
+      "food_id": "food_105",
+      "food_name": "Abóbora Menina Brasileira",
+      "preparation": "produto",
+      "ingredient_slug": "abobora-menina-brasileira",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "abobora-menina-brasileira"
+      ]
+    },
+    {
+      "food_id": "food_043",
+      "food_name": "Abacate Hass (Avocado)",
+      "preparation": "produto",
+      "ingredient_slug": "abacate-hass-avocado",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "abacate-hass-avocado"
+      ]
+    },
+    {
+      "food_id": "food_042",
+      "food_name": "Abacate Manteiga",
+      "preparation": "produto",
+      "ingredient_slug": "abacate-manteiga",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "abacate-manteiga"
+      ]
+    },
+    {
+      "food_id": "food_035",
+      "food_name": "Abacaxi Pérola",
+      "preparation": "produto",
+      "ingredient_slug": "abacaxi-perola",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "abacaxi-perola"
+      ]
+    },
+    {
+      "food_id": "food_092",
+      "food_name": "Abobrinha Italiana Grelhada",
+      "preparation": "grelhado",
+      "ingredient_slug": "abobrinha-italiana",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "abobrinha-italiana"
+      ]
+    },
+    {
+      "food_id": "food_070",
+      "food_name": "Acelga Refogada",
+      "preparation": "refogado",
+      "ingredient_slug": "acelga",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "acelga"
+      ]
+    },
+    {
+      "food_id": "food_051",
+      "food_name": "Acerola Fresca",
+      "preparation": "produto",
+      "ingredient_slug": "acerola-fresca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "acerola-fresca"
+      ]
+    },
+    {
+      "food_id": "food_066",
+      "food_name": "Agrião d'Água",
+      "preparation": "produto",
+      "ingredient_slug": "agriao-d-agua",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "agriao-d-agua"
+      ]
+    },
+    {
+      "food_id": "food_118",
+      "food_name": "Alcachofra Cozida (Coração)",
+      "preparation": "cozido",
+      "ingredient_slug": "alcachofra-coracao",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "alcachofra-coracao"
+      ]
+    },
+    {
+      "food_id": "food_154",
+      "food_name": "Alcatra Bovina Magra Grelhada",
+      "preparation": "grelhado",
+      "ingredient_slug": "alcatra-bovina-magra",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "alcatra-bovina-magra"
+      ]
+    },
+    {
+      "food_id": "food_083",
+      "food_name": "Alecrim Fresco",
+      "preparation": "produto",
+      "ingredient_slug": "alecrim-fresco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "alecrim-fresco"
+      ]
+    },
+    {
+      "food_id": "food_062",
+      "food_name": "Alface Crespa",
+      "preparation": "produto",
+      "ingredient_slug": "alface-crespa",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "alface-crespa"
+      ]
+    },
+    {
+      "food_id": "food_063",
+      "food_name": "Alface Lisa",
+      "preparation": "produto",
+      "ingredient_slug": "alface-lisa",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "alface-lisa"
+      ]
+    },
+    {
+      "food_id": "food_064",
+      "food_name": "Alface Roxa",
+      "preparation": "produto",
+      "ingredient_slug": "alface-roxa",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "alface-roxa"
+      ]
+    },
+    {
+      "food_id": "food_103",
+      "food_name": "Alho Fresco Picado",
+      "preparation": "cru",
+      "ingredient_slug": "alho",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "alho"
+      ]
+    },
+    {
+      "food_id": "food_080",
+      "food_name": "Alho-Poró Fatiado Refogado",
+      "preparation": "refogado",
+      "ingredient_slug": "alho-poro",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "alho-poro"
+      ]
+    },
+    {
+      "food_id": "food_069",
+      "food_name": "Almeirão Refogado",
+      "preparation": "refogado",
+      "ingredient_slug": "almeirao",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "almeirao"
+      ]
+    },
+    {
+      "food_id": "food_022",
+      "food_name": "Amêndoas Cruas sem Sal",
+      "preparation": "produto",
+      "ingredient_slug": "amendoas-cruas-sem-sal",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "amendoas-cruas-sem-sal"
+      ]
+    },
+    {
+      "food_id": "food_015",
+      "food_name": "Amaranto em Flocos",
+      "preparation": "produto",
+      "ingredient_slug": "amaranto-em-flocos",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "amaranto-em-flocos"
+      ]
+    },
+    {
+      "food_id": "food_138",
+      "food_name": "Amaranto em Grãos Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "amaranto-em-graos",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "amaranto-em-graos"
+      ]
+    },
+    {
+      "food_id": "food_049",
+      "food_name": "Ameixa Fresca Roxa",
+      "preparation": "produto",
+      "ingredient_slug": "ameixa-fresca-roxa",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "ameixa-fresca-roxa"
+      ]
+    },
+    {
+      "food_id": "food_023",
+      "food_name": "Amendoim Torrado sem Sal",
+      "preparation": "produto",
+      "ingredient_slug": "amendoim-torrado-sem-sal",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "amendoim-torrado-sem-sal"
+      ]
+    },
+    {
+      "food_id": "food_054",
+      "food_name": "Amora Preta Silvestre",
+      "preparation": "produto",
+      "ingredient_slug": "amora-preta-silvestre",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "amora-preta-silvestre"
+      ]
+    },
+    {
+      "food_id": "food_132",
+      "food_name": "Arroz Integral Agulhinha",
+      "preparation": "produto",
+      "ingredient_slug": "arroz-integral-agulhinha",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "arroz-integral-agulhinha"
+      ]
+    },
+    {
+      "food_id": "food_135",
+      "food_name": "Arroz Negro Integral",
+      "preparation": "produto",
+      "ingredient_slug": "arroz-negro-integral",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "arroz-negro-integral"
+      ]
+    },
+    {
+      "food_id": "food_133",
+      "food_name": "Arroz Parboilizado Integral",
+      "preparation": "produto",
+      "ingredient_slug": "arroz-parboilizado-integral",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "arroz-parboilizado-integral"
+      ]
+    },
+    {
+      "food_id": "food_134",
+      "food_name": "Arroz Vermelho Integral",
+      "preparation": "produto",
+      "ingredient_slug": "arroz-vermelho-integral",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "arroz-vermelho-integral"
+      ]
+    },
+    {
+      "food_id": "food_117",
+      "food_name": "Aspargos Frescos Grelhados",
+      "preparation": "grelhado",
+      "ingredient_slug": "aspargos-frescos",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "aspargos-frescos"
+      ]
+    },
+    {
+      "food_id": "food_159",
+      "food_name": "Atum em Conserva ao Natural (Água)",
+      "preparation": "produto",
+      "ingredient_slug": "atum-em-conserva-ao-natural-agua",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "atum-em-conserva-ao-natural-agua"
+      ]
+    },
+    {
+      "food_id": "food_160",
+      "food_name": "Atum Fresco Grelhado",
+      "preparation": "grelhado",
+      "ingredient_slug": "atum-fresco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "atum-fresco"
+      ]
+    },
+    {
+      "food_id": "food_004",
+      "food_name": "Aveia em Flocos Finos",
+      "preparation": "produto",
+      "ingredient_slug": "aveia-em-flocos-finos",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "aveia-em-flocos-finos"
+      ]
+    },
+    {
+      "food_id": "food_005",
+      "food_name": "Aveia em Flocos Grossos",
+      "preparation": "produto",
+      "ingredient_slug": "aveia-em-flocos-grossos",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "aveia-em-flocos-grossos"
+      ]
+    },
+    {
+      "food_id": "food_186",
+      "food_name": "Azeite de Oliva Extravirgem",
+      "preparation": "produto",
+      "ingredient_slug": "azeite-de-oliva-extravirgem",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "azeite-de-oliva-extravirgem"
+      ]
+    },
+    {
+      "food_id": "food_189",
+      "food_name": "Azeitona Preta Natural",
+      "preparation": "produto",
+      "ingredient_slug": "azeitona-preta-natural",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "azeitona-preta-natural"
+      ]
+    },
+    {
+      "food_id": "food_188",
+      "food_name": "Azeitona Verde em Conserva sem Caroço",
+      "preparation": "produto",
+      "ingredient_slug": "azeitona-verde-em-conserva-sem-caroco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "azeitona-verde-em-conserva-sem-caroco"
+      ]
+    },
+    {
+      "food_id": "food_166",
+      "food_name": "Bacalhau Dessalgado Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "bacalhau-dessalgado",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "bacalhau-dessalgado"
+      ]
+    },
+    {
+      "food_id": "food_027",
+      "food_name": "Banana-Maçã",
+      "preparation": "produto",
+      "ingredient_slug": "banana-maca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "banana-maca"
+      ]
+    },
+    {
+      "food_id": "food_026",
+      "food_name": "Banana-Prata",
+      "preparation": "produto",
+      "ingredient_slug": "banana-prata",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "banana-prata"
+      ]
+    },
+    {
+      "food_id": "food_107",
+      "food_name": "Batata-Doce Branca Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "batata-doce-branca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "batata-doce-branca"
+      ]
+    },
+    {
+      "food_id": "food_106",
+      "food_name": "Batata-Doce Roxa Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "batata-doce-roxa",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "batata-doce-roxa"
+      ]
+    },
+    {
+      "food_id": "food_175",
+      "food_name": "Bebida Vegetal de Amêndoas sem Açúcar",
+      "preparation": "produto",
+      "ingredient_slug": "bebida-vegetal-de-amendoas-sem-acucar",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "bebida-vegetal-de-amendoas-sem-acucar"
+      ]
+    },
+    {
+      "food_id": "food_176",
+      "food_name": "Bebida Vegetal de Aveia sem Açúcar",
+      "preparation": "produto",
+      "ingredient_slug": "bebida-vegetal-de-aveia-sem-acucar",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "bebida-vegetal-de-aveia-sem-acucar"
+      ]
+    },
+    {
+      "food_id": "food_093",
+      "food_name": "Berinjela Cozida em Cubos",
+      "preparation": "cozido",
+      "ingredient_slug": "berinjela",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "berinjela"
+      ]
+    },
+    {
+      "food_id": "food_077",
+      "food_name": "Bertalha Refogada",
+      "preparation": "refogado",
+      "ingredient_slug": "bertalha",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "bertalha"
+      ]
+    },
+    {
+      "food_id": "food_087",
+      "food_name": "Beterraba Cozida em Cubos",
+      "preparation": "cozido",
+      "ingredient_slug": "beterraba",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "beterraba"
+      ]
+    },
+    {
+      "food_id": "food_086",
+      "food_name": "Beterraba Crua Ralada",
+      "preparation": "cru",
+      "ingredient_slug": "beterraba",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "beterraba"
+      ]
+    },
+    {
+      "food_id": "food_073",
+      "food_name": "Brócolis Ninja no Vapor",
+      "preparation": "cozido no vapor",
+      "ingredient_slug": "brocolis-ninja",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "brocolis-ninja"
+      ]
+    },
+    {
+      "food_id": "food_074",
+      "food_name": "Brócolis Ramoso Refogado",
+      "preparation": "refogado",
+      "ingredient_slug": "brocolis-ramoso",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "brocolis-ramoso"
+      ]
+    },
+    {
+      "food_id": "food_079",
+      "food_name": "Broto de Alfafa Fresco",
+      "preparation": "produto",
+      "ingredient_slug": "broto-de-alfafa-fresco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "broto-de-alfafa-fresco"
+      ]
+    },
+    {
+      "food_id": "food_120",
+      "food_name": "Broto de Bambu Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "broto-de-bambu",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "broto-de-bambu"
+      ]
+    },
+    {
+      "food_id": "food_078",
+      "food_name": "Broto de Feijão (Moyashi)",
+      "preparation": "produto",
+      "ingredient_slug": "broto-de-feijao-moyashi",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "broto-de-feijao-moyashi"
+      ]
+    },
+    {
+      "food_id": "food_165",
+      "food_name": "Cação em Posta Cozido no Molho",
+      "preparation": "cozido",
+      "ingredient_slug": "cacao-em-posta",
+      "shopping_enabled": true,
+      "preparation_components": [
+        "Cação em Posta",
+        "Ingredientes do molho a definir"
+      ],
+      "shopping_components": [
+        "cacao-em-posta"
+      ]
+    },
+    {
+      "food_id": "food_211",
+      "food_name": "Cacau Puro em Pó 100% (sem açúcar)",
+      "preparation": "produto",
+      "ingredient_slug": "cacau-puro-em-po-100-sem-acucar",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cacau-puro-em-po-100-sem-acucar"
+      ]
+    },
+    {
+      "food_id": "food_050",
+      "food_name": "Caju Fresco",
+      "preparation": "produto",
+      "ingredient_slug": "caju-fresco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "caju-fresco"
+      ]
+    },
+    {
+      "food_id": "food_167",
+      "food_name": "Camarão Grelhado com Alho e Azeite",
+      "preparation": "grelhado",
+      "ingredient_slug": "camarao",
+      "shopping_enabled": true,
+      "preparation_components": [
+        "Camarão",
+        "Alho",
+        "Azeite de Oliva Extravirgem"
+      ],
+      "shopping_components": [
+        "camarao"
+      ]
+    },
+    {
+      "food_id": "food_190",
+      "food_name": "Canela em Pó do Ceilão",
+      "preparation": "produto",
+      "ingredient_slug": "canela-em-po-do-ceilao",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "canela-em-po-do-ceilao"
+      ]
+    },
+    {
+      "food_id": "food_191",
+      "food_name": "Canela em Pau para Infusão",
+      "preparation": "produto",
+      "ingredient_slug": "canela-em-pau-para-infusao",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "canela-em-pau-para-infusao"
+      ]
+    },
+    {
+      "food_id": "food_192",
+      "food_name": "Cúrcuma / Açafrão-da-Terra Puro",
+      "preparation": "produto",
+      "ingredient_slug": "curcuma-acafrao-da-terra-puro",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "curcuma-acafrao-da-terra-puro"
+      ]
+    },
+    {
+      "food_id": "food_058",
+      "food_name": "Caqui Fuyu Firme",
+      "preparation": "produto",
+      "ingredient_slug": "caqui-fuyu-firme",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "caqui-fuyu-firme"
+      ]
+    },
+    {
+      "food_id": "food_109",
+      "food_name": "Cará Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "cara",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cara"
+      ]
+    },
+    {
+      "food_id": "food_057",
+      "food_name": "Carambola Doce",
+      "preparation": "produto",
+      "ingredient_slug": "carambola-doce",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "carambola-doce"
+      ]
+    },
+    {
+      "food_id": "food_218",
+      "food_name": "Cardamomo em Grãos Triturado",
+      "preparation": "produto",
+      "ingredient_slug": "cardamomo-em-graos-triturado",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cardamomo-em-graos-triturado"
+      ]
+    },
+    {
+      "food_id": "food_184",
+      "food_name": "Carne de Panela Desfiada sem Gordura",
+      "preparation": "desfiado",
+      "ingredient_slug": "paleta-bovina",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "paleta-bovina"
+      ]
+    },
+    {
+      "food_id": "food_020",
+      "food_name": "Castanha de Caju sem Sal",
+      "preparation": "produto",
+      "ingredient_slug": "castanha-de-caju-sem-sal",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "castanha-de-caju-sem-sal"
+      ]
+    },
+    {
+      "food_id": "food_019",
+      "food_name": "Castanha-do-Pará",
+      "preparation": "produto",
+      "ingredient_slug": "castanha-do-para",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "castanha-do-para"
+      ]
+    },
+    {
+      "food_id": "food_101",
+      "food_name": "Cebola Branca Picada",
+      "preparation": "cru",
+      "ingredient_slug": "cebola-branca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cebola-branca"
+      ]
+    },
+    {
+      "food_id": "food_102",
+      "food_name": "Cebola Roxa Crua",
+      "preparation": "cru",
+      "ingredient_slug": "cebola-roxa",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cebola-roxa"
+      ]
+    },
+    {
+      "food_id": "food_089",
+      "food_name": "Cenoura Cozida no Vapor",
+      "preparation": "cozido no vapor",
+      "ingredient_slug": "cenoura",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cenoura"
+      ]
+    },
+    {
+      "food_id": "food_088",
+      "food_name": "Cenoura Crua Ralada",
+      "preparation": "cru",
+      "ingredient_slug": "cenoura",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cenoura"
+      ]
+    },
+    {
+      "food_id": "food_140",
+      "food_name": "Cevadinha em Grãos Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "cevadinha-em-graos",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cevadinha-em-graos"
+      ]
+    },
+    {
+      "food_id": "food_203",
+      "food_name": "Chá de Alecrim Fresco",
+      "preparation": "produto",
+      "ingredient_slug": "cha-de-alecrim-fresco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cha-de-alecrim-fresco"
+      ]
+    },
+    {
+      "food_id": "food_200",
+      "food_name": "Chá de Camomila Flor",
+      "preparation": "produto",
+      "ingredient_slug": "cha-de-camomila-flor",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cha-de-camomila-flor"
+      ]
+    },
+    {
+      "food_id": "food_207",
+      "food_name": "Chá de Cavalinha",
+      "preparation": "produto",
+      "ingredient_slug": "cha-de-cavalinha",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cha-de-cavalinha"
+      ]
+    },
+    {
+      "food_id": "food_219",
+      "food_name": "Chá de Dente-de-Leão Raiz",
+      "preparation": "produto",
+      "ingredient_slug": "cha-de-dente-de-leao-raiz",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cha-de-dente-de-leao-raiz"
+      ]
+    },
+    {
+      "food_id": "food_201",
+      "food_name": "Chá de Erva-Cidreira / Melissa",
+      "preparation": "produto",
+      "ingredient_slug": "cha-de-erva-cidreira-melissa",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cha-de-erva-cidreira-melissa"
+      ]
+    },
+    {
+      "food_id": "food_205",
+      "food_name": "Chá de Erva-Doce / Funcho",
+      "preparation": "produto",
+      "ingredient_slug": "cha-de-erva-doce-funcho",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cha-de-erva-doce-funcho"
+      ]
+    },
+    {
+      "food_id": "food_206",
+      "food_name": "Chá de Gengibre com Casca de Limão",
+      "preparation": "infusão",
+      "ingredient_slug": "cha-gengibre-limao-saches",
+      "shopping_enabled": true,
+      "preparation_components": [
+        "Gengibre",
+        "Limão"
+      ],
+      "shopping_components": [
+        "cha-gengibre-limao-saches"
+      ]
+    },
+    {
+      "food_id": "food_204",
+      "food_name": "Chá de Hibisco Flor (Cálice)",
+      "preparation": "produto",
+      "ingredient_slug": "cha-de-hibisco-flor-calice",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cha-de-hibisco-flor-calice"
+      ]
+    },
+    {
+      "food_id": "food_202",
+      "food_name": "Chá de Hortelã Fresca",
+      "preparation": "produto",
+      "ingredient_slug": "cha-de-hortela-fresca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cha-de-hortela-fresca"
+      ]
+    },
+    {
+      "food_id": "food_217",
+      "food_name": "Chá de Melissa Fresca com Casca de Maçã",
+      "preparation": "infusão",
+      "ingredient_slug": "melissa-fresca",
+      "shopping_enabled": false,
+      "preparation_components": [
+        "Melissa Fresca",
+        "Maçã"
+      ],
+      "shopping_components": [
+        "melissa-fresca",
+        "maca-gala-com-casca"
+      ]
+    },
+    {
+      "food_id": "food_199",
+      "food_name": "Chá Verde em Folhas (Camellia sinensis)",
+      "preparation": "produto",
+      "ingredient_slug": "cha-verde-em-folhas-camellia-sinensis",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cha-verde-em-folhas-camellia-sinensis"
+      ]
+    },
+    {
+      "food_id": "food_213",
+      "food_name": "Chocolate Amargo 70% Cacau",
+      "preparation": "produto",
+      "ingredient_slug": "chocolate-amargo-70-cacau",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "chocolate-amargo-70-cacau"
+      ]
+    },
+    {
+      "food_id": "food_212",
+      "food_name": "Chocolate Amargo 85% Cacau",
+      "preparation": "produto",
+      "ingredient_slug": "chocolate-amargo-85-cacau",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "chocolate-amargo-85-cacau"
+      ]
+    },
+    {
+      "food_id": "food_094",
+      "food_name": "Chuchu Cozido no Vapor",
+      "preparation": "cozido no vapor",
+      "ingredient_slug": "chuchu",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "chuchu"
+      ]
+    },
+    {
+      "food_id": "food_170",
+      "food_name": "Coalhada Fresca sem Açúcar",
+      "preparation": "produto",
+      "ingredient_slug": "coalhada-fresca-sem-acucar",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "coalhada-fresca-sem-acucar"
+      ]
+    },
+    {
+      "food_id": "food_119",
+      "food_name": "Couve de Bruxelas no Vapor",
+      "preparation": "cozido no vapor",
+      "ingredient_slug": "couve-de-bruxelas",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "couve-de-bruxelas"
+      ]
+    },
+    {
+      "food_id": "food_075",
+      "food_name": "Couve-Flor no Vapor",
+      "preparation": "cozido no vapor",
+      "ingredient_slug": "couve-flor",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "couve-flor"
+      ]
+    },
+    {
+      "food_id": "food_195",
+      "food_name": "Cravo-da-Índia em Grão",
+      "preparation": "produto",
+      "ingredient_slug": "cravo-da-india-em-grao",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cravo-da-india-em-grao"
+      ]
+    },
+    {
+      "food_id": "food_141",
+      "food_name": "Cuscuz de Milho Tradicional",
+      "preparation": "produto",
+      "ingredient_slug": "cuscuz-de-milho-tradicional",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "cuscuz-de-milho-tradicional"
+      ]
+    },
+    {
+      "food_id": "food_216",
+      "food_name": "Erva-Doce em Sementes (Funcho Seco)",
+      "preparation": "produto",
+      "ingredient_slug": "erva-doce-em-sementes-funcho-seco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "erva-doce-em-sementes-funcho-seco"
+      ]
+    },
+    {
+      "food_id": "food_115",
+      "food_name": "Ervilha Fresca em Vagem (Torta)",
+      "preparation": "produto",
+      "ingredient_slug": "ervilha-fresca-em-vagem-torta",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "ervilha-fresca-em-vagem-torta"
+      ]
+    },
+    {
+      "food_id": "food_129",
+      "food_name": "Ervilha Seca Partida Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "ervilha-seca-partida",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "ervilha-seca-partida"
+      ]
+    },
+    {
+      "food_id": "food_068",
+      "food_name": "Escarola / Chicória Refogada",
+      "preparation": "refogado",
+      "ingredient_slug": "escarola-chicoria",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "escarola-chicoria"
+      ]
+    },
+    {
+      "food_id": "food_067",
+      "food_name": "Espinafre Refogado",
+      "preparation": "refogado",
+      "ingredient_slug": "espinafre",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "espinafre"
+      ]
+    },
+    {
+      "food_id": "food_001",
+      "food_name": "Farelo de Aveia",
+      "preparation": "produto",
+      "ingredient_slug": "farelo-de-aveia",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "farelo-de-aveia"
+      ]
+    },
+    {
+      "food_id": "food_018",
+      "food_name": "Farelo de Trigo (Fibra de Trigo)",
+      "preparation": "produto",
+      "ingredient_slug": "farelo-de-trigo-fibra-de-trigo",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "farelo-de-trigo-fibra-de-trigo"
+      ]
+    },
+    {
+      "food_id": "food_011",
+      "food_name": "Farinha de Banana Verde",
+      "preparation": "produto",
+      "ingredient_slug": "farinha-de-banana-verde",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "farinha-de-banana-verde"
+      ]
+    },
+    {
+      "food_id": "food_012",
+      "food_name": "Farinha de Maracujá",
+      "preparation": "produto",
+      "ingredient_slug": "farinha-de-maracuja",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "farinha-de-maracuja"
+      ]
+    },
+    {
+      "food_id": "food_131",
+      "food_name": "Fava Cozida com Ervas",
+      "preparation": "cozido",
+      "ingredient_slug": "fava",
+      "shopping_enabled": true,
+      "preparation_components": [
+        "Fava",
+        "Ervas a definir"
+      ],
+      "shopping_components": [
+        "fava"
+      ]
+    },
+    {
+      "food_id": "food_124",
+      "food_name": "Feijão Branco Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "feijao-branco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "feijao-branco"
+      ]
+    },
+    {
+      "food_id": "food_121",
+      "food_name": "Feijão Carioca Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "feijao-carioca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "feijao-carioca"
+      ]
+    },
+    {
+      "food_id": "food_123",
+      "food_name": "Feijão Fradinho Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "feijao-fradinho",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "feijao-fradinho"
+      ]
+    },
+    {
+      "food_id": "food_122",
+      "food_name": "Feijão Preto Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "feijao-preto",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "feijao-preto"
+      ]
+    },
+    {
+      "food_id": "food_125",
+      "food_name": "Feijão Vermelho Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "feijao-vermelho",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "feijao-vermelho"
+      ]
+    },
+    {
+      "food_id": "food_056",
+      "food_name": "Figo Roxo Fresco",
+      "preparation": "produto",
+      "ingredient_slug": "figo-roxo-fresco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "figo-roxo-fresco"
+      ]
+    },
+    {
+      "food_id": "food_182",
+      "food_name": "Filé de Badejo Grelhado",
+      "preparation": "grelhado",
+      "ingredient_slug": "file-de-badejo",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "file-de-badejo"
+      ]
+    },
+    {
+      "food_id": "food_153",
+      "food_name": "Filé Mignon Bovino Grelhado",
+      "preparation": "grelhado",
+      "ingredient_slug": "file-mignon-bovino",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "file-mignon-bovino"
+      ]
+    },
+    {
+      "food_id": "food_061",
+      "food_name": "Folhas de Couve Manteiga",
+      "preparation": "produto",
+      "ingredient_slug": "folhas-de-couve-manteiga",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "folhas-de-couve-manteiga"
+      ]
+    },
+    {
+      "food_id": "food_151",
+      "food_name": "Frango Desfiado com Cheiro-Verde",
+      "preparation": "desfiado",
+      "ingredient_slug": "peito-de-frango",
+      "shopping_enabled": true,
+      "preparation_components": [
+        "Peito de Frango",
+        "Cheiro-Verde"
+      ],
+      "shopping_components": [
+        "peito-de-frango"
+      ]
+    },
+    {
+      "food_id": "food_014",
+      "food_name": "Gérmen de Trigo Tostado",
+      "preparation": "produto",
+      "ingredient_slug": "germen-de-trigo-tostado",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "germen-de-trigo-tostado"
+      ]
+    },
+    {
+      "food_id": "food_193",
+      "food_name": "Gengibre Fresco Ralado",
+      "preparation": "cru",
+      "ingredient_slug": "gengibre",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "gengibre"
+      ]
+    },
+    {
+      "food_id": "food_009",
+      "food_name": "Gergelim Branco Integral",
+      "preparation": "produto",
+      "ingredient_slug": "gergelim-branco-integral",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "gergelim-branco-integral"
+      ]
+    },
+    {
+      "food_id": "food_010",
+      "food_name": "Gergelim Preto",
+      "preparation": "produto",
+      "ingredient_slug": "gergelim-preto",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "gergelim-preto"
+      ]
+    },
+    {
+      "food_id": "food_041",
+      "food_name": "Goiaba Branca com Casca",
+      "preparation": "produto",
+      "ingredient_slug": "goiaba-branca-com-casca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "goiaba-branca-com-casca"
+      ]
+    },
+    {
+      "food_id": "food_040",
+      "food_name": "Goiaba Vermelha com Casca",
+      "preparation": "produto",
+      "ingredient_slug": "goiaba-vermelha-com-casca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "goiaba-vermelha-com-casca"
+      ]
+    },
+    {
+      "food_id": "food_128",
+      "food_name": "Grão-de-Bico Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "grao-de-bico",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "grao-de-bico"
+      ]
+    },
+    {
+      "food_id": "food_017",
+      "food_name": "Granola Artesanal sem Açúcar",
+      "preparation": "produto",
+      "ingredient_slug": "granola-artesanal-sem-acucar",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "granola-artesanal-sem-acucar"
+      ]
+    },
+    {
+      "food_id": "food_082",
+      "food_name": "Hortelã Fresca",
+      "preparation": "produto",
+      "ingredient_slug": "hortela-fresca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "hortela-fresca"
+      ]
+    },
+    {
+      "food_id": "food_108",
+      "food_name": "Inhame Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "inhame",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "inhame"
+      ]
+    },
+    {
+      "food_id": "food_169",
+      "food_name": "Iogurte Natural Desnatado",
+      "preparation": "produto",
+      "ingredient_slug": "iogurte-natural-desnatado",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "iogurte-natural-desnatado"
+      ]
+    },
+    {
+      "food_id": "food_168",
+      "food_name": "Iogurte Natural Integral (2 Ingredientes)",
+      "preparation": "produto",
+      "ingredient_slug": "iogurte-natural-integral-2-ingredientes",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "iogurte-natural-integral-2-ingredientes"
+      ]
+    },
+    {
+      "food_id": "food_185",
+      "food_name": "Iogurte Tipo Grego Zero Gordura sem Açúcar",
+      "preparation": "produto",
+      "ingredient_slug": "iogurte-tipo-grego-zero-gordura-sem-acucar",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "iogurte-tipo-grego-zero-gordura-sem-acucar"
+      ]
+    },
+    {
+      "food_id": "food_052",
+      "food_name": "Jabuticaba Fresca",
+      "preparation": "produto",
+      "ingredient_slug": "jabuticaba-fresca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "jabuticaba-fresca"
+      ]
+    },
+    {
+      "food_id": "food_097",
+      "food_name": "Jiló Cozido em Fatias",
+      "preparation": "cozido",
+      "ingredient_slug": "jilo",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "jilo"
+      ]
+    },
+    {
+      "food_id": "food_178",
+      "food_name": "Kefir de Leite Artesanal",
+      "preparation": "produto",
+      "ingredient_slug": "kefir-de-leite-artesanal",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "kefir-de-leite-artesanal"
+      ]
+    },
+    {
+      "food_id": "food_048",
+      "food_name": "Kiwi Verde",
+      "preparation": "produto",
+      "ingredient_slug": "kiwi-verde",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "kiwi-verde"
+      ]
+    },
+    {
+      "food_id": "food_038",
+      "food_name": "Laranja Lima",
+      "preparation": "produto",
+      "ingredient_slug": "laranja-lima",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "laranja-lima"
+      ]
+    },
+    {
+      "food_id": "food_037",
+      "food_name": "Laranja Pêra com Bagaço",
+      "preparation": "produto",
+      "ingredient_slug": "laranja-pera-com-bagaco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "laranja-pera-com-bagaco"
+      ]
+    },
+    {
+      "food_id": "food_174",
+      "food_name": "Leite Desnatado Pasteurizado",
+      "preparation": "produto",
+      "ingredient_slug": "leite-desnatado-pasteurizado",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "leite-desnatado-pasteurizado"
+      ]
+    },
+    {
+      "food_id": "food_126",
+      "food_name": "Lentilha Marrom Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "lentilha-marrom",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "lentilha-marrom"
+      ]
+    },
+    {
+      "food_id": "food_127",
+      "food_name": "Lentilha Rosa / Laranja Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "lentilha-rosa-laranja",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "lentilha-rosa-laranja"
+      ]
+    },
+    {
+      "food_id": "food_059",
+      "food_name": "Lima da Pérsia Fresca",
+      "preparation": "produto",
+      "ingredient_slug": "lima-da-persia-fresca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "lima-da-persia-fresca"
+      ]
+    },
+    {
+      "food_id": "food_003",
+      "food_name": "Linhaça Dourada Moída",
+      "preparation": "produto",
+      "ingredient_slug": "linhaca-dourada-moida",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "linhaca-dourada-moida"
+      ]
+    },
+    {
+      "food_id": "food_006",
+      "food_name": "Linhaça Marrom Moída",
+      "preparation": "produto",
+      "ingredient_slug": "linhaca-marrom-moida",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "linhaca-marrom-moida"
+      ]
+    },
+    {
+      "food_id": "food_156",
+      "food_name": "Lombo Suíno Assado Magro",
+      "preparation": "produto",
+      "ingredient_slug": "lombo-suino-assado-magro",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "lombo-suino-assado-magro"
+      ]
+    },
+    {
+      "food_id": "food_215",
+      "food_name": "Louro Seco em Folhas",
+      "preparation": "produto",
+      "ingredient_slug": "louro-seco-em-folhas",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "louro-seco-em-folhas"
+      ]
+    },
+    {
+      "food_id": "food_183",
+      "food_name": "Lula Cozida em Anéis com Ervas",
+      "preparation": "cozido",
+      "ingredient_slug": "lula",
+      "shopping_enabled": true,
+      "preparation_components": [
+        "Lula",
+        "Ervas a definir"
+      ],
+      "shopping_components": [
+        "lula"
+      ]
+    },
+    {
+      "food_id": "food_029",
+      "food_name": "Maçã Fuji com Casca",
+      "preparation": "produto",
+      "ingredient_slug": "maca-fuji-com-casca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "maca-fuji-com-casca"
+      ]
+    },
+    {
+      "food_id": "food_028",
+      "food_name": "Maçã Gala com Casca",
+      "preparation": "produto",
+      "ingredient_slug": "maca-gala-com-casca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "maca-gala-com-casca"
+      ]
+    },
+    {
+      "food_id": "food_025",
+      "food_name": "Macadâmia Crua",
+      "preparation": "produto",
+      "ingredient_slug": "macadamia-crua",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "macadamia-crua"
+      ]
+    },
+    {
+      "food_id": "food_143",
+      "food_name": "Macarrão Integral Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "macarrao-integral",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "macarrao-integral"
+      ]
+    },
+    {
+      "food_id": "food_032",
+      "food_name": "Mamão Formosa",
+      "preparation": "produto",
+      "ingredient_slug": "mamao-formosa",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "mamao-formosa"
+      ]
+    },
+    {
+      "food_id": "food_031",
+      "food_name": "Mamão Papaia",
+      "preparation": "produto",
+      "ingredient_slug": "mamao-papaia",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "mamao-papaia"
+      ]
+    },
+    {
+      "food_id": "food_111",
+      "food_name": "Mandioca / Aipim Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "mandioca-aipim",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "mandioca-aipim"
+      ]
+    },
+    {
+      "food_id": "food_110",
+      "food_name": "Mandioquinha (Batata-Baroa)",
+      "preparation": "produto",
+      "ingredient_slug": "mandioquinha-batata-baroa",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "mandioquinha-batata-baroa"
+      ]
+    },
+    {
+      "food_id": "food_036",
+      "food_name": "Manga Palmer",
+      "preparation": "produto",
+      "ingredient_slug": "manga-palmer",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "manga-palmer"
+      ]
+    },
+    {
+      "food_id": "food_081",
+      "food_name": "Manjericão Fresco",
+      "preparation": "produto",
+      "ingredient_slug": "manjericao-fresco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "manjericao-fresco"
+      ]
+    },
+    {
+      "food_id": "food_155",
+      "food_name": "Músculo Bovino Cozido em Pedaços",
+      "preparation": "cozido",
+      "ingredient_slug": "musculo-bovino",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "musculo-bovino"
+      ]
+    },
+    {
+      "food_id": "food_180",
+      "food_name": "Músculo Bovino Moído com Legumes",
+      "preparation": "cozido",
+      "ingredient_slug": "musculo-bovino-moido",
+      "shopping_enabled": true,
+      "preparation_components": [
+        "Músculo Bovino Moído",
+        "Legumes a definir"
+      ],
+      "shopping_components": [
+        "musculo-bovino-moido"
+      ]
+    },
+    {
+      "food_id": "food_047",
+      "food_name": "Maracujá Azedo (Polpa)",
+      "preparation": "produto",
+      "ingredient_slug": "maracuja-azedo-polpa",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "maracuja-azedo-polpa"
+      ]
+    },
+    {
+      "food_id": "food_144",
+      "food_name": "Massa de Arroz Integral Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "massa-de-arroz-integral",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "massa-de-arroz-integral"
+      ]
+    },
+    {
+      "food_id": "food_145",
+      "food_name": "Massa de Grão-de-Bico Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "massa-de-grao-de-bico",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "massa-de-grao-de-bico"
+      ]
+    },
+    {
+      "food_id": "food_033",
+      "food_name": "Melão Amarelo",
+      "preparation": "produto",
+      "ingredient_slug": "melao-amarelo",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "melao-amarelo"
+      ]
+    },
+    {
+      "food_id": "food_034",
+      "food_name": "Melancia",
+      "preparation": "produto",
+      "ingredient_slug": "melancia",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "melancia"
+      ]
+    },
+    {
+      "food_id": "food_164",
+      "food_name": "Merluza Assada com Tomate e Ervas",
+      "preparation": "assado",
+      "ingredient_slug": "merluza",
+      "shopping_enabled": true,
+      "preparation_components": [
+        "Merluza",
+        "Tomate",
+        "Ervas a definir"
+      ],
+      "shopping_components": [
+        "merluza"
+      ]
+    },
+    {
+      "food_id": "food_039",
+      "food_name": "Mexerica Ponkan",
+      "preparation": "produto",
+      "ingredient_slug": "mexerica-ponkan",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "mexerica-ponkan"
+      ]
+    },
+    {
+      "food_id": "food_137",
+      "food_name": "Milheto em Grãos Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "milheto-em-graos",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "milheto-em-graos"
+      ]
+    },
+    {
+      "food_id": "food_116",
+      "food_name": "Milho Verde na Espiga Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "milho-verde-na-espiga",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "milho-verde-na-espiga"
+      ]
+    },
+    {
+      "food_id": "food_055",
+      "food_name": "Mirtilo (Blueberry) Fresco",
+      "preparation": "produto",
+      "ingredient_slug": "mirtilo-blueberry-fresco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "mirtilo-blueberry-fresco"
+      ]
+    },
+    {
+      "food_id": "food_044",
+      "food_name": "Morango Fresco",
+      "preparation": "produto",
+      "ingredient_slug": "morango-fresco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "morango-fresco"
+      ]
+    },
+    {
+      "food_id": "food_214",
+      "food_name": "Mostarda em Grãos Artesanal (sem açúcar)",
+      "preparation": "produto",
+      "ingredient_slug": "mostarda-em-graos-artesanal-sem-acucar",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "mostarda-em-graos-artesanal-sem-acucar"
+      ]
+    },
+    {
+      "food_id": "food_114",
+      "food_name": "Nabo Branco Fatiado",
+      "preparation": "produto",
+      "ingredient_slug": "nabo-branco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "nabo-branco"
+      ]
+    },
+    {
+      "food_id": "food_021",
+      "food_name": "Nozes Chilenas",
+      "preparation": "produto",
+      "ingredient_slug": "nozes-chilenas",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "nozes-chilenas"
+      ]
+    },
+    {
+      "food_id": "food_196",
+      "food_name": "Noz-Moscada Ralada na Hora",
+      "preparation": "produto",
+      "ingredient_slug": "noz-moscada-ralada-na-hora",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "noz-moscada-ralada-na-hora"
+      ]
+    },
+    {
+      "food_id": "food_148",
+      "food_name": "Omelete de Claras com Ervas",
+      "preparation": "omelete",
+      "ingredient_slug": "claras-de-ovo",
+      "shopping_enabled": true,
+      "preparation_components": [
+        "Claras de Ovo",
+        "Ervas a definir"
+      ],
+      "shopping_components": [
+        "claras-de-ovo"
+      ]
+    },
+    {
+      "food_id": "food_085",
+      "food_name": "Orégano Seco Puro",
+      "preparation": "produto",
+      "ingredient_slug": "oregano-seco-puro",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "oregano-seco-puro"
+      ]
+    },
+    {
+      "food_id": "food_146",
+      "food_name": "Ovo Caipira Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "ovo-caipira",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "ovo-caipira"
+      ]
+    },
+    {
+      "food_id": "food_147",
+      "food_name": "Ovo Caipira Mexido no Azeite",
+      "preparation": "mexido",
+      "ingredient_slug": "ovo-caipira",
+      "shopping_enabled": true,
+      "preparation_components": [
+        "Ovo Caipira",
+        "Azeite de Oliva Extravirgem"
+      ],
+      "shopping_components": [
+        "ovo-caipira"
+      ]
+    },
+    {
+      "food_id": "food_181",
+      "food_name": "Ovo Caipira Pochê",
+      "preparation": "pochê",
+      "ingredient_slug": "ovo-caipira",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "ovo-caipira"
+      ]
+    },
+    {
+      "food_id": "food_198",
+      "food_name": "Páprica Defumada",
+      "preparation": "produto",
+      "ingredient_slug": "paprica-defumada",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "paprica-defumada"
+      ]
+    },
+    {
+      "food_id": "food_197",
+      "food_name": "Páprica Doce Pura (sem corante)",
+      "preparation": "produto",
+      "ingredient_slug": "paprica-doce-pura-sem-corante",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "paprica-doce-pura-sem-corante"
+      ]
+    },
+    {
+      "food_id": "food_112",
+      "food_name": "Palmito Pupunha Fresco Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "palmito-pupunha-fresco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "palmito-pupunha-fresco"
+      ]
+    },
+    {
+      "food_id": "food_024",
+      "food_name": "Pasta de Amendoim Integral 100%",
+      "preparation": "produto",
+      "ingredient_slug": "pasta-de-amendoim-integral-100",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "pasta-de-amendoim-integral-100"
+      ]
+    },
+    {
+      "food_id": "food_152",
+      "food_name": "Patinho Bovino Moído Magro",
+      "preparation": "produto",
+      "ingredient_slug": "patinho-bovino-moido-magro",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "patinho-bovino-moido-magro"
+      ]
+    },
+    {
+      "food_id": "food_149",
+      "food_name": "Peito de Frango Grelhado em Tiras",
+      "preparation": "grelhado",
+      "ingredient_slug": "peito-de-frango",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "peito-de-frango"
+      ]
+    },
+    {
+      "food_id": "food_098",
+      "food_name": "Pepino Japonês Fatiado",
+      "preparation": "cru",
+      "ingredient_slug": "pepino-japones",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "pepino-japones"
+      ]
+    },
+    {
+      "food_id": "food_030",
+      "food_name": "Pera Williams",
+      "preparation": "produto",
+      "ingredient_slug": "pera-williams",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "pera-williams"
+      ]
+    },
+    {
+      "food_id": "food_163",
+      "food_name": "Pescada Branca Grelhada",
+      "preparation": "grelhado",
+      "ingredient_slug": "pescada-branca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "pescada-branca"
+      ]
+    },
+    {
+      "food_id": "food_099",
+      "food_name": "Pimentão Amarelo Fatiado",
+      "preparation": "produto",
+      "ingredient_slug": "pimentao-amarelo",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "pimentao-amarelo"
+      ]
+    },
+    {
+      "food_id": "food_100",
+      "food_name": "Pimentão Vermelho",
+      "preparation": "produto",
+      "ingredient_slug": "pimentao-vermelho",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "pimentao-vermelho"
+      ]
+    },
+    {
+      "food_id": "food_194",
+      "food_name": "Pimenta-do-Reino Moída na Hora",
+      "preparation": "produto",
+      "ingredient_slug": "pimenta-do-reino-moida-na-hora",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "pimenta-do-reino-moida-na-hora"
+      ]
+    },
+    {
+      "food_id": "food_053",
+      "food_name": "Pitanga Vermelha",
+      "preparation": "produto",
+      "ingredient_slug": "pitanga-vermelha",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "pitanga-vermelha"
+      ]
+    },
+    {
+      "food_id": "food_142",
+      "food_name": "Polenta de Milho Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "polenta-de-milho",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "polenta-de-milho"
+      ]
+    },
+    {
+      "food_id": "food_013",
+      "food_name": "Psyllium Puro em Pó",
+      "preparation": "produto",
+      "ingredient_slug": "psyllium-puro-em-po",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "psyllium-puro-em-po"
+      ]
+    },
+    {
+      "food_id": "food_173",
+      "food_name": "Queijo Cottage",
+      "preparation": "produto",
+      "ingredient_slug": "queijo-cottage",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "queijo-cottage"
+      ]
+    },
+    {
+      "food_id": "food_179",
+      "food_name": "Queijo Meia Cura em Dose Controlada",
+      "preparation": "produto",
+      "ingredient_slug": "queijo-meia-cura-em-dose-controlada",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "queijo-meia-cura-em-dose-controlada"
+      ]
+    },
+    {
+      "food_id": "food_171",
+      "food_name": "Queijo Minas Frescal Light",
+      "preparation": "produto",
+      "ingredient_slug": "queijo-minas-frescal-light",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "queijo-minas-frescal-light"
+      ]
+    },
+    {
+      "food_id": "food_172",
+      "food_name": "Queijo Ricota Fresca",
+      "preparation": "produto",
+      "ingredient_slug": "queijo-ricota-fresca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "queijo-ricota-fresca"
+      ]
+    },
+    {
+      "food_id": "food_096",
+      "food_name": "Quiabo Refogado",
+      "preparation": "refogado",
+      "ingredient_slug": "quiabo",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "quiabo"
+      ]
+    },
+    {
+      "food_id": "food_016",
+      "food_name": "Quinoa em Flocos",
+      "preparation": "produto",
+      "ingredient_slug": "quinoa-em-flocos",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "quinoa-em-flocos"
+      ]
+    },
+    {
+      "food_id": "food_136",
+      "food_name": "Quinoa em Grãos Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "quinoa-em-graos",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "quinoa-em-graos"
+      ]
+    },
+    {
+      "food_id": "food_113",
+      "food_name": "Rabanete Fatiado Cru",
+      "preparation": "produto",
+      "ingredient_slug": "rabanete-fatiado-cru",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "rabanete-fatiado-cru"
+      ]
+    },
+    {
+      "food_id": "food_065",
+      "food_name": "Rúcula Selvagem",
+      "preparation": "produto",
+      "ingredient_slug": "rucula-selvagem",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "rucula-selvagem"
+      ]
+    },
+    {
+      "food_id": "food_072",
+      "food_name": "Repolho Roxo Cru Fatiado",
+      "preparation": "produto",
+      "ingredient_slug": "repolho-roxo-cru",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "repolho-roxo-cru"
+      ]
+    },
+    {
+      "food_id": "food_071",
+      "food_name": "Repolho Verde Refogado",
+      "preparation": "refogado",
+      "ingredient_slug": "repolho-verde",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "repolho-verde"
+      ]
+    },
+    {
+      "food_id": "food_161",
+      "food_name": "Salmão Grelhado com Limão",
+      "preparation": "grelhado",
+      "ingredient_slug": "salmao",
+      "shopping_enabled": true,
+      "preparation_components": [
+        "Salmão",
+        "Limão"
+      ],
+      "shopping_components": [
+        "salmao"
+      ]
+    },
+    {
+      "food_id": "food_158",
+      "food_name": "Sardinha em Conserva ao Molho de Tomate",
+      "preparation": "produto",
+      "ingredient_slug": "sardinha-em-conserva-ao-molho-de-tomate",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "sardinha-em-conserva-ao-molho-de-tomate"
+      ]
+    },
+    {
+      "food_id": "food_157",
+      "food_name": "Sardinha Fresca Grelhada",
+      "preparation": "grelhado",
+      "ingredient_slug": "sardinha-fresca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "sardinha-fresca"
+      ]
+    },
+    {
+      "food_id": "food_002",
+      "food_name": "Semente de Chia",
+      "preparation": "produto",
+      "ingredient_slug": "semente-de-chia",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "semente-de-chia"
+      ]
+    },
+    {
+      "food_id": "food_007",
+      "food_name": "Sementes de Abóbora Tostadas",
+      "preparation": "produto",
+      "ingredient_slug": "sementes-de-abobora-tostadas",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "sementes-de-abobora-tostadas"
+      ]
+    },
+    {
+      "food_id": "food_008",
+      "food_name": "Sementes de Girassol Descascadas",
+      "preparation": "produto",
+      "ingredient_slug": "sementes-de-girassol-descascadas",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "sementes-de-girassol-descascadas"
+      ]
+    },
+    {
+      "food_id": "food_150",
+      "food_name": "Sobrecoxa de Frango sem Pele Assada",
+      "preparation": "assado",
+      "ingredient_slug": "sobrecoxa-de-frango-sem-pele",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "sobrecoxa-de-frango-sem-pele"
+      ]
+    },
+    {
+      "food_id": "food_130",
+      "food_name": "Soja Verde em Grãos (Edamame)",
+      "preparation": "produto",
+      "ingredient_slug": "soja-verde-em-graos-edamame",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "soja-verde-em-graos-edamame"
+      ]
+    },
+    {
+      "food_id": "food_210",
+      "food_name": "Suco de Limão Siciliano Fresco",
+      "preparation": "espremido",
+      "ingredient_slug": "limao-siciliano",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "limao-siciliano"
+      ]
+    },
+    {
+      "food_id": "food_209",
+      "food_name": "Suco de Limão Tahiti Fresco",
+      "preparation": "espremido",
+      "ingredient_slug": "limao-tahiti",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "limao-tahiti"
+      ]
+    },
+    {
+      "food_id": "food_076",
+      "food_name": "Taioba Refogada",
+      "preparation": "refogado",
+      "ingredient_slug": "taioba",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "taioba"
+      ]
+    },
+    {
+      "food_id": "food_162",
+      "food_name": "Tilápia / Saint Peter Grelhada",
+      "preparation": "grelhado",
+      "ingredient_slug": "tilapia-saint-peter",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "tilapia-saint-peter"
+      ]
+    },
+    {
+      "food_id": "food_177",
+      "food_name": "Tofu Firme Orgânico Grelhado",
+      "preparation": "grelhado",
+      "ingredient_slug": "tofu-firme-organico",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "tofu-firme-organico"
+      ]
+    },
+    {
+      "food_id": "food_091",
+      "food_name": "Tomate Cereja Doce",
+      "preparation": "produto",
+      "ingredient_slug": "tomate-cereja-doce",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "tomate-cereja-doce"
+      ]
+    },
+    {
+      "food_id": "food_090",
+      "food_name": "Tomate Italiano com Casca",
+      "preparation": "produto",
+      "ingredient_slug": "tomate-italiano-com-casca",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "tomate-italiano-com-casca"
+      ]
+    },
+    {
+      "food_id": "food_084",
+      "food_name": "Tomilho Seco / Fresco",
+      "preparation": "produto",
+      "ingredient_slug": "tomilho-seco-fresco",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "tomilho-seco-fresco"
+      ]
+    },
+    {
+      "food_id": "food_139",
+      "food_name": "Trigo em Grão Integral Cozido",
+      "preparation": "cozido",
+      "ingredient_slug": "trigo-em-grao-integral",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "trigo-em-grao-integral"
+      ]
+    },
+    {
+      "food_id": "food_046",
+      "food_name": "Uva Crimson sem Semente",
+      "preparation": "produto",
+      "ingredient_slug": "uva-crimson-sem-semente",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "uva-crimson-sem-semente"
+      ]
+    },
+    {
+      "food_id": "food_045",
+      "food_name": "Uva Roxa Niágara",
+      "preparation": "produto",
+      "ingredient_slug": "uva-roxa-niagara",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "uva-roxa-niagara"
+      ]
+    },
+    {
+      "food_id": "food_095",
+      "food_name": "Vagem Manteiga Cozida",
+      "preparation": "cozido",
+      "ingredient_slug": "vagem-manteiga",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "vagem-manteiga"
+      ]
+    },
+    {
+      "food_id": "food_208",
+      "food_name": "Vinagre de Maçã Orgânico Não Filtrado",
+      "preparation": "produto",
+      "ingredient_slug": "vinagre-de-maca-organico-nao-filtrado",
+      "shopping_enabled": true,
+      "preparation_components": [],
+      "shopping_components": [
+        "vinagre-de-maca-organico-nao-filtrado"
+      ]
+    }
+  ]
+}
