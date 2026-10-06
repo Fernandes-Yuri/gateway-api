@@ -15,6 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from security_defense import get_client_ip
+from api_identity import firebase_uid
+from services.grocery_contributions import GroceryPriceContribution, AVERAGES_SQL, UPSERT_SQL
 
 router = APIRouter()
 
@@ -297,3 +299,49 @@ async def trigger_grocery_prices_refresh(
     from services.price_cascade import atualizar_precos
     asyncio.create_task(atualizar_precos(_state.db_pool))
     return {"success": True, "message": "Atualização de preços iniciada em segundo plano."}
+
+
+@router.post("/api/catalog/grocery-price-contributions")
+async def contribute_grocery_price(body: GroceryPriceContribution, request: Request, uid=Depends(firebase_uid)):
+    if not _state.db_pool:
+        raise HTTPException(503, "Contribuições indisponíveis no momento.")
+    try:
+        unit, price = body.normalized()
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    try:
+        async with _state.db_pool.acquire() as conn:
+            async with conn.transaction():
+                # Serializa envios por pessoa antes de aplicar o limite diário.
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", "grocery-report:" + uid)
+                profile_exists = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=$1)", uid)
+                if not profile_exists:
+                    raise HTTPException(409, "Sincronize seu perfil antes de contribuir.")
+                count = await conn.fetchval("SELECT COUNT(*) FROM grocery_price_contributions WHERE user_id=$1 AND created_at >= CURRENT_DATE", uid)
+                if count >= 30:
+                    raise HTTPException(429, "Limite diário de contribuições atingido. Tente amanhã.")
+                await conn.execute(UPSERT_SQL, uid, body.food_name, body.amount_paid,
+                    body.quantity, body.unit, unit, price, body.state, body.purchase_date)
+        return {"success": True, "unit": unit, "price_per_unit": round(float(price), 4),
+                "message": "Contribuição recebida. Obrigado por ajudar!"}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(503, "Não foi possível salvar a contribuição. Tente novamente depois.")
+
+
+@router.get("/api/catalog/grocery-price-contributions/averages")
+async def get_community_grocery_prices():
+    if not _state.db_pool:
+        raise HTTPException(503, "Referências colaborativas indisponíveis no momento.")
+    try:
+        async with _state.db_pool.acquire() as conn:
+            rows = await conn.fetch(AVERAGES_SQL)
+        return {"prices": [{"food_name": r["food_name"], "unit": r["unit"],
+            "price_avg": round(float(r["price_avg"]), 4),
+            "price_min": round(float(r["price_min"]), 4), "price_max": round(float(r["price_max"]), 4),
+            "contributors": r["contributors"], "states_count": r["states_count"]} for r in rows],
+            "minimum_contributors": 5, "window_days": 90,
+            "notice": "Média das compras informadas pelos participantes; pode variar por região, loja e data."}
+    except Exception:
+        raise HTTPException(503, "Referências colaborativas indisponíveis no momento.")
