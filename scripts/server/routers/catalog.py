@@ -1,12 +1,16 @@
 """
-Router de catálogo e preços de alimentos (Frente 1 / Mercado Livre API).
+Router de catálogo e preços de alimentos (estimativa nacional por IPCA).
 Endpoints:
 - /api/catalog/grocery-prices: expõe os preços para o app Android
 - /api/admin/grocery-prices*: endpoints de gestão manual consumidos pelo webservice
 """
 import os
 import secrets
-from typing import Optional
+import csv
+import io
+import json
+from decimal import Decimal
+from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -52,12 +56,97 @@ class GroceryPriceItemDto(BaseModel):
     price_avg: Optional[float] = None
     price_min: Optional[float] = None
     price_max: Optional[float] = None
-    source: str = "meli"
+    source: str = "cascade"
     updated_at: Optional[str] = None
 
 
 class ManualPriceUpdate(BaseModel):
     price: float = Field(..., gt=0, le=99999999.99, multiple_of=0.01, allow_inf_nan=False, description="Preço unitário ou de embalagem em Reais (BRL)")
+
+
+_MANUAL_UPSERT = """
+INSERT INTO grocery_price_cache
+    (food_name, search_term, price_avg, price_min, price_max, source, results_count, needs_manual, updated_at)
+VALUES ($1, $1, $2, $2, $2, 'manual', 0, FALSE, now())
+ON CONFLICT (food_name) DO UPDATE SET
+    price_avg = EXCLUDED.price_avg, price_min = EXCLUDED.price_min,
+    price_max = EXCLUDED.price_max, source = 'manual', results_count = 0,
+    needs_manual = FALSE, updated_at = now()
+"""
+
+_BASELINE_UPSERT = _MANUAL_UPSERT.replace("'manual'", "'estimated'") + "\nWHERE grocery_price_cache.source <> 'manual' RETURNING food_name"
+
+
+@router.post("/api/admin/grocery-prices/import-csv")
+async def import_grocery_prices(request: Request, mode: Literal["manual", "baseline"] = "manual", _auth=Depends(require_service_token)):
+    """Importa preços manuais em lote por CSV UTF-8 ou lista JSON."""
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco de dados indisponível.")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 1024 * 1024:
+            raise HTTPException(413, "Importação limitada a 1 MiB.")
+    try:
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+        text = raw.decode("utf-8-sig")
+        if content_type == "application/json":
+            rows = json.loads(text)
+            if not isinstance(rows, list):
+                raise ValueError("Esperada uma lista JSON")
+        else:
+            # Detectar pelo cabeçalho: uma linha com colunas extras não invalida as demais.
+            delimiter = next((sep for sep in (",", ";")
+                              if next(csv.reader(io.StringIO(text), delimiter=sep), []) in
+                              (["food_name", "price"], ["price", "food_name"])), None)
+            if delimiter is None:
+                raise ValueError("Cabeçalho esperado: food_name,price")
+            reader = csv.DictReader(io.StringIO(text), delimiter=delimiter, strict=True)
+            rows = list(reader)
+        if not rows or len(rows) > 5000:
+            raise ValueError("Informe entre 1 e 5000 linhas")
+    except (ValueError, UnicodeError, csv.Error):
+        raise HTTPException(422, "CSV ou JSON inválido. Use food_name e price.")
+    valid, details, seen = [], [], set()
+    for index, row in enumerate(rows, 1):
+        try:
+            if not isinstance(row, dict):
+                raise ValueError("Linha inválida")
+            name = row.get("food_name")
+            if not isinstance(name, str) or not name.strip() or len(name) > 500:
+                raise ValueError("food_name inválido")
+            name = name.strip()
+            if name in seen:
+                raise ValueError("food_name duplicado")
+            value = row.get("price")
+            if isinstance(value, bool) or row.get(None) is not None:
+                raise ValueError("Preço ou colunas inválidos")
+            if isinstance(value, str):
+                value = value.strip().replace(",", ".")
+            model = ManualPriceUpdate(price=value)
+            valid.append((name, Decimal(str(model.price))))
+            seen.add(name)
+        except (ValueError, TypeError):
+            details.append({"linha": index, "erro": "Nome, preço ou colunas inválidos; preço deve ser positivo com até duas casas decimais e nome único."})
+    if valid:
+        try:
+            async with _state.db_pool.acquire() as conn:
+                async with conn.transaction():
+                    if mode == "manual":
+                        await conn.executemany(_MANUAL_UPSERT, valid)
+                    else:
+                        imported = []
+                        for name, price in valid:
+                            saved = await conn.fetchrow(_BASELINE_UPSERT, name, price)
+                            if saved:
+                                imported.append((name, price))
+                            else:
+                                details.append({"food_name": name, "erro": "Preço manual preservado."})
+                        valid = imported
+        except Exception:
+            raise HTTPException(500, "Falha ao importar preços; nenhuma linha do lote foi gravada.")
+    print(f"[ADMIN-CATALOG] Importação {mode}: importados={len(valid)} erros={len(details)}")
+    return {"importados": len(valid), "erros": len(details), "detalhes": details}
 
 
 # ---- Endpoint público/app -----------------------------------------------
@@ -189,29 +278,7 @@ async def update_grocery_price_manual(
 
     try:
         async with _state.db_pool.acquire() as conn:
-            res = await conn.execute(
-                """
-                UPDATE grocery_price_cache
-                SET price_avg = $1,
-                    price_min = $1,
-                    price_max = $1,
-                    source = 'manual',
-                    needs_manual = FALSE,
-                    updated_at = now()
-                WHERE food_name = $2
-                """,
-                body.price, food_name
-            )
-            if res == "UPDATE 0":
-                # Se não existia, insere
-                await conn.execute(
-                    """
-                    INSERT INTO grocery_price_cache
-                        (food_name, search_term, price_avg, price_min, price_max, source, needs_manual, updated_at)
-                    VALUES ($1, $1, $2, $2, $2, 'manual', FALSE, now())
-                    """,
-                    food_name, body.price
-                )
+            await conn.execute(_MANUAL_UPSERT, food_name, Decimal(str(body.price)))
         return {"success": True, "food_name": food_name, "price": body.price}
     except Exception as e:
         raise HTTPException(500, f"Erro ao atualizar preço manual: {e}")
@@ -222,11 +289,11 @@ async def trigger_grocery_prices_refresh(
     request: Request,
     _auth=Depends(require_service_token)
 ):
-    """Dispara job assíncrono de atualização no Mercado Livre."""
+    """Dispara job assíncrono de atualização por IPCA."""
     if not _state.db_pool:
         raise HTTPException(503, "Banco de dados indisponível.")
 
     import asyncio
-    from services.meli_price_fetcher import atualizar_precos
+    from services.price_cascade import atualizar_precos
     asyncio.create_task(atualizar_precos(_state.db_pool))
     return {"success": True, "message": "Atualização de preços iniciada em segundo plano."}
