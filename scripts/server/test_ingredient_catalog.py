@@ -6,13 +6,15 @@ from services.ingredient_catalog import INGREDIENTS, MANIFEST, ALIASES, key, pri
 
 class IngredientCatalogTests(unittest.IsolatedAsyncioTestCase):
     def test_mapping_covers_all_foods_and_preserves_real_product_variants(self):
-        self.assertEqual(len(MANIFEST["foods"]), 220)
-        self.assertEqual(len(INGREDIENTS), 214)
+        self.assertEqual(len(MANIFEST["foods"]), 221)
+        self.assertEqual(len(INGREDIENTS), 219)
         for food in MANIFEST["foods"]:
             self.assertTrue(food["shopping_components"])
             self.assertTrue(all(slug in INGREDIENTS for slug in food["shopping_components"]))
         eggs = [f for f in MANIFEST["foods"] if f["food_name"].startswith("Ovo Caipira")]
         self.assertEqual({f["ingredient_slug"] for f in eggs}, {"ovo-caipira"})
+        for slug in ["oleo-de-soja", "ovos", "pao-integral", "salsinha", "tapioca"]:
+            self.assertIn(slug, INGREDIENTS)
         for names in [("Banana-Prata", "Banana-Maçã"), ("Quinoa em Flocos", "Quinoa em Grãos Cozida"),
                       ("Arroz Integral Agulhinha", "Arroz Negro Integral")]:
             self.assertNotEqual(ALIASES[key(names[0])]["slug"], ALIASES[key(names[1])]["slug"])
