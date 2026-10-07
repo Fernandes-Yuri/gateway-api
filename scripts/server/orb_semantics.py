@@ -8,7 +8,7 @@ def normalize(text):
                                           if unicodedata.category(c) != "Mn").lower()).strip()
 
 
-CLAUSES = re.compile(r"\b(?:mas|porem|contudo)\b|(?<!que )\be\b|[;!?]|\.(?!\d)")
+CLAUSES = re.compile(r"\b(?:mas|porem|contudo)\b|(?<!que )\be\b|[;!?]|\.(?!\d)|,\s*(?=(?:eu|ele|ela|meu|minha|nao|estou|tenho|sinto|bebi|tomei|agora)\b)")
 DENIAL = re.compile(r"\b(?:nao|sem|nego|negou|nunca|jamais)\b(?:\W+\w+){0,6}\W*$")
 EDUCATIONAL = re.compile(r"\b(?:o que (?:e|significa|causa)|por que|porque|como (?:evitar|prevenir)|explique|explica)\b")
 HYPOTHETICAL = re.compile(r"\b(?:se (?:eu |ele |ela |alguem )?(?:tiver|sentir)|hipotet\w*|exemplo|no filme|no livro|li a frase)\b")
@@ -24,11 +24,14 @@ QUANTITY = re.compile(r"(\d+(?:[.,]\d+)?)\s*(mililitros?|ml|litros?|l|copos?|gar
 
 def is_current_emergency(raw):
     text = normalize(raw)
-    recurring = bool(RECURRENCE.search(text))
-    for clause in CLAUSES.split(text):
+    clauses = CLAUSES.split(text)
+    for index, clause in enumerate(clauses):
+        recurring = bool(RECURRENCE.search(clause))
+        resumed = any(re.fullmatch(r"\s*(?:(?:agora|hoje)\s+)?(?:voltou|voltaram|continua|piorou)\s*", later)
+                      for later in clauses[index + 1:])
         for match in list(EMERGENCY.finditer(clause)) + list(HELP_REQUEST.finditer(clause)):
             denied = not match.group().startswith("nao ") and DENIAL.search(clause[:match.start()])
-            past = PAST.search(clause) and not CURRENT.search(clause) and not recurring
+            past = PAST.search(clause) and not CURRENT.search(clause) and not recurring and not resumed
             example = HYPOTHETICAL.search(clause) or (EDUCATIONAL.search(clause) and not CURRENT.search(clause) and not recurring)
             if not denied and not past and not example:
                 return True
@@ -65,6 +68,8 @@ def beverage_mentions(raw):
 
 
 def beverage_reply(raw):
+    if EDUCATIONAL.search(normalize(raw)):
+        return None
     mentions = beverage_mentions(raw)
     if not mentions:
         return None

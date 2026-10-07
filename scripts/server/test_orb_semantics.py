@@ -53,6 +53,17 @@ class SemanticTests(unittest.TestCase):
             self.assertEqual(validate_envelope(raw, {"fala": "Registrando", "acao": "REGISTRAR_AGUA", "parametros": {"quantidade_ml": 500}})["acao"], "CONVERSA")
         self.assertEqual(validate_envelope("bebi 500 ml de água", {"fala": "Confira", "acao": "REGISTRAR_AGUA", "parametros": {"quantidade_ml": 1000}})["acao"], "CONVERSA")
 
+    def test_negation_and_recurrence_are_scoped_to_their_clauses(self):
+        self.assertTrue(is_current_emergency('não tenho dor no peito, estou com falta de ar'))
+        self.assertFalse(is_current_emergency('o que significa dor no peito? Minha dor de cabeça voltou'))
+        mentions = beverage_mentions('não bebi 500 ml de água, bebi 250 ml de suco')
+        self.assertEqual(len(mentions), 2)
+        self.assertTrue(mentions[0]['negated'])
+        self.assertFalse(mentions[1]['negated'])
+        self.assertEqual(mentions[1]['beverage'], 'suco')
+        self.assertEqual(mentions[1]['quantity_ml'], 250)
+        self.assertIsNone(route_chat('não bebi água, mas por que minha pressão subiu?'))
+
     def test_educational_water_is_not_a_consumption_statement(self):
         for raw in ("o que significa beber água?", "quanto devo beber de água?", "não consumi 500 ml de água"):
             response = route_chat(raw)
