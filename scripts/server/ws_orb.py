@@ -15,6 +15,7 @@ from orb_router import (recall as _recall, remember as _remember,
                         symptom_repeat as _symptom_repeat,
                         SYMPTOM_KINDS as _SYMPTOM_KINDS,
                         ESCALATION_SUFFIX as _ESCALATION_SUFFIX)
+from orb_semantics import validated_label, is_current_emergency, original_text, conversation_only
 from trace_llm import trace_llm as _trace
 
 ALLOWED_ACTIONS = {
@@ -40,6 +41,7 @@ class OrbMessage(BaseModel):
 
 class OrbRequest(BaseModel):
     type: Literal['chat']
+    nlu_context: dict | None = None
     id: str = Field(min_length=1, max_length=128)
     messages: list[OrbMessage] = Field(min_length=1, max_length=100)
     userId: str | None = None
@@ -117,6 +119,7 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
     async def generate(send, uid, req):
         started = time.monotonic()
         prompt = next((m.content for m in reversed(req.messages) if m.role == 'user'), '')
+        prompt = original_text(prompt)
         if not prompt.strip():
             await send(dict(type='error', id=req.id, code='INVALID_REQUEST', message='Mensagem vazia.'))
             return
@@ -142,7 +145,7 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
         # ANTES do roteador — grava na agenda do paciente (vinculo validado).
         if getattr(req, 'acting_as', None) == 'caregiver' and getattr(req, 'patient_id', None):
             from voice_scheduling import quer_agendar as _quer_agendar
-            if _quer_agendar(prompt):
+            if _quer_agendar(prompt) and not is_current_emergency(prompt) and not conversation_only(prompt, req.nlu_context):
                 from orb_llm import compose_envelope
                 try:
                     from server import db_pool as _pool
@@ -179,7 +182,7 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
                     _TID_BY_REQ.pop(req.id, None)
                     return
         from orb_router import route_chat as _route_chat
-        routed = _route_chat(prompt) if enable_router else None
+        routed = _route_chat(prompt, req.nlu_context) if enable_router else None
         preferences = {}
         if memory_handler and (routed is None or routed.get('acao') == 'CONVERSA'):
             memory_reply, preferences = await memory_handler(uid, prompt, req.messages)
@@ -277,6 +280,7 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
                     timeout=first_timeout)
             except asyncio.TimeoutError as exc:
                 raise TimeoutError('Classification stalled') from exc
+            label = validated_label(prompt, label, req.nlu_context)
             _trace('chat-ws', 'classify_response', tid, label=label,
                    latency_ms=round((time.monotonic() - _t0) * 1000))
             if label == 'CONSULTAR_METRICAS':

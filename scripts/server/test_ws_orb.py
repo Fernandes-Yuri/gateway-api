@@ -203,13 +203,36 @@ class OrbTests(unittest.TestCase):
         self.classify_label = 'LEMBRETES'
         with self.connect() as ws:
             req = self.request()
-            req['messages'] = [dict(role='user', content='por que o céu é azul?')]
+            req['messages'] = [dict(role='user', content='quero abrir meus lembretes')]
             ws.send_json(req)
             done = self.receive_terminal(ws)[-1]
             self.assertEqual(done['type'], 'done')
             self.assertEqual(done['action'], 'LEMBRETES')
             self.assertIn('lembretes', json.loads(done['fullContent'])['fala'].lower())
         self.assertEqual(len(self.payloads), 1)
+
+    def test_clinical_question_rejects_emergency_label_before_speech(self):
+        self.classify_label = 'EMERGENCIA'
+        with self.connect() as ws:
+            req = self.request()
+            req['messages'] = [dict(role='user', content='o que significa dor no peito?')]
+            ws.send_json(req)
+            done = self.receive_terminal(ws)[-1]
+            self.assertEqual(done['action'], 'CONVERSA')
+            self.assertNotIn('opções de socorro', json.loads(done['fullContent'])['fala'])
+        self.assertEqual(len(self.payloads), 2)
+
+    def test_wrong_navigation_label_and_conversation_contract_are_rejected(self):
+        self.classify_label = 'LEMBRETES'
+        for text, context in [('por que o céu é azul?', None), ('quero abrir meus lembretes',
+                              {'original_text': 'quero abrir meus lembretes', 'conversation_only': True})]:
+            with self.connect() as ws:
+                req = self.request()
+                req['messages'] = [dict(role='user', content=text)]
+                req['nlu_context'] = context
+                ws.send_json(req)
+                done = self.receive_terminal(ws)[-1]
+                self.assertEqual(done['action'], 'CONVERSA')
 
     def test_foreign_identity_never_calls_provider(self):
         with self.connect() as ws:

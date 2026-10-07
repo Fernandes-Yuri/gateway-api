@@ -30,7 +30,8 @@ CLASSIFY_PROMPT = (
     "CONVERSA, CONSULTAR_METRICAS, LEMBRETES, EXAMES ou EMERGENCIA. "
     "CONSULTAR_METRICAS só se pedir explicitamente para ver relatório ou histórico de medições. "
     "LEMBRETES só se pedir lembretes de remédio. EXAMES só se pedir exames. "
-    "EMERGENCIA só em sintomas graves (dor no peito, falta de ar, desmaio). "
+    "EMERGENCIA só em relato atual de sintomas graves ou pedido de socorro. "
+    "Pergunta educativa, negação e exemplo hipotético são CONVERSA. "
     "Todo o resto, inclusive fofoca cotidiana e dúvidas gerais, é CONVERSA. "
     "Responda só a palavra, sem ponto final."
 )
@@ -38,11 +39,11 @@ CLASSIFY_PROMPT = (
 SPEAK_SYSTEM = APP_SYSTEM
 
 FIXED_FALAS = {
-    "LEMBRETES": "Abrindo seus lembretes de remédios.",
-    "EXAMES": "Abrindo seus exames.",
+    "LEMBRETES": "Toque em confirmar para abrir seus lembretes de remédios.",
+    "EXAMES": "Toque em confirmar para abrir seus exames.",
     "EMERGENCIA": (
         "Isso parece urgente. Acione o SAMU 192 ou vá ao pronto atendimento agora. "
-        "Já deixei as opções de socorro na sua tela."
+        "Você pode abrir as opções de socorro."
     ),
 }
 

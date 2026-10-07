@@ -35,7 +35,11 @@ class Message(BaseModel):
     content: str
 
 
+from orb_semantics import validated_label, is_current_emergency, original_text, conversation_only
+
+
 class ChatCompletionRequest(BaseModel):
+    nlu_context: Optional[dict] = None
     model: Optional[str] = "qwen-2.5-72b"
     messages: List[Message]
     temperature: Optional[float] = 0.1
@@ -93,6 +97,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
         for m in req.messages:
             if m.role == "user":
                 user_prompt = m.content
+        user_prompt = original_text(user_prompt)
         tid = trace_llm('chat-rest', 'request', user_text=user_prompt,
                         temperature=req.temperature, max_tokens=req.max_tokens)
 
@@ -120,7 +125,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
         # Camada 0 (Fase 2): roteador deterministico antes de qualquer LLM.
         # D50: no escopo CUIDADOR, a intencao de agendar consulta e tratada
         # ANTES do roteador — grava na agenda do paciente (vinculo validado).
-        if req.acting_as == "caregiver" and req.patient_id and quer_agendar(user_prompt) and db_pool:
+        if req.acting_as == "caregiver" and req.patient_id and quer_agendar(user_prompt) and not is_current_emergency(user_prompt) and not conversation_only(user_prompt, req.nlu_context) and db_pool:
             try:
                 async with db_pool.acquire() as _conn:
                     envelope = await agendar_por_voz(_conn, authenticated_uid, req.patient_id, user_prompt)
@@ -141,7 +146,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                 }],
             }
 
-        routed = route_chat(user_prompt)
+        routed = route_chat(user_prompt, req.nlu_context)
         preferences = {}
         # D48: no escopo cuidador, a memoria e preferencias sao indexadas por
         # uid+patient_id — nunca so uid — para nao misturar os dois papeis
@@ -248,6 +253,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                     label = parse_label(class_resp.json()["choices"][0]["message"]["content"])
                 except Exception:
                     label = "CONVERSA"
+                label = validated_label(user_prompt, label, req.nlu_context)
                 trace_llm('chat-rest', 'classify_response', tid, label=label,
                           raw=class_resp.json()["choices"][0]["message"]["content"][:200],
                           latency_ms=round((time.monotonic() - _ct0) * 1000))

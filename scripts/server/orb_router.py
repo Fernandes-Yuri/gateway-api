@@ -16,6 +16,8 @@ Regras de segurança do roteador:
 import re
 import time
 import unicodedata
+from orb_semantics import (is_current_emergency, beverage_mentions, beverage_reply,
+                           validate_envelope, EDUCATIONAL, HYPOTHETICAL)
 
 # ------------------------------------------------------------------
 # Normalização
@@ -141,7 +143,7 @@ def _to_int(num: str):
 
 
 def detect_emergency(norm: str) -> bool:
-    return any(w in norm for w in _EMERGENCY_WORDS)
+    return is_current_emergency(norm)
 
 
 def detect_bp(norm: str):
@@ -197,6 +199,15 @@ def detect_spo2(norm: str):
 
 
 def detect_hydration(norm: str):
+    if EDUCATIONAL.search(norm) or HYPOTHETICAL.search(norm) or "?" in norm or re.search(
+            r"\b(nao|nunca|jamais|sem|quanto|quantos|como|posso|devo)\b", norm):
+        return None
+    mentions = beverage_mentions(norm)
+    if mentions and (len(mentions) != 1 or mentions[0]["beverage"] != "agua"
+                     or mentions[0]["modality"] not in ("report", "request")):
+        return None
+    if not re.search(r"\b(agua|h2o)\b", norm):
+        return None
     if not any(w in norm for w in _HYDR_WORDS):
         return None
     m = re.search(r"(\d+(?:[.,]\d+)?)\s*(ml|mililitro|litro|l|copo|garrafinha|garrafa|xicara|caneca)", norm)
@@ -345,7 +356,7 @@ def symptom_repeat(memory: dict, key: str, kind: str, ttl: int = 600, now: float
     return n
 
 
-def route_chat(raw: str):
+def route_chat(raw: str, nlu_context=None):
     """Roteia a mensagem do chat.
 
     Retorna dict {fala, acao, parametros} pronto para o cliente,
@@ -353,7 +364,18 @@ def route_chat(raw: str):
     Saudações, agradecimentos e conversas cotidianas passam para o LLM
     para manter um diálogo caloroso, humano e espontâneo.
     """
+    routed = _route_chat(raw)
+    return validate_envelope(raw, routed, nlu_context) if routed else None
+
+
+def _route_chat(raw: str):
     norm = normalize(raw)
+    if detect_emergency(norm):
+        return {"fala": "Acione o SAMU 192 ou procure atendimento imediato. Você pode abrir as opções de socorro.",
+                "acao": "EMERGENCIA", "parametros": {}}
+    meaning_reply = beverage_reply(raw)
+    if meaning_reply:
+        return _conversa(meaning_reply)
     if re.search(r"\b(registr\w*|anot\w*|adicion\w*|coloc\w*)\b", norm) and re.search(
             r"\b(refeicao|refeicoes|alimentacao|almoco|jantar|lanche)\b", norm):
         return _conversa("Para registrar sua refeição, use a tela de Alimentação do aplicativo.")
@@ -363,7 +385,7 @@ def route_chat(raw: str):
         return None
     if kind == "emergency":
         return {
-            "fala": "Isso parece urgente. Acione o SAMU 192 ou vá ao pronto atendimento agora. Já deixei as opções de socorro na sua tela.",
+            "fala": "Isso parece urgente. Acione o SAMU 192 ou vá ao pronto atendimento agora. Você pode abrir as opções de socorro.",
             "acao": "EMERGENCIA",
             "parametros": {},
         }
@@ -411,9 +433,9 @@ def route_chat(raw: str):
             "e se preferir é só chamar o assistente de voz para registrar com facilidade."
         )
     if kind == "reminder":
-        return {"fala": "Abrindo seus lembretes de remédios.", "acao": "LEMBRETES", "parametros": {}}
+        return {"fala": "Toque em confirmar para abrir seus lembretes de remédios.", "acao": "LEMBRETES", "parametros": {}}
     if kind == "exams":
-        return {"fala": "Abrindo seus exames.", "acao": "EXAMES", "parametros": {}}
+        return {"fala": "Toque em confirmar para abrir seus exames.", "acao": "EXAMES", "parametros": {}}
     if kind == "meds":
         return _conversa(
             "Entendi. Eu não receito nem ajusto remédio, isso é com seu médico. "
@@ -429,7 +451,7 @@ def route_chat(raw: str):
             shown = ", ".join(items)
             return {"fala": f"Preparei sua lista com {shown}. Toque em confirmar para abrir.",
                     "acao": "ABRIR_LISTA_COMPRAS", "parametros": {"items": items}}
-        return {"fala": "Abri sua lista de compras. Toque em confirmar.",
+        return {"fala": "Toque em confirmar para abrir sua lista de compras.",
                 "acao": "ABRIR_LISTA_COMPRAS", "parametros": {"items": []}}
     if kind == "app":
         return _conversa(
@@ -560,6 +582,10 @@ def whatsapp_next(raw: str, is_registered: bool) -> dict:
     {'type': 'vitals', 'metric': ..., 'values': ..., 'fala': ...}
     (vai direto aos botões de confirmação, sem provedor).
     """
+    if not detect_emergency(normalize(raw)):
+        meaning_reply = beverage_reply(raw)
+        if meaning_reply:
+            return {"type": "text", "fala": meaning_reply}
     det = detect_all(raw)
     kind = det["kind"]
     if kind in ("empty", "open", "smalltalk",
