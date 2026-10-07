@@ -8,7 +8,7 @@ import json
 import unicodedata
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from services.ingredient_catalog import ALIASES, key
+from services.ingredient_catalog import ALIASES, INGREDIENTS, key
 
 STATES = set("AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO".split())
 
@@ -18,7 +18,9 @@ def normalize_name(value):
 _FOOD_DATA = json.loads((Path(__file__).resolve().parents[1] / "grocery_search_terms.json").read_text(encoding="utf-8"))
 KNOWN_FOODS = {normalize_name(x["food_name"]): x["food_name"] for x in _FOOD_DATA}
 # Pacotes de pesos diferentes não podem compartilhar uma referência por unidade.
-UNIT_FOODS = {x["food_name"] for x in _FOOD_DATA if any(term in x["search_term"] for term in ("duzia", "unidade", "maco"))}
+UNIT_FOODS = {x["food_name"] for x in _FOOD_DATA if any(term in x["search_term"] for term in ("duzia", "unidade", "maco"))} | {
+    item["name"] for item in INGREDIENTS.values() if item["unit"] == "un"
+}
 
 class GroceryPriceContribution(BaseModel):
     model_config = ConfigDict(extra="forbid")
