@@ -54,6 +54,7 @@ class SemanticTests(unittest.TestCase):
         self.assertEqual(validate_envelope("bebi 500 ml de água", {"fala": "Confira", "acao": "REGISTRAR_AGUA", "parametros": {"quantidade_ml": 1000}})["acao"], "CONVERSA")
 
     def test_negation_and_recurrence_are_scoped_to_their_clauses(self):
+        self.assertTrue(is_current_emergency('Ontem tive dor no peito e agora voltou a doer forte'))
         self.assertTrue(is_current_emergency('não tenho dor no peito, estou com falta de ar'))
         self.assertFalse(is_current_emergency('o que significa dor no peito? Minha dor de cabeça voltou'))
         mentions = beverage_mentions('não bebi 500 ml de água, bebi 250 ml de suco')

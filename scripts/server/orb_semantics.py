@@ -27,7 +27,7 @@ def is_current_emergency(raw):
     clauses = CLAUSES.split(text)
     for index, clause in enumerate(clauses):
         recurring = bool(RECURRENCE.search(clause))
-        resumed = any(re.fullmatch(r"\s*(?:(?:agora|hoje)\s+)?(?:voltou|voltaram|continua|piorou)\s*", later)
+        resumed = any(re.match(r"\s*(?:(?:agora|hoje)\s+)?(?:voltou|voltaram|continua|piorou)\b", later)
                       for later in clauses[index + 1:])
         for match in list(EMERGENCY.finditer(clause)) + list(HELP_REQUEST.finditer(clause)):
             denied = not match.group().startswith("nao ") and DENIAL.search(clause[:match.start()])
