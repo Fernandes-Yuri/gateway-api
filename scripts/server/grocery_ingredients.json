@@ -2793,73 +2793,6 @@
       "food_ids": [
         "food_217"
       ]
-    },
-    {
-      "slug": "ovos",
-      "name": "Ovos",
-      "unit": "un",
-      "step": 12,
-      "minimum": 12,
-      "aliases": [
-        "Ovos",
-        "Ovo",
-        "Ovo de galinha",
-        "Ovo Cozido",
-        "Ovo Mexido com Óleo de Soja",
-        "Ovo Poché"
-      ],
-      "food_ids": [
-        "food_146",
-        "food_181",
-        "food_147"
-      ]
-    },
-    {
-      "slug": "oleo-de-soja",
-      "name": "Óleo de Soja",
-      "unit": "L",
-      "step": 900,
-      "minimum": 900,
-      "aliases": [
-        "Óleo de soja",
-        "Óleo de Soja"
-      ],
-      "food_ids": [
-        "food_221"
-      ]
-    },
-    {
-      "slug": "salsinha",
-      "name": "Salsinha",
-      "unit": "kg",
-      "step": 1,
-      "minimum": 50,
-      "aliases": [
-        "Salsinha"
-      ],
-      "food_ids": []
-    },
-    {
-      "slug": "tapioca",
-      "name": "Tapioca",
-      "unit": "kg",
-      "step": 1,
-      "minimum": 50,
-      "aliases": [
-        "Tapioca"
-      ],
-      "food_ids": []
-    },
-    {
-      "slug": "pao-integral",
-      "name": "Pão integral",
-      "unit": "kg",
-      "step": 1,
-      "minimum": 50,
-      "aliases": [
-        "Pão integral"
-      ],
-      "food_ids": []
     }
   ],
   "foods": [
@@ -5326,17 +5259,6 @@
       "preparation_components": [],
       "shopping_components": [
         "vinagre-de-maca-organico-nao-filtrado"
-      ]
-    },
-    {
-      "food_id": "food_221",
-      "food_name": "Óleo de Soja",
-      "preparation": "natural",
-      "ingredient_slug": "oleo-de-soja",
-      "shopping_enabled": true,
-      "preparation_components": [],
-      "shopping_components": [
-        "oleo-de-soja"
       ]
     }
   ]
