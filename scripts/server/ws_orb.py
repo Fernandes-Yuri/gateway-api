@@ -15,7 +15,7 @@ from orb_router import (recall as _recall, remember as _remember,
                         symptom_repeat as _symptom_repeat,
                         SYMPTOM_KINDS as _SYMPTOM_KINDS,
                         ESCALATION_SUFFIX as _ESCALATION_SUFFIX)
-from orb_semantics import validated_label, is_current_emergency, original_text, conversation_only
+from orb_semantics import validated_label, is_current_emergency, original_text, conversation_only, validate_envelope
 from trace_llm import trace_llm as _trace
 
 ALLOWED_ACTIONS = {
@@ -353,6 +353,8 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
                 or not isinstance(parsed.get('parametros'), dict)):
             _trace('chat-ws', 'speak_invalid', tid, reason='schema', full_text=full[:500])
             raise ValueError('Invalid structured response')
+        parsed = validate_envelope(prompt, parsed, req.nlu_context)
+        full = json.dumps(parsed, ensure_ascii=False)
         try:
             await asyncio.to_thread(log_sample, user_prompt=prompt, assistant_reply=full,
                                     source='app_chat', system_prompt=system_used,

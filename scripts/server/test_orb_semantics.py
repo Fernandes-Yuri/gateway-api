@@ -70,6 +70,12 @@ class SemanticTests(unittest.TestCase):
             self.assertTrue(response is None or 'Boa!' not in response['fala'])
             self.assertNotEqual(whatsapp_next(raw, True)['type'], 'vitals')
 
+    def test_conversation_cannot_claim_unexecuted_actions(self):
+        for fala in ('Já abri as opções de socorro.', 'Salvei 500 ml de água.', 'Entendi, já avisei seus contatos.'):
+            response = validate_envelope('o que significa dor no peito?', {'fala': fala, 'acao': 'CONVERSA', 'parametros': {}})
+            self.assertNotEqual(response['fala'], fala)
+            self.assertEqual(response['acao'], 'CONVERSA')
+
     def test_client_hints_can_only_restrict(self):
         raw = "quero ver meus exames"
         context = {"original_text": raw, "conversation_only": True}

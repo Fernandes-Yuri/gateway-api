@@ -35,7 +35,7 @@ class Message(BaseModel):
     content: str
 
 
-from orb_semantics import validated_label, is_current_emergency, original_text, conversation_only
+from orb_semantics import validated_label, is_current_emergency, original_text, conversation_only, validate_envelope
 
 
 class ChatCompletionRequest(BaseModel):
@@ -276,7 +276,8 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                     if not fala:
                         raise HTTPException(status_code=502, detail="Resposta vazia do provedor")
                     trace_llm('chat-rest', 'speak_response', tid, fala=fala)
-                    content = compose_envelope(fala, "CONVERSA", {})
+                    safe = validate_envelope(user_prompt, {"fala": fala, "acao": "CONVERSA", "parametros": {}}, req.nlu_context)
+                    content = compose_envelope(safe["fala"], "CONVERSA", {})
                     action_name, action_params, system_used = "CONVERSA", {}, SPEAK_SYSTEM
 
         await asyncio.to_thread(_state.log_fine_tuning_sample,

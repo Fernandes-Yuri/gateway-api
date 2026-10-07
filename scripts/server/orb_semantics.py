@@ -124,8 +124,13 @@ def validated_label(raw, label, context=None):
     return label if action_allowed(raw, label, context=context) else "CONVERSA"
 
 
+def execution_claim(fala):
+    # Verbos de execução concluída exigem recibo do executor, inexistente nesta etapa.
+    return bool(re.search(r"(?:^|[.!?,])\s*(?:ja\s+)?(?:eu\s+)?(?:abri|salvei|registrei|anotei|avisei|enviei|agendei|deixei as opcoes)\b", normalize(fala)))
+
+
 def validate_envelope(raw, envelope, context=None):
-    if action_allowed(raw, envelope.get("acao"), envelope.get("parametros"), context):
+    if not execution_claim(envelope.get("fala", "")) and action_allowed(raw, envelope.get("acao"), envelope.get("parametros"), context):
         return envelope
     # Substitui também a fala: não pode anunciar uma ação removida.
     fala = beverage_reply(raw) or ("Acione o SAMU 192 ou procure atendimento imediato." if is_current_emergency(raw)
