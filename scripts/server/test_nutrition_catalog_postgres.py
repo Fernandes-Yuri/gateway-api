@@ -23,6 +23,7 @@ class NutritionCatalogPostgres(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("Somente banco efêmero local braga_privacy_test")
         self.schema = "catalog_" + uuid.uuid4().hex
         self.control = await asyncpg.connect(DSN)
+        await self.control.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public')
         await self.control.execute(f'CREATE SCHEMA "{self.schema}"')
         async def setup(conn):
             await conn.execute(f'SET search_path TO "{self.schema}", public')
@@ -31,7 +32,7 @@ class NutritionCatalogPostgres(unittest.IsolatedAsyncioTestCase):
             await conn.execute((ROOT / "scripts/docker/init_schema.sql").read_text())
             await conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY,name TEXT)")
             for number in (26, 37, 38):
-                await conn.execute(next((ROOT / "migrations").glob(f"{number:03d}_*.sql")).read_text())
+                await conn.execute(next(p for p in (ROOT / "migrations").glob(f"{number:03d}_*.sql") if not p.stem.endswith("_rollback")).read_text())
             await conn.execute("INSERT INTO grocery_price_cache(food_name,search_term,price_avg,source,price_unit) VALUES ('Soja Verde em Grãos (Edamame)','edamame',45,'manual','kg'),('PTS','pts',NULL,'unavailable','kg')")
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('p','Teste')")
             await conn.execute("INSERT INTO grocery_price_contributions(user_id,food_name,amount_paid,quantity,original_unit,normalized_unit,normalized_price,purchase_date,ingredient_slug) VALUES ('p','Soja Verde em Grãos (Edamame)',45,1,'kg','kg',45,CURRENT_DATE,'soja-verde-em-graos-edamame')")
