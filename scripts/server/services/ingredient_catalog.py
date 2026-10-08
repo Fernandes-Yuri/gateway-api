@@ -1,33 +1,49 @@
-"""Catálogo de ingredientes compráveis, separado dos preparos clínicos."""
+"""Catálogo de alimentos e ingredientes servido a partir do RDS."""
 import json
-from pathlib import Path
 from decimal import Decimal
 from unicodedata import normalize, combining
 
-MANIFEST = json.loads((Path(__file__).resolve().parents[1] / "grocery_ingredients.json").read_text(encoding="utf-8"))
-INGREDIENTS = {x["slug"]: x for x in MANIFEST["ingredients"]}
 
 def key(value):
     return " ".join("".join(c for c in normalize("NFD", value) if not combining(c)).casefold().split())
 
-FOOD_MAPPING = {key(x["food_name"]): x for x in MANIFEST["foods"]}
-ALIASES = {key(name): item for item in INGREDIENTS.values() for name in [item["name"], item["slug"], *item["aliases"]]}
 
-async def prices_for_ingredients(pool, averages_sql):
-    async with pool.acquire() as conn:
-        legacy = await conn.fetch("SELECT food_name,price_avg,price_min,price_max,source,price_unit,updated_at FROM grocery_price_cache WHERE price_avg IS NOT NULL")
-        community = await conn.fetch(averages_sql)
+def as_json(value):
+    return json.loads(value) if isinstance(value, str) else value
+
+
+async def load_ingredients(conn, *, active_only=True):
+    rows = await conn.fetch("SELECT slug,name,unit,details FROM grocery_ingredients " +
+                            ("WHERE active " if active_only else "") + "ORDER BY name,slug")
+    return [{"step": 1, "minimum": 50, "aliases": [], "food_ids": [],
+             **(as_json(r["details"]) or {}), "slug": r["slug"], "name": r["name"], "unit": r["unit"]} for r in rows]
+
+
+def aliases_for(ingredients):
+    return {key(name): item for item in ingredients for name in [item["name"], item["slug"], *item["aliases"]]}
+
+
+async def resolve_ingredient(conn, name):
+    item = aliases_for(await load_ingredients(conn)).get(key(name))
+    if item is None:
+        raise ValueError("Selecione um ingrediente ativo do catálogo para contribuir.")
+    return item
+
+
+async def enrich_prices(conn, ingredients, averages_sql):
+    legacy = await conn.fetch("SELECT food_name,price_avg,price_min,price_max,source,price_unit,updated_at FROM grocery_price_cache WHERE price_avg IS NOT NULL")
+    community = await conn.fetch(averages_sql)
+    aliases = aliases_for(ingredients)
     histories = {}
     for row in legacy:
-        ingredient = ALIASES.get(key(row["food_name"]))
+        ingredient = aliases.get(key(row["food_name"]))
         if ingredient and row["price_unit"] == ingredient["unit"]:
             histories.setdefault(ingredient["slug"], []).append(row)
     references = {(key(row["food_name"]), row["unit"]): row for row in community}
     result = []
-    for item in INGREDIENTS.values():
+    for item in ingredients:
         sample = references.get((key(item["name"]), item["unit"]))
         candidates = histories.get(item["slug"], [])
-        # Preços manuais com unidade explícita continuam prioritários.
         manual = [r for r in candidates if r["source"] == "manual"]
         latest = max(manual or candidates, key=lambda r: r["updated_at"]) if candidates else None
         row = latest if manual else sample or latest
@@ -38,3 +54,27 @@ async def prices_for_ingredients(pool, averages_sql):
             "source": "manual" if manual else "community" if sample else "estimated" if latest else "unavailable",
             "contributors": int(sample["contributors"]) if sample and not manual else 0})
     return result
+
+
+async def prices_for_ingredients(pool, averages_sql):
+    async with pool.acquire() as conn:
+        async with conn.transaction(readonly=True, isolation="repeatable_read"):
+            return await enrich_prices(conn, await load_ingredients(conn), averages_sql)
+
+
+async def nutrition_snapshot(pool, averages_sql):
+    async with pool.acquire() as conn:
+        async with conn.transaction(readonly=True, isolation="repeatable_read"):
+            settings = await conn.fetchrow("SELECT revision,policy FROM nutrition_catalog_settings WHERE id=1")
+            rows = await conn.fetch("""SELECT details || jsonb_build_object(
+                'remoteId',remote_id,'name',name,'kcal',kcal,'carbsG',carbs,'proteinG',proteins,
+                'fatG',fats,'isDiabetesSafe',is_diabetes_safe,'isHypertensionSafe',is_hypertension_safe,
+                'isThyroidSafe',is_thyroid_safe) AS food
+                FROM food_catalog WHERE active AND details IS NOT NULL ORDER BY remote_id""")
+            ingredients = await enrich_prices(conn, await load_ingredients(conn), averages_sql)
+            foods = [as_json(r["food"]) for r in rows]
+            if not settings or not foods:
+                raise ValueError("Catálogo nutricional não configurado.")
+            return {"version": settings["revision"], "foods": foods, "ingredients": ingredients,
+                    "policy": as_json(settings["policy"]),
+                    "notice": "Estimativas para planejamento; valores variam por região, loja e data."}

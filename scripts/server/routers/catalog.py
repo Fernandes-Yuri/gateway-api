@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from security_defense import get_client_ip
 from api_identity import firebase_uid
-from services.ingredient_catalog import prices_for_ingredients
+from services.ingredient_catalog import nutrition_snapshot, resolve_ingredient
 from services.grocery_contributions import GroceryPriceContribution, AVERAGES_SQL, UPSERT_SQL
 
 router = APIRouter()
@@ -315,12 +315,13 @@ async def contribute_grocery_price(body: GroceryPriceContribution, request: Requ
     if not _state.db_pool:
         raise HTTPException(503, "Contribuições indisponíveis no momento.")
     try:
-        unit, price = body.normalized()
-    except ValueError as exc:
-        raise HTTPException(422, str(exc))
-    try:
         async with _state.db_pool.acquire() as conn:
             async with conn.transaction():
+                try:
+                    ingredient = await resolve_ingredient(conn, body.food_name)
+                    unit, price = body.normalized(ingredient)
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc))
                 # Serializa envios por pessoa antes de aplicar o limite diário.
                 await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", "grocery-report:" + uid)
                 profile_exists = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=$1)", uid)
@@ -329,8 +330,13 @@ async def contribute_grocery_price(body: GroceryPriceContribution, request: Requ
                 count = await conn.fetchval("SELECT COUNT(*) FROM grocery_price_contributions WHERE user_id=$1 AND created_at >= CURRENT_DATE", uid)
                 if count >= 30:
                     raise HTTPException(429, "Limite diário de contribuições atingido. Tente amanhã.")
-                await conn.execute(UPSERT_SQL, uid, body.food_name, body.amount_paid,
-                    body.quantity, body.unit, unit, price, body.state, body.purchase_date, body.ingredient_slug)
+                # A chave legada do cache é exigida pela FK; não cria nem altera preço.
+                await conn.execute("""INSERT INTO grocery_price_cache
+                    (food_name,search_term,source,needs_manual,price_unit)
+                    VALUES ($1,$1,'unavailable',TRUE,$2) ON CONFLICT(food_name) DO NOTHING""",
+                    ingredient["name"], ingredient["unit"])
+                await conn.execute(UPSERT_SQL, uid, ingredient["name"], body.amount_paid,
+                    body.quantity, body.unit, unit, price, body.state, body.purchase_date, ingredient["slug"])
         return {"success": True, "unit": unit, "price_per_unit": round(float(price), 4),
                 "message": "Contribuição recebida. Obrigado por ajudar!"}
     except HTTPException:
@@ -361,7 +367,18 @@ async def get_grocery_ingredients():
     if not _state.db_pool:
         raise HTTPException(503, "Preços de referência indisponíveis no momento.")
     try:
-        return {"version": 1, "ingredients": await prices_for_ingredients(_state.db_pool, AVERAGES_SQL),
-                "notice": "Estimativas para planejamento; valores variam por região, loja e data."}
+        snapshot = await nutrition_snapshot(_state.db_pool, AVERAGES_SQL)
+        return {key: snapshot[key] for key in ("version", "ingredients", "notice")}
     except Exception:
         raise HTTPException(503, "Preços de referência indisponíveis no momento.")
+
+
+@router.get("/api/catalog/nutrition")
+async def get_nutrition_catalog():
+    """Snapshot completo: alimentos, ingredientes e política na mesma revisão do RDS."""
+    if not _state.db_pool:
+        raise HTTPException(503, "Catálogo nutricional indisponível no momento.")
+    try:
+        return await nutrition_snapshot(_state.db_pool, AVERAGES_SQL)
+    except Exception:
+        raise HTTPException(503, "Catálogo nutricional indisponível no momento.")
