@@ -219,6 +219,20 @@ class SecurityTelemetryMiddleware:
                 signal = 'invalid_auth'
             route = getattr(scope.get('route'), 'path', None) or '/rota-nao-identificada'
             connection_ip = canonical_ip(get_client_ip(request))
+            origin = request.headers.get('origin', '')
+            ua = request.headers.get('user-agent', '')
+            x_client = (request.headers.get('x-client') or '').lower()
+            if context or x_client == 'portal':
+                client_source = 'portal'
+            elif scope['path'].startswith('/api/whatsapp') or scope['path'].startswith('/api/meta'):
+                client_source = 'meta'
+            elif 'bragasaude.online' in origin or 'web.app' in origin or x_client == 'pwa':
+                client_source = 'pwa'
+            elif request.headers.get('x-app-version') or 'okhttp' in ua.lower() or 'android' in ua.lower() or x_client == 'android':
+                client_source = 'android'
+            else:
+                client_source = 'gateway'
+
             # Somente templates de rota: nunca caminho com UID, nomes de arquivos ou query.
             self.telemetry.enqueue((request_id, timestamp, context['ip'] if context else connection_ip,
                 state.get('security_verified_uid'),
@@ -228,7 +242,7 @@ class SecurityTelemetryMiddleware:
                 min(2147483647, int((time.monotonic()-started)*1000)), signal, SIGNALS[signal][1],
                 safe_header(request.headers.get('x-app-version'), r'[0-9A-Za-z.+_-]+', 32),
                 safe_header(request.headers.get('cf-ray'), r'[a-fA-F0-9]+-[A-Z]{3}', 80),
-                connection_ip, 'portal' if context else 'gateway'))
+                connection_ip, client_source))
             _event_state.reset(token)
 
 
