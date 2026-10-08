@@ -127,6 +127,19 @@ class TelemetryRequests(unittest.TestCase):
                 self.assertEqual(event[2], '198.51.100.9')
                 self.assertEqual(event[15], 'gateway')
 
+    def test_classificacao_origem_cliente(self):
+        self.client.get('/api/items/1', headers={'x-app-version': '25'})
+        self.assertEqual(self.event()[15], 'android')
+
+        self.client.get('/api/items/2', headers={'origin': 'https://bragasaude.online'})
+        self.assertEqual(self.event()[15], 'pwa')
+
+        @self.app.post('/api/whatsapp/webhook')
+        async def wa():
+            return {'ok': True}
+        self.client.post('/api/whatsapp/webhook')
+        self.assertEqual(self.event()[15], 'meta')
+
 
 class SecurityActivityAuthorization(unittest.TestCase):
     headers = auth_tests.PortalAuthTest.headers
