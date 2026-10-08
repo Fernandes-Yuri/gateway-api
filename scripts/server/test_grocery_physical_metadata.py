@@ -33,25 +33,29 @@ class PhysicalCatalogPostgres(unittest.IsolatedAsyncioTestCase):
         await NutritionCatalogPostgres.asyncSetUp(self)
         async with self.pool.acquire() as conn:
             await conn.execute((ROOT / "migrations/041_grocery_ingredients_physical_metadata.sql").read_text())
+            await conn.execute((ROOT / "migrations/042_grocery_physical_conversions_and_groups.sql").read_text())
 
     async def asyncTearDown(self):
         await NutritionCatalogPostgres.asyncTearDown(self)
 
     async def test_metadata_migration_is_idempotent_and_preserves_custom_values(self):
         snapshot = await nutrition_snapshot(self.pool, AVERAGES_SQL)
-        self.assertEqual(snapshot["version"], 3)
+        self.assertEqual(snapshot["version"], 4)
         self.assertEqual(len(snapshot["foods"]), 220)
         ingredients = {i["slug"]: i for i in snapshot["ingredients"]}
         self.assertEqual(ingredients["ovo-caipira"]["grams_per_unit"], 50)
         self.assertEqual(ingredients["azeite-de-oliva-extravirgem"]["density_g_per_ml"], 0.92)
         self.assertEqual(ingredients["leite-desnatado-pasteurizado"]["density_g_per_ml"], 1.03)
+        self.assertEqual(ingredients["agua-de-coco-natural"]["density_g_per_ml"], 1.02)
+        self.assertEqual(ingredients["farelo-de-aveia"]["canonical_group_slug"], "aveia")
+        self.assertEqual(ingredients["feijao-carioca"]["canonical_group_slug"], "feijao")
         self.assertTrue(all(f["component_proportions"] is None for f in snapshot["foods"]))
         async with self.pool.acquire() as conn:
             await conn.execute("UPDATE grocery_ingredients SET details=details || '{\"grams_per_unit\":60}'::jsonb WHERE slug='ovo-caipira'")
-            await conn.execute("UPDATE nutrition_catalog_settings SET revision=4 WHERE id=1")
-            await conn.execute((ROOT / "migrations/041_grocery_ingredients_physical_metadata.sql").read_text())
+            await conn.execute("UPDATE nutrition_catalog_settings SET revision=5 WHERE id=1")
+            await conn.execute((ROOT / "migrations/042_grocery_physical_conversions_and_groups.sql").read_text())
         updated = await nutrition_snapshot(self.pool, AVERAGES_SQL)
-        self.assertEqual(updated["version"], 4)
+        self.assertEqual(updated["version"], 5)
         self.assertEqual(next(i for i in updated["ingredients"] if i["slug"] == "ovo-caipira")["grams_per_unit"], 60)
 
     async def test_database_enforces_physical_values_and_proportions(self):
