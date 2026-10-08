@@ -1,6 +1,7 @@
 """Catálogo de alimentos e ingredientes servido a partir do RDS."""
 import json
 from decimal import Decimal
+from services.grocery_physical_metadata import IngredientPhysicalMetadata, FoodComponentMetadata
 from unicodedata import normalize, combining
 
 
@@ -15,8 +16,13 @@ def as_json(value):
 async def load_ingredients(conn, *, active_only=True):
     rows = await conn.fetch("SELECT slug,name,unit,details FROM grocery_ingredients " +
                             ("WHERE active " if active_only else "") + "ORDER BY name,slug")
-    return [{"step": 1, "minimum": 50, "aliases": [], "food_ids": [],
-             **(as_json(r["details"]) or {}), "slug": r["slug"], "name": r["name"], "unit": r["unit"]} for r in rows]
+    result = []
+    for row in rows:
+        details = as_json(row["details"]) or {}
+        physical = IngredientPhysicalMetadata.model_validate(details).model_dump()
+        result.append({"step": 1, "minimum": 50, "aliases": [], "food_ids": [],
+                       **details, **physical, "slug": row["slug"], "name": row["name"], "unit": row["unit"]})
+    return result
 
 
 def aliases_for(ingredients):
@@ -73,6 +79,8 @@ async def nutrition_snapshot(pool, averages_sql):
                 FROM food_catalog WHERE active AND details IS NOT NULL ORDER BY remote_id""")
             ingredients = await enrich_prices(conn, await load_ingredients(conn), averages_sql)
             foods = [as_json(r["food"]) for r in rows]
+            for food in foods:
+                food["component_proportions"] = FoodComponentMetadata.model_validate(food).component_proportions
             if not settings or not foods:
                 raise ValueError("Catálogo nutricional não configurado.")
             return {"version": settings["revision"], "foods": foods, "ingredients": ingredients,
