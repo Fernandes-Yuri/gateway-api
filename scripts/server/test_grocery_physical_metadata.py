@@ -1,7 +1,7 @@
 import unittest
 from pydantic import ValidationError
 from services.grocery_physical_metadata import IngredientPhysicalMetadata, FoodComponentMetadata
-from test_nutrition_catalog_postgres import NutritionCatalogPostgres, ROOT
+from test_nutrition_catalog_postgres import NutritionCatalogPostgres, ROOT, DSN
 from services.ingredient_catalog import nutrition_snapshot
 from services.grocery_contributions import AVERAGES_SQL
 
@@ -27,11 +27,15 @@ class PhysicalMetadataTests(unittest.TestCase):
             with self.assertRaises(ValidationError): FoodComponentMetadata(shoppingComponents=["a", "b"], component_proportions=values)
 
 
-class PhysicalCatalogPostgres(NutritionCatalogPostgres):
+@unittest.skipUnless(DSN, "PostgreSQL efêmero disponível no CI")
+class PhysicalCatalogPostgres(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        await super().asyncSetUp()
+        await NutritionCatalogPostgres.asyncSetUp(self)
         async with self.pool.acquire() as conn:
             await conn.execute((ROOT / "migrations/041_grocery_ingredients_physical_metadata.sql").read_text())
+
+    async def asyncTearDown(self):
+        await NutritionCatalogPostgres.asyncTearDown(self)
 
     async def test_metadata_migration_is_idempotent_and_preserves_custom_values(self):
         snapshot = await nutrition_snapshot(self.pool, AVERAGES_SQL)
