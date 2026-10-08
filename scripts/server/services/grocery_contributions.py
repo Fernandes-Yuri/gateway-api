@@ -1,24 +1,16 @@
 """Contribuições opcionais de compras, separadas por unidade e pessoa."""
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
-import json
 import unicodedata
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from services.ingredient_catalog import ALIASES, key
 
 STATES = set("AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO".split())
 
 def normalize_name(value):
     return " ".join("".join(c for c in unicodedata.normalize("NFD", value) if not unicodedata.combining(c)).casefold().split())
-
-_FOOD_DATA = json.loads((Path(__file__).resolve().parents[1] / "grocery_search_terms.json").read_text(encoding="utf-8"))
-KNOWN_FOODS = {normalize_name(x["food_name"]): x["food_name"] for x in _FOOD_DATA}
-# Pacotes de pesos diferentes não podem compartilhar uma referência por unidade.
-UNIT_FOODS = {x["food_name"] for x in _FOOD_DATA if any(term in x["search_term"] for term in ("duzia", "unidade", "maco"))}
 
 class GroceryPriceContribution(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -31,13 +23,10 @@ class GroceryPriceContribution(BaseModel):
 
     @field_validator("food_name")
     @classmethod
-    def known_food(cls, value):
-        name = KNOWN_FOODS.get(normalize_name(value))
-        if name is None and normalize_name(value) in ALIASES:
-            name = ALIASES[normalize_name(value)]["aliases"][0]
-        if name is None:
-            raise ValueError("Selecione um alimento do catálogo para contribuir.")
-        return name
+    def clean_name(cls, value):
+        if not value.strip():
+            raise ValueError("Informe o ingrediente comprado.")
+        return value.strip()
 
     @field_validator("state")
     @classmethod
@@ -64,16 +53,10 @@ class GroceryPriceContribution(BaseModel):
             raise ValueError("Quantidade mínima: 0,001.")
         return value
 
-    @property
-    def ingredient_slug(self):
-        item = ALIASES.get(key(self.food_name))
-        return item["slug"] if item else None
-
-    def normalized(self):
-        if not self.ingredient_slug:
-            raise ValueError("Informe o ingrediente comprado, não o prato preparado.")
-        if self.unit == "un" and self.food_name not in UNIT_FOODS:
-            raise ValueError("Para produtos embalados, informe o peso ou volume total, não a quantidade de pacotes.")
+    def normalized(self, ingredient):
+        unit = {"g": "kg", "ml": "L"}.get(self.unit, self.unit)
+        if unit != ingredient["unit"]:
+            raise ValueError("Informe o peso, volume ou unidades conforme o ingrediente comprado.")
         if self.unit == "un" and self.quantity != self.quantity.to_integral_value():
             raise ValueError("A quantidade em unidades deve ser inteira.")
         unit = {"g": "kg", "ml": "L"}.get(self.unit, self.unit)
@@ -90,7 +73,7 @@ WITH latest AS (
  SELECT DISTINCT ON (c.user_id,c.ingredient_slug,c.normalized_unit)
   c.user_id,c.ingredient_slug,i.name AS food_name,c.normalized_unit,c.normalized_price,c.state
  FROM grocery_price_contributions c JOIN grocery_ingredients i ON i.slug=c.ingredient_slug
- WHERE c.purchase_date >= CURRENT_DATE - 90
+ WHERE i.active AND c.purchase_date >= CURRENT_DATE - 90
  ORDER BY c.user_id,c.ingredient_slug,c.normalized_unit,c.purchase_date DESC,c.updated_at DESC
 ), medians AS (
  SELECT ingredient_slug,normalized_unit,

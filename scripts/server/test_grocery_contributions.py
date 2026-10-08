@@ -11,7 +11,12 @@ from pydantic import ValidationError
 from routers import catalog
 from api_identity import firebase_uid
 from services.grocery_contributions import GroceryPriceContribution, AVERAGES_SQL, UPSERT_SQL
+from unittest.mock import patch
 TODAY = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+
+def test_ingredient(name="Feijão Carioca"):
+    return {"slug": "test", "name": name, "unit": "un" if "Ovo" in name else "kg"}
+
 
 def payload():
     return dict(food_name="Feijão Carioca Cozido", amount_paid="8.00", quantity="500", unit="g", purchase_date=str(TODAY))
@@ -19,24 +24,24 @@ def payload():
 class ContributionValidationTests(unittest.TestCase):
     def test_normalizes_purchase_units(self):
         data = payload()
-        self.assertEqual(GroceryPriceContribution(**data).normalized(), ("kg", Decimal("16")))
+        self.assertEqual(GroceryPriceContribution(**data).normalized(test_ingredient(data["food_name"])), ("kg", Decimal("16")))
         data.update(unit="ml")
-        self.assertEqual(GroceryPriceContribution(**data).normalized(), ("L", Decimal("16")))
+        with self.assertRaises(ValueError): GroceryPriceContribution(**data).normalized(test_ingredient())
         data.update(food_name="Ovo Caipira Cozido", unit="un", quantity="12", amount_paid="12")
-        self.assertEqual(GroceryPriceContribution(**data).normalized(), ("un", Decimal("1")))
+        self.assertEqual(GroceryPriceContribution(**data).normalized(test_ingredient(data["food_name"])), ("un", Decimal("1")))
 
     def test_rejects_invalid_values_dates_unknown_food_and_fractional_units(self):
         for key, value in [("amount_paid", "0"), ("amount_paid", "NaN"), ("amount_paid", "1.001"),
-            ("quantity", "0"), ("quantity", "Infinity"), ("unit", "pacote"), ("food_name", "inexistente"),
+            ("quantity", "0"), ("quantity", "Infinity"), ("unit", "pacote"), ("food_name", " "),
             ("state", "ZZ"), ("purchase_date", str(TODAY + timedelta(days=1))),
             ("purchase_date", str(TODAY - timedelta(days=91)))]:
             data = payload(); data[key] = value
             with self.subTest(key=key, value=value), self.assertRaises((ValidationError, ValueError)):
-                GroceryPriceContribution(**data).normalized()
+                GroceryPriceContribution(**data).normalized(test_ingredient(data["food_name"]))
         data = payload(); data.update(food_name="Ovo Caipira Cozido", unit="un", quantity="1.5")
-        with self.assertRaises(ValueError): GroceryPriceContribution(**data).normalized()
+        with self.assertRaises(ValueError): GroceryPriceContribution(**data).normalized(test_ingredient(data["food_name"]))
         data = payload(); data.update(unit="un", quantity="1")
-        with self.assertRaises(ValueError): GroceryPriceContribution(**data).normalized()
+        with self.assertRaises(ValueError): GroceryPriceContribution(**data).normalized(test_ingredient(data["food_name"]))
 
 class ContributionRouteTests(unittest.TestCase):
     def setUp(self):
@@ -49,6 +54,8 @@ class ContributionRouteTests(unittest.TestCase):
         pool.acquire.return_value.__aenter__ = AsyncMock(return_value=self.conn)
         pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
         catalog.configure_state(db_pool=pool)
+        resolver = patch.object(catalog, "resolve_ingredient", AsyncMock(return_value=test_ingredient()))
+        resolver.start(); self.addCleanup(resolver.stop)
         self.addCleanup(catalog.configure_state)
         self.app = FastAPI(); self.app.include_router(catalog.router)
         self.app.dependency_overrides[firebase_uid] = lambda: "verified-user"
@@ -60,6 +67,7 @@ class ContributionRouteTests(unittest.TestCase):
         self.assertEqual(response.json()["price_per_unit"], 16)
         args = self.conn.execute.call_args.args
         self.assertEqual(args[1], "verified-user")
+        self.assertEqual(args[2], "Feijão Carioca")
         self.assertEqual(args[6:8], ("kg", Decimal("16")))
         self.assertNotIn("UPDATE grocery_price_cache", args[0])
 
@@ -93,6 +101,7 @@ class ContributionSqlTests(unittest.IsolatedAsyncioTestCase):
         await self.conn.execute(sql.replace("CREATE TABLE IF NOT EXISTS grocery_price_contributions", "CREATE TEMP TABLE IF NOT EXISTS grocery_price_contributions"))
         migration = (Path(__file__).resolve().parents[2] / "migrations/038_grocery_ingredients.sql").read_text()
         await self.conn.execute(migration.replace("CREATE TABLE IF NOT EXISTS grocery_ingredients", "CREATE TEMP TABLE IF NOT EXISTS grocery_ingredients"))
+        await self.conn.execute("ALTER TABLE grocery_ingredients ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE")
         await self.conn.execute("INSERT INTO grocery_price_cache(food_name) VALUES ('Feijão Carioca Cozido')")
         await self.conn.executemany("INSERT INTO profiles VALUES ($1)", [(f"user-{i}",) for i in range(8)])
 
