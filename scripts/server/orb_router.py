@@ -413,7 +413,7 @@ def route_chat(raw: str):
     if kind == "reminder":
         return {"fala": "Abrindo seus lembretes de remédios.", "acao": "LEMBRETES", "parametros": {}}
     if kind == "exams":
-        return {"fala": "Abrindo seus exames.", "acao": "EXAMES", "parametros": {}}
+        return {"fala": "Abrindo o organizador local de exames.", "acao": "EXAMES", "parametros": {}}
     if kind == "meds":
         return _conversa(
             "Entendi. Eu não receito nem ajusto remédio, isso é com seu médico. "
@@ -609,7 +609,7 @@ def whatsapp_next(raw: str, is_registered: bool) -> dict:
                 "fala": "Lembretes de remédio ficam no aplicativo, na tela de lembretes. Quer que eu te explique como ativar?"}
     if kind == "exams":
         return {"type": "text",
-                "fala": "Seus exames ficam no aplicativo, na tela de exames. Por aqui, posso orientar dúvidas gerais. Me conta?"}
+                "fala": "No aplicativo, Organizar exames prepara um PDF para a consulta. A sessão é temporária: salve o PDF fora do app. Os documentos não são enviados ao servidor."}
     if kind == "meds":
         return {"type": "text",
                 "fala": "Entendi. Eu não receito nem ajusto remédio, isso é com seu médico. Se quiser ajuda para organizar os horários, me fala quais são."}

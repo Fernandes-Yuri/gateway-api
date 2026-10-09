@@ -890,20 +890,7 @@ async def list_feedback_replies(uid: str = Depends(firebase_uid)):
     } for r in rows]
 
 
-@router.post("/api/upload/exam/{user_id}")
-async def upload_exam_file(
-    user_id: str,
-    request: Request,
-    filename: Optional[str] = Query(None),
-    uid: str = Depends(firebase_uid),
-):
-    require_owner(uid, user_id)
-    raise HTTPException(410, "Atualize o aplicativo e confirme o termo da Nuvem de Exames antes de enviar.")
 
-
-# =============================================================
-# MEDICAMENTOS
-# =============================================================
 @router.post("/api/sync/medication")
 async def sync_medication(m: MedicationSyncDto, uid: str = Depends(firebase_uid)):
     require_owner(uid, m.userId)

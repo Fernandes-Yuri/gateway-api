@@ -5,7 +5,7 @@ import re
 import shutil
 
 from fastapi import HTTPException
-from config import STORAGE_DIR, STORAGE_EXAMS_DIR
+from config import STORAGE_DIR
 
 
 async def cleanup_account_files(pool, user_id: str) -> bool:
@@ -17,7 +17,7 @@ async def cleanup_account_files(pool, user_id: str) -> bool:
         if isinstance(names, str):
             names = json.loads(names)
         try:
-            for root in (os.path.join(STORAGE_DIR, "avatars"), os.path.join(STORAGE_DIR, "medications"), STORAGE_EXAMS_DIR):
+            for root in (os.path.join(STORAGE_DIR, "avatars"), os.path.join(STORAGE_DIR, "medications")):
                 path = os.path.realpath(os.path.join(root, user_id))
                 if os.path.commonpath([os.path.realpath(root), path]) != os.path.realpath(root):
                     raise ValueError("Caminho fora do armazenamento de contas")

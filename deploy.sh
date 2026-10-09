@@ -26,6 +26,7 @@ fi
 echo "=== [3/4] Executando Migrations do Banco de Dados (RDS) ==="
 if [ -f "migrate.py" ]; then
     python3 migrate.py
+    python3 scripts/purge_legacy_exam_files.py
 fi
 
 echo "=== [4/4] Reiniciando Braga Gateway ==="

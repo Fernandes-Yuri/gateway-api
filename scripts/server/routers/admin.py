@@ -1383,7 +1383,7 @@ async def user_moderation_detail(request: Request, userId: str, _auth=Depends(re
             raise HTTPException(404, 'Conta não encontrada.')
         family = await conn.fetch("SELECT id,patient_id,caregiver_id,status FROM family_bindings WHERE (patient_id=$1 OR caregiver_id=$1) AND status='ACTIVE'", userId)
         devices = await conn.fetch('SELECT platform,role,is_active,last_seen_at FROM device_push_tokens WHERE user_id=$1 LIMIT 100', userId)
-        counts = await conn.fetchrow('SELECT (SELECT COUNT(*) FROM exams WHERE user_id=$1) AS exams,(SELECT COUNT(*) FROM feedbacks WHERE user_id=$1) AS feedbacks', userId)
+        counts = await conn.fetchrow('SELECT (SELECT COUNT(*) FROM feedbacks WHERE user_id=$1) AS feedbacks', userId)
         restriction = await conn.fetchrow('SELECT * FROM user_restrictions WHERE user_id=$1 AND (expires_at IS NULL OR expires_at>NOW())', userId)
     return {'success': True, 'profile': dict(profile), 'family': [dict(r) for r in family],
             'devices': [dict(r) for r in devices], 'counts': dict(counts),

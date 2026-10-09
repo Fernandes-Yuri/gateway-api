@@ -38,6 +38,21 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(migration.read_text(encoding="utf-8"))
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('paciente','Paciente'),('cuidador','Cuidador')")
 
+    async def test_exam_storage_removal_preserves_patient_and_medications(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute("CREATE TABLE exams(id integer PRIMARY KEY)")
+            await conn.execute("CREATE TABLE exam_items(id integer, exam_id integer REFERENCES exams(id))")
+            await conn.execute("CREATE TABLE exam_cloud_consents(exam_id integer REFERENCES exams(id))")
+            await conn.execute("CREATE TABLE clinical_references(item_key text PRIMARY KEY)")
+            await conn.execute("INSERT INTO medications(user_id,name,schedule_time) VALUES ('paciente','Teste','08:00')")
+            sql = (ROOT / "migrations/044_remove_exam_storage.sql").read_text(encoding="utf-8")
+            await conn.execute(sql)
+            await conn.execute(sql)
+            for table in ("exams", "exam_items", "exam_cloud_consents", "clinical_references"):
+                self.assertIsNone(await conn.fetchval("SELECT to_regclass($1)", table))
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM profiles"), 2)
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM medications"), 1)
+
     async def asyncTearDown(self):
         await self.pool.close()
         await self.control.execute(f'DROP SCHEMA "{self.schema}" CASCADE')
@@ -52,7 +67,7 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
             await conn.execute("INSERT INTO symptoms_diary(patient_id,reported_by,reported_at,symptoms_text,input_method) VALUES ('paciente','cuidador',NOW(),'Teste','TEXT')")
             await conn.execute("INSERT INTO medication_stock_adjustments(medication_id,patient_id,actor_id,new_total_units,idempotency_key) VALUES ($1,'paciente','cuidador',30,'teste')",med)
             await conn.execute("INSERT INTO prescription_files(filename,patient_id) VALUES ('anexo.pdf','paciente')")
-        with tempfile.TemporaryDirectory() as root, patch.object(account_deletion,"STORAGE_DIR",root), patch.object(account_deletion,"STORAGE_EXAMS_DIR",str(Path(root)/"exams")):
+        with tempfile.TemporaryDirectory() as root, patch.object(account_deletion,"STORAGE_DIR",root):
             result = await account_deletion.delete_account(self.pool,"cuidador",actor="operador de teste")
             self.assertTrue(result["success"])
             async with self.pool.acquire() as conn:

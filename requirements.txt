@@ -14,7 +14,7 @@ uvicorn[standard]>=0.30.0
 starlette==1.6.0
 pydantic>=2.9,<3
 # Form data (multipart): exigido por rotas com UploadFile/File/Form
-# (exams_api, /api/upload/exam). Sem ele, o import da rota falha em runtime.
+# (receitas de medicamentos e suporte).
 python-multipart>=0.0.9
 
 # HTTP clients (Groq, Meta WhatsApp, reCAPTCHA)

@@ -153,9 +153,7 @@ class SecureContracts(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_storage_cleanup_keeps_durable_job(self):
         conn = MagicMock(fetchrow=AsyncMock(return_value={"prescription_filenames": []}),execute=AsyncMock())
-        with tempfile.TemporaryDirectory() as root, patch.object(account_deletion,"STORAGE_DIR",root), patch.object(
-            account_deletion,"STORAGE_EXAMS_DIR",str(Path(root)/"exams")
-        ), patch.object(account_deletion.os.path,"isdir",return_value=True), patch.object(
+        with tempfile.TemporaryDirectory() as root, patch.object(account_deletion,"STORAGE_DIR",root), patch.object(account_deletion.os.path,"isdir",return_value=True), patch.object(
             account_deletion.shutil,"rmtree",side_effect=OSError("arquivo ocupado")
         ):
             self.assertFalse(await account_deletion.cleanup_account_files(Pool(conn),"firebase-uid"))
