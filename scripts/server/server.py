@@ -36,8 +36,6 @@ from assistant_preferences import install_preference_routes, process_preferences
 from family_api import install_family_routes, purge_expired_family_messages
 from caregiver_alerts import install_caregiver_alert_routes
 from vip_api import install_vip_routes
-from exams_api import install_exam_routes
-from clinical_references import install_clinical_reference_routes
 from security_defense import (
     StrictRateLimiter,
     get_client_ip,
@@ -701,14 +699,12 @@ async def dispatch_clinical_alert(
 install_family_routes(app, lambda: db_pool, FamilyBindingSyncDto, FamilyMessageSyncDto,
                       rate_limiter=rate_limiter, load_devices=load_devices, dispatch_push=dispatch_push)
 install_caregiver_alert_routes(app, lambda: db_pool, load_devices, dispatch_push)
-install_exam_routes(app, lambda: db_pool, rate_limiter=rate_limiter)
-install_clinical_reference_routes(app, lambda: db_pool)
 
 # =============================================================
 # ROTAS REST DE SINCRONIZACAO POSTGRESQL — ver routers/sync.py
 # (Fase A passo 5). 22 endpoints (/api/sync/*, /api/profile/*,
 # /api/vitals/*, /api/metrics/*, /api/social/*, /api/feedback/*,
-# /api/upload/exam, /api/medications/*, /api/agent/receipt).
+# /api/medications/*, /api/agent/receipt).
 # Nao redeclarar aqui.
 # =============================================================
 

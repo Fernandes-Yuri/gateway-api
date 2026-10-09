@@ -43,14 +43,13 @@ else:
 DATASET_PATH = os.getenv("DATASET_PATH", default_dataset_path)
 AUDIO_CACHE_DIR = os.getenv("AUDIO_CACHE_DIR", default_audio_cache_dir)
 STORAGE_DIR = os.getenv("STORAGE_DIR", default_storage_dir)
-STORAGE_EXAMS_DIR = os.path.join(STORAGE_DIR, "exams")
 DEVICES_PATH = os.getenv("DEVICES_PATH", default_devices_path)
 RELEASES_DIR = os.getenv("BRAGA_RELEASES_DIR", os.path.join(PROJECT_ROOT, "releases"))
 
 # Garante que os diretórios existem (mesmo comportamento do server.py linhas 151-154).
 os.makedirs(os.path.dirname(DATASET_PATH), exist_ok=True)
 os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
-os.makedirs(STORAGE_EXAMS_DIR, exist_ok=True)
+os.makedirs(STORAGE_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(DEVICES_PATH), exist_ok=True)
 
 # ------------------------------------------------------------------

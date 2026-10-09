@@ -851,7 +851,6 @@ async def medical_dashboard(access_token: str, request: Request):
         expected = 30*sum(max(1,len([x for x in (m.get('schedule_times') or m.get('schedule_time') or '').split(',') if x])) for m in meds)
         adherence = round(100*(doses or 0)/expected) if expected else None
         symptoms = await conn.fetch("SELECT reported_at,symptoms_text FROM symptoms_diary WHERE patient_id=$1 AND reported_at>=now()-interval '30 days' ORDER BY reported_at DESC LIMIT 5", grant["patient_id"])
-        exam_count = await conn.fetchval("SELECT count(*) FROM exams WHERE user_id=$1 AND created_at>=now()-interval '30 days'", grant["patient_id"])
         await conn.execute(
             "INSERT INTO medical_access_audit(token_id,ip_address,user_agent) VALUES ($1,$2,$3)",
             grant["id"], request.client.host if request.client else None, request.headers.get("user-agent", "")[:500],
@@ -864,7 +863,7 @@ async def medical_dashboard(access_token: str, request: Request):
     <body><h1>Resumo clínico de {html.escape(patient['full_name'])}</h1><p class='notice'>Dados autodeclarados para apoio à consulta. Não substituem avaliação médica.</p>
     <h2>Últimos 30 dias</h2><div class='cards'><div class='card'>Pressão média<div class='value'>{vitals.get('systolic') or '-'}/{vitals.get('diastolic') or '-'}</div></div>
     <div class='card'>Glicemia média<div class='value'>{vitals.get('glucose') or '-'} mg/dL</div></div><div class='card'>Adesão registrada<div class='value'>{(str(adherence)+'%') if adherence is not None else '-'}</div></div>
-    <div class='card'>Medições / exames<div class='value'>{vitals.get('measurements') or 0} / {exam_count or 0}</div></div></div>
+    <div class='card'>Medições<div class='value'>{vitals.get('measurements') or 0}</div></div></div>
     <h2>Medicamentos em uso</h2><ul>{med_html}</ul><h2>Check-ins recentes</h2><ul>{symptom_html}</ul></body></html>"""
     return HTMLResponse(body, headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow",
         "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff",

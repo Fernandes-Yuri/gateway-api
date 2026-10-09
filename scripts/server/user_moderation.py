@@ -26,7 +26,7 @@ async def require_not_restricted(uid, request, *, auth_time=None):
         denied = (level == 'suspended' or
               (level == 'read-only' and method not in ('GET', 'HEAD', 'OPTIONS')) or
               (level == 'no-sync' and method == 'POST' and
-               path.startswith(('/api/sync/', '/api/exams-sync/', '/api/exams/'))))
+               path.startswith('/api/sync/')))
         if denied:
             from security_telemetry import mark_signal
             mark_signal('restricted_access')

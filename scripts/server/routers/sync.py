@@ -3,7 +3,7 @@
 Extraido do monolito server.py na Fase A passo 5
 (doc 11_PLANO_MODULARIZACAO_E_TTS.md). Dominios: /api/sync/*,
 /api/profile/*, /api/vitals/*, /api/metrics/*, /api/social/*,
-/api/feedback/*, /api/upload/exam, /api/medications/*, /api/agent/receipt.
+/api/feedback/*, /api/medications/*, /api/agent/receipt.
 
 Seguranca preservada: require_owner/require_family_access em tudo que
 grava ou le dados de usuario (AUD-G07: userId vem do token, nao do body),
@@ -890,20 +890,7 @@ async def list_feedback_replies(uid: str = Depends(firebase_uid)):
     } for r in rows]
 
 
-@router.post("/api/upload/exam/{user_id}")
-async def upload_exam_file(
-    user_id: str,
-    request: Request,
-    filename: Optional[str] = Query(None),
-    uid: str = Depends(firebase_uid),
-):
-    require_owner(uid, user_id)
-    raise HTTPException(410, "Atualize o aplicativo e confirme o termo da Nuvem de Exames antes de enviar.")
 
-
-# =============================================================
-# MEDICAMENTOS
-# =============================================================
 @router.post("/api/sync/medication")
 async def sync_medication(m: MedicationSyncDto, uid: str = Depends(firebase_uid)):
     require_owner(uid, m.userId)

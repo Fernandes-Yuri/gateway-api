@@ -14,7 +14,6 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./init_schema.sql:/docker-entrypoint-initdb.d/init_schema.sql:ro
-      - ../../migrations/016_clinical_references_sources.sql:/docker-entrypoint-initdb.d/016_clinical_references_sources.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U bragasaude_user -d bragasaude"]
       interval: 10s

@@ -85,57 +85,6 @@ CREATE TABLE IF NOT EXISTS medication_logs (
 
 CREATE INDEX IF NOT EXISTS idx_medication_logs_user_taken ON medication_logs(user_id, taken_at DESC);
 
--- 5. EXAMES MÉDICOS EM PDF
-CREATE TABLE IF NOT EXISTS exams (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id VARCHAR(128) NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-    title VARCHAR(255) NOT NULL,
-    category VARCHAR(100) NOT NULL,
-    exam_date DATE NOT NULL,
-    file_url TEXT NOT NULL,
-    status VARCHAR(50) DEFAULT 'analyzed',
-    validation_notes TEXT,
-    ai_extracted_data TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_exams_user ON exams(user_id, exam_date DESC);
-
--- 6. ITENS EXTRAÍDOS DE EXAMES
-CREATE TABLE IF NOT EXISTS exam_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    exam_id UUID NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
-    user_id VARCHAR(128) NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-    item_key VARCHAR(100) NOT NULL,
-    item_name VARCHAR(255) NOT NULL,
-    value_numeric DOUBLE PRECISION,
-    value_text TEXT,
-    unit VARCHAR(50),
-    reference_text TEXT,
-    status VARCHAR(50) DEFAULT 'uploaded',
-    measured_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_exam_items_user_key ON exam_items(user_id, item_key);
-
--- 7. REFERÊNCIAS CLÍNICAS OFICIAIS (SBC, SBD, OMS)
-CREATE TABLE IF NOT EXISTS clinical_references (
-    item_key VARCHAR(100) PRIMARY KEY,
-    item_name VARCHAR(255) NOT NULL,
-    category VARCHAR(100) NOT NULL,
-    unit VARCHAR(50),
-    min_target DOUBLE PRECISION,
-    max_target DOUBLE PRECISION,
-    min_critical DOUBLE PRECISION,
-    max_critical DOUBLE PRECISION,
-    interpretation_hint TEXT,
-    institution VARCHAR(255),
-    document_version VARCHAR(255),
-    parameter VARCHAR(255),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 -- 8. BIOMETRIA (Peso, Altura, IMC)
 CREATE TABLE IF NOT EXISTS biometries (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -350,9 +299,6 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id, created_at
 
 -- 23. COLUNAS FALTANTES EM TABELAS EXISTENTES (migrations de compatibilidade)
 
--- exams: result_summary e validated_by
-ALTER TABLE exams ADD COLUMN IF NOT EXISTS result_summary TEXT;
-ALTER TABLE exams ADD COLUMN IF NOT EXISTS validated_by VARCHAR(128);
 
 -- medications: updated_at para detectar mudanças
 ALTER TABLE medications ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
