@@ -9,17 +9,17 @@ SET LOCAL lock_timeout = '10s';
 INSERT INTO grocery_ingredients (slug, name, unit, details, active)
 VALUES
   ('pao-frances', 'Pão Francês Tradicional', 'un', jsonb_build_object('step', 1, 'minimum', 6, 'aliases', ARRAY['Pão Francês', 'Pão de Sal', 'Pão Francês de Padaria'], 'food_ids', ARRAY['food_221'], 'grams_per_unit', 50.0, 'canonical_group_slug', 'pao'), true),
-  ('pao-de-forma-integral', 'Pão de Forma 100% Integral', 'pct', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Pão Integral', 'Pão de Forma'], 'food_ids', ARRAY['food_222'], 'grams_per_unit', 450.0, 'canonical_group_slug', 'pao'), true),
+  ('pao-de-forma-integral', 'Pão de Forma 100% Integral', 'un', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Pão Integral', 'Pão de Forma'], 'food_ids', ARRAY['food_222'], 'grams_per_unit', 450.0, 'canonical_group_slug', 'pao'), true),
   ('goma-de-tapioca', 'Goma de Tapioca Hidratada', 'kg', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Massa de Tapioca', 'Tapioca'], 'food_ids', ARRAY['food_223'], 'canonical_group_slug', 'tapioca'), true),
-  ('torrada-integral', 'Torrada Integral / Multigrãos', 'pct', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Torradas'], 'food_ids', ARRAY['food_227'], 'grams_per_unit', 140.0), true),
+  ('torrada-integral', 'Torrada Integral / Multigrãos', 'un', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Torradas'], 'food_ids', ARRAY['food_227'], 'grams_per_unit', 140.0), true),
   ('pao-de-queijo', 'Pão de Queijo Tradicional', 'kg', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Pão de Queijo Mineiro'], 'food_ids', ARRAY['food_228']), true),
-  ('milho-para-pipoca', 'Milho para Pipoca', 'pct', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Milho de Pipoca'], 'food_ids', ARRAY['food_229'], 'grams_per_unit', 500.0), true),
-  ('biscoito-de-polvilho', 'Biscoito de Polvilho Assado', 'pct', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Biscoito de Polvilho'], 'food_ids', ARRAY['food_230'], 'grams_per_unit', 100.0), true),
+  ('milho-para-pipoca', 'Milho para Pipoca', 'un', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Milho de Pipoca'], 'food_ids', ARRAY['food_229'], 'grams_per_unit', 500.0), true),
+  ('biscoito-de-polvilho', 'Biscoito de Polvilho Assado', 'un', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Biscoito de Polvilho'], 'food_ids', ARRAY['food_230'], 'grams_per_unit', 100.0), true),
   ('requeijao-cremoso', 'Requeijão Cremoso Tradicional', 'un', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Requeijão'], 'food_ids', ARRAY['food_233'], 'grams_per_unit', 200.0), true),
-  ('manteiga-com-sal', 'Manteiga de Primeira Qualidade', 'pote', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Manteiga'], 'food_ids', ARRAY['food_234'], 'grams_per_unit', 200.0), true),
+  ('manteiga-com-sal', 'Manteiga de Primeira Qualidade', 'un', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Manteiga'], 'food_ids', ARRAY['food_234'], 'grams_per_unit', 200.0), true),
   ('queijo-mussarela', 'Queijo Mussarela Fatiado', 'kg', jsonb_build_object('step', 100, 'minimum', 200, 'aliases', ARRAY['Mussarela', 'Mozzarella'], 'food_ids', ARRAY['food_235']), true),
-  ('atum-ralado-ao-natural', 'Atum Ralado ao Natural', 'lata', jsonb_build_object('step', 1, 'minimum', 2, 'aliases', ARRAY['Atum em Conserva', 'Atum'], 'food_ids', ARRAY['food_237'], 'grams_per_unit', 170.0), true),
-  ('po-de-cafe-tradicional', 'Café Torrado e Moído Tradicional', 'pct', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Pó de Café', 'Café'], 'food_ids', ARRAY['food_238', 'food_239'], 'grams_per_unit', 500.0), true)
+  ('atum-ralado-ao-natural', 'Atum Ralado ao Natural', 'un', jsonb_build_object('step', 1, 'minimum', 2, 'aliases', ARRAY['Atum em Conserva', 'Atum'], 'food_ids', ARRAY['food_237'], 'grams_per_unit', 170.0), true),
+  ('po-de-cafe-tradicional', 'Café Torrado e Moído Tradicional', 'un', jsonb_build_object('step', 1, 'minimum', 1, 'aliases', ARRAY['Pó de Café', 'Café'], 'food_ids', ARRAY['food_238', 'food_239'], 'grams_per_unit', 500.0), true)
 ON CONFLICT (slug) DO UPDATE
 SET active = true,
     details = EXCLUDED.details;
