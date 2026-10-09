@@ -3,7 +3,7 @@
 Extraido do monolito server.py na Fase A passo 5
 (doc 11_PLANO_MODULARIZACAO_E_TTS.md). Dominios: /api/sync/*,
 /api/profile/*, /api/vitals/*, /api/metrics/*, /api/social/*,
-/api/feedback/*, /api/upload/exam, /api/medications/*, /api/agent/receipt.
+/api/feedback/*, /api/medications/*, /api/agent/receipt.
 
 Seguranca preservada: require_owner/require_family_access em tudo que
 grava ou le dados de usuario (AUD-G07: userId vem do token, nao do body),

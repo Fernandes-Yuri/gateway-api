@@ -704,7 +704,7 @@ install_caregiver_alert_routes(app, lambda: db_pool, load_devices, dispatch_push
 # ROTAS REST DE SINCRONIZACAO POSTGRESQL — ver routers/sync.py
 # (Fase A passo 5). 22 endpoints (/api/sync/*, /api/profile/*,
 # /api/vitals/*, /api/metrics/*, /api/social/*, /api/feedback/*,
-# /api/upload/exam, /api/medications/*, /api/agent/receipt).
+# /api/medications/*, /api/agent/receipt).
 # Nao redeclarar aqui.
 # =============================================================
 

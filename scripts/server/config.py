@@ -49,6 +49,7 @@ RELEASES_DIR = os.getenv("BRAGA_RELEASES_DIR", os.path.join(PROJECT_ROOT, "relea
 # Garante que os diretórios existem (mesmo comportamento do server.py linhas 151-154).
 os.makedirs(os.path.dirname(DATASET_PATH), exist_ok=True)
 os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+os.makedirs(STORAGE_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(DEVICES_PATH), exist_ok=True)
 
 # ------------------------------------------------------------------

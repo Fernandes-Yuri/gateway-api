@@ -40,10 +40,10 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
 
     async def test_exam_storage_removal_preserves_patient_and_medications(self):
         async with self.pool.acquire() as conn:
-            await conn.execute("CREATE TABLE exams(id integer PRIMARY KEY)")
-            await conn.execute("CREATE TABLE exam_items(id integer, exam_id integer REFERENCES exams(id))")
-            await conn.execute("CREATE TABLE exam_cloud_consents(exam_id integer REFERENCES exams(id))")
-            await conn.execute("CREATE TABLE clinical_references(item_key text PRIMARY KEY)")
+            await conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)")
+            for number in (0, 8, 13, 16, 30):
+                migration = next((ROOT / "migrations").glob(f"{number:03d}_*.sql"))
+                await conn.execute(migration.read_text(encoding="utf-8"))
             await conn.execute("INSERT INTO medications(user_id,name,schedule_time) VALUES ('paciente','Teste','08:00')")
             sql = (ROOT / "migrations/044_remove_exam_storage.sql").read_text(encoding="utf-8")
             await conn.execute(sql)
