@@ -1,4 +1,4 @@
--- Rollback da migração 047: remove o registro da unidade de venda comercial.
+-- Rollback da migração 048: remove o registro da unidade de venda comercial.
 -- Só apaga as colunas sale_*; o preço normalizado na unidade canônica não é
 -- tocado, então nada do que o app e a comunidade consomem se perde.
 BEGIN;

@@ -205,6 +205,28 @@ class AdminEndpointsTests(unittest.TestCase):
         self.assertNotIn("segredo", response.text)
         self.conn.transaction.return_value.__aexit__.assert_awaited_once()
 
+    def test_legacy_put_discards_pack_it_cannot_redeclare(self):
+        """O endpoint legado por food_name não recebe embalagem: limpa a
+        anterior, senão sale_* ficaria órfão — e junto de um price_unit
+        trocado violaria o CHECK de dimensão da migração 048."""
+        response = self.client.put("/api/admin/grocery-prices/arroz-branco",
+                                   headers=self.headers, json={"price": 4.0, "price_unit": "un"})
+        self.assertEqual(response.status_code, 200)
+        sqls = [call.args[0] for call in self.conn.execute.call_args_list]
+        self.assertTrue(
+            any("sale_price=NULL" in sql and "sale_size=NULL" in sql and "sale_unit=NULL" in sql for sql in sqls),
+            f"nenhum UPDATE limpa sale_*: {sqls}")
+
+    def test_legacy_bulk_import_discards_pack_on_written_rows(self):
+        """O import legado também não recebe embalagem e limpa as linhas gravadas."""
+        rows = [{"food_name": "Arroz Branco", "price": "4,00"}]
+        response = self.client.post("/api/admin/grocery-prices/import-csv",
+                                    headers=self.headers, json=rows)
+        self.assertEqual(response.status_code, 200)
+        sqls = [call.args[0] for call in self.conn.execute.call_args_list]
+        self.assertTrue(any("sale_price=NULL" in sql for sql in sqls),
+                        f"nenhum UPDATE limpa sale_*: {sqls}")
+
 
 class CrudIngredientTests(unittest.TestCase):
     def setUp(self):
@@ -587,6 +609,24 @@ class Migration048ContractTests(unittest.TestCase):
         self.assertIn("price_unit = 'kg' AND sale_unit IN ('g', 'kg')", migration)
         self.assertIn("price_unit = 'L' AND sale_unit IN ('ml', 'L')", migration)
         self.assertIn("price_unit = 'un' AND sale_unit IN ('un', 'dz')", migration)
+
+    def test_no_migration_uses_invalid_drop_constraint_syntax(self):
+        """PostgreSQL só aceita IF EXISTS em DROP CONSTRAINT (não IF NOT EXISTS).
+
+        Esse erro derrubou o deploy da 048: o psql aborta a transação inteira
+        e o fallback asyncpg propaga a exceção, sem aplicar nada.
+        """
+        offenders = [f.name for f in self.migrations_dir.glob("*.sql")
+                     if "DROP CONSTRAINT IF NOT EXISTS" in f.read_text(encoding="utf-8")]
+        self.assertEqual(offenders, [], f"Migrations com sintaxe inválida: {offenders}")
+
+    def test_migration_048_drops_both_constraints_with_if_exists(self):
+        migration = (self.migrations_dir / "048_grocery_sale_unit.sql").read_text(encoding="utf-8")
+        self.assertIn("DROP CONSTRAINT IF EXISTS grocery_price_cache_sale_unit_check", migration)
+        self.assertIn("DROP CONSTRAINT IF EXISTS grocery_price_cache_sale_triplet_check", migration)
+        rollback = (self.migrations_dir / "048_grocery_sale_unit_rollback.sql").read_text(encoding="utf-8")
+        self.assertIn("DROP CONSTRAINT IF EXISTS grocery_price_cache_sale_triplet_check", rollback)
+        self.assertIn("DROP CONSTRAINT IF EXISTS grocery_price_cache_sale_unit_check", rollback)
 
 
 if __name__ == "__main__":

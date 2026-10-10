@@ -1,4 +1,4 @@
--- Migração 047: Registro da unidade de venda comercial do ingrediente.
+-- Migração 048: Registro da unidade de venda comercial do ingrediente.
 -- O preço continua gravado na unidade canônica do catálogo (kg, L ou un) para
 -- preservar app Android, médias da comunidade e enriquecimento. As colunas
 -- sale_* guardam COMO o administrador informou o preço (ex.: peça de 300 g),
@@ -25,7 +25,7 @@ ALTER TABLE grocery_price_cache ADD CONSTRAINT grocery_price_cache_sale_unit_che
   );
 
 -- 3. Unidade de venda sem tamanho não faz sentido: os três campos andam juntos
-ALTER TABLE grocery_price_cache DROP CONSTRAINT IF NOT EXISTS grocery_price_cache_sale_triplet_check;
+ALTER TABLE grocery_price_cache DROP CONSTRAINT IF EXISTS grocery_price_cache_sale_triplet_check;
 ALTER TABLE grocery_price_cache ADD CONSTRAINT grocery_price_cache_sale_triplet_check
   CHECK (
     (sale_price IS NULL AND sale_size IS NULL AND sale_unit IS NULL) OR

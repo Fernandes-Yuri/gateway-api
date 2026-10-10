@@ -177,6 +177,13 @@ async def import_grocery_prices(request: Request, mode: Literal["manual", "basel
                                 details.append({"food_name": name, "erro": "Preço manual preservado."})
                         valid = imported
                     for name, _price in valid:
+                        # Importação legada não recebe embalagem: descarta a
+                        # anterior para não deixar sale_* órfão junto de um
+                        # preço novo ou de um price_unit trocado (violaria o
+                        # CHECK de dimensão da migração 048).
+                        await conn.execute(
+                            "UPDATE grocery_price_cache SET sale_price=NULL, sale_size=NULL, sale_unit=NULL WHERE food_name=$1",
+                            name)
                         if units.get(name):
                             await conn.execute("UPDATE grocery_price_cache SET price_unit=$2 WHERE food_name=$1", name, units[name])
         except Exception:
@@ -275,6 +282,13 @@ async def update_grocery_price_manual(
         async with _state.db_pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(_MANUAL_UPSERT, food_name, Decimal(str(body.price)))
+                # Este endpoint não recebe embalagem, então descarta a anterior:
+                # manter sale_* junto de um price_unit trocado violaria o CHECK
+                # de dimensão, e manter junto de um preço novo mostraria um
+                # pacote que não corresponde mais ao valor gravado.
+                await conn.execute(
+                    "UPDATE grocery_price_cache SET sale_price=NULL, sale_size=NULL, sale_unit=NULL WHERE food_name=$1",
+                    food_name)
                 if body.price_unit:
                     await conn.execute("UPDATE grocery_price_cache SET price_unit=$2 WHERE food_name=$1", food_name, body.price_unit)
         return {"success": True, "food_name": food_name, "price": body.price}
