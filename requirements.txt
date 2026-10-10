@@ -42,3 +42,7 @@ firebase-admin>=6.5
 
 # Cerca elétrica / Linter (Fase A)
 ruff>=0.8.0
+
+# Testes de contrato HTTP e autorização de publicações
+pytest>=8.0
+pytest-asyncio>=0.24

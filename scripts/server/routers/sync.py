@@ -714,6 +714,53 @@ async def sync_social_post(p: SocialPostSyncDto, uid: str = Depends(firebase_uid
     return {"status": "success", "id": str(row["id"])}
 
 
+class SocialPostEditDto(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+
+    @field_validator("title")
+    @classmethod
+    def nonblank_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Informe o título da publicação")
+        return value
+
+
+async def mutate_social_post(post_id: uuid.UUID, uid: str, edit: Optional[SocialPostEditDto] = None):
+    if not _state.db_pool:
+        raise HTTPException(status_code=503, detail="Banco indisponível")
+    async with _state.db_pool.acquire() as conn:
+        async with conn.transaction():
+            post = await conn.fetchrow(
+                "SELECT user_id, is_visible FROM social_posts WHERE id = $1 FOR UPDATE", post_id,
+            )
+            if not post:
+                raise HTTPException(status_code=404, detail="Publicação não encontrada")
+            require_owner(uid, post["user_id"])
+            if edit is None:
+                await conn.execute("UPDATE social_posts SET is_visible = FALSE WHERE id = $1", post_id)
+                return {"status": "success", "id": str(post_id)}
+            if not post["is_visible"]:
+                raise HTTPException(status_code=404, detail="Publicação não encontrada")
+            row = await conn.fetchrow(
+                "UPDATE social_posts SET title = $2, description = $3, edited_at = NOW() "
+                "WHERE id = $1 RETURNING edited_at", post_id, edit.title, edit.description,
+            )
+    return {"status": "success", "id": str(post_id),
+            "edited_at": serialize_social_timestamp(row["edited_at"])}
+
+
+@router.patch("/api/sync/social-post/{post_id}")
+async def edit_social_post(post_id: uuid.UUID, p: SocialPostEditDto, uid: str = Depends(firebase_uid)):
+    return await mutate_social_post(post_id, uid, p)
+
+
+@router.delete("/api/sync/social-post/{post_id}")
+async def delete_social_post(post_id: uuid.UUID, uid: str = Depends(firebase_uid)):
+    return await mutate_social_post(post_id, uid)
+
+
 class CommunityNicknameDto(BaseModel):
     nickname: str = Field(default="", max_length=24)
 
@@ -761,7 +808,7 @@ async def get_social_feed(
     if not db_pool:
         return []
     query = """
-    SELECT sp.id, sp.user_id, sp.post_type, sp.title, sp.description, sp.created_at,
+    SELECT sp.id, sp.user_id, sp.post_type, sp.title, sp.description, sp.created_at, sp.edited_at,
            sp.visibility,
            p.full_name as user_name, p.community_nickname as user_nickname, p.avatar_identifier, p.photo_url,
            (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = sp.id) as reaction_count,
@@ -792,6 +839,7 @@ async def get_social_feed(
             d = dict(r)
             d["id"] = str(d["id"])
             d["created_at"] = serialize_social_timestamp(d["created_at"])
+            d["edited_at"] = serialize_social_timestamp(d["edited_at"]) if d.get("edited_at") else None
             result.append(d)
         return result
 
