@@ -560,7 +560,7 @@ class SaleUnitAdminRowTests(AdminRowTests):
         self.assertEqual(rows[0]["sale_unit_options"], ["kg", "g"])
 
     def test_legacy_row_without_sale_columns_is_tolerated(self):
-        """Linha anterior à migração 047, sem as colunas sale_*, não pode quebrar."""
+        """Linha anterior à migração 048, sem as colunas sale_*, não pode quebrar."""
         rows = build_admin_rows(
             [ingredient("queijo-mussarela", "Queijo Mussarela Fatiado", "kg")],
             [legacy("Queijo Mussarela Fatiado", "43.00", "kg", "manual")], [])
@@ -568,13 +568,13 @@ class SaleUnitAdminRowTests(AdminRowTests):
         self.assertEqual(rows[0]["sale_unit"], None)
 
 
-class Migration047ContractTests(unittest.TestCase):
+class Migration048ContractTests(unittest.TestCase):
     def setUp(self):
         self.migrations_dir = Path(__file__).resolve().parents[2] / "migrations"
 
-    def test_migration_047_and_rollback_exist_and_are_balanced(self):
-        migration = (self.migrations_dir / "047_grocery_sale_unit.sql").read_text(encoding="utf-8")
-        rollback = (self.migrations_dir / "047_grocery_sale_unit_rollback.sql").read_text(encoding="utf-8")
+    def test_migration_048_and_rollback_exist_and_are_balanced(self):
+        migration = (self.migrations_dir / "048_grocery_sale_unit.sql").read_text(encoding="utf-8")
+        rollback = (self.migrations_dir / "048_grocery_sale_unit_rollback.sql").read_text(encoding="utf-8")
         self.assertIn("BEGIN;", migration)
         self.assertIn("COMMIT;", migration)
         for column in ("sale_price", "sale_size", "sale_unit"):
@@ -582,8 +582,8 @@ class Migration047ContractTests(unittest.TestCase):
             self.assertIn(f"DROP COLUMN IF EXISTS {column}", rollback)
         self.assertIn("revision = revision + 1", migration)
 
-    def test_migration_047_defines_dimension_check(self):
-        migration = (self.migrations_dir / "047_grocery_sale_unit.sql").read_text(encoding="utf-8")
+    def test_migration_048_defines_dimension_check(self):
+        migration = (self.migrations_dir / "048_grocery_sale_unit.sql").read_text(encoding="utf-8")
         self.assertIn("price_unit = 'kg' AND sale_unit IN ('g', 'kg')", migration)
         self.assertIn("price_unit = 'L' AND sale_unit IN ('ml', 'L')", migration)
         self.assertIn("price_unit = 'un' AND sale_unit IN ('un', 'dz')", migration)
