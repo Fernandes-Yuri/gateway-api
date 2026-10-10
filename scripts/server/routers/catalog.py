@@ -9,6 +9,7 @@ import secrets
 import csv
 import io
 import json
+from asyncpg.exceptions import ForeignKeyViolationError
 from decimal import Decimal
 from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -476,6 +477,8 @@ async def import_ingredient_prices(request: Request, _auth=Depends(require_servi
 
 def _crud_error(exc: Exception) -> HTTPException:
     """Erro de CRUD em mensagem segura para o painel, sem vazar detalhe interno."""
+    if isinstance(exc, ForeignKeyViolationError):
+        return HTTPException(409, "Ingrediente ainda vinculado a outros registros. Desative-o em vez de excluir.")
     if isinstance(exc, LookupError):
         return HTTPException(404, str(exc))
     if isinstance(exc, PermissionError):
@@ -483,6 +486,85 @@ def _crud_error(exc: Exception) -> HTTPException:
     if isinstance(exc, ValueError):
         return HTTPException(422, str(exc))
     return HTTPException(500, "Falha na operação sobre o catálogo.")
+
+
+METADATA_COLUMNS = {"slug", "name", "unit", "active", "minimum", "step",
+                    "grams_per_unit", "group", "aliases", "food_ids"}
+EXPORT_PRICE_COLUMNS = {"source", "price_avg", "sale_price", "sale_size", "sale_unit"}
+
+
+def _parse_metadata_rows(raw, content_type):
+    if len(raw) > 1024 * 1024:
+        raise HTTPException(413, "Importação limitada a 1 MiB.")
+    try:
+        text = raw.decode("utf-8-sig")
+        if content_type == "application/json":
+            rows = json.loads(text)
+        else:
+            delimiter = next((sep for sep in (";", ",")
+                              if "slug" in next(csv.reader(io.StringIO(text), delimiter=sep), [])), None)
+            if delimiter is None:
+                raise ValueError("Cabeçalho precisa de slug.")
+            reader = csv.DictReader(io.StringIO(text), delimiter=delimiter, strict=True)
+            fields = reader.fieldnames or []
+            if len(fields) != len(set(fields)) or not set(fields) <= METADATA_COLUMNS | EXPORT_PRICE_COLUMNS:
+                raise ValueError("Cabeçalho contém colunas desconhecidas ou repetidas.")
+            rows = list(reader)
+        if not isinstance(rows, list) or not 1 <= len(rows) <= 5000:
+            raise ValueError("Informe entre 1 e 5000 linhas.")
+        result, seen = [], set()
+        for index, row in enumerate(rows, 1):
+            if not isinstance(row, dict) or not set(row) <= METADATA_COLUMNS | EXPORT_PRICE_COLUMNS:
+                raise ValueError(f"Linha {index}: colunas inválidas.")
+            slug = row.get("slug")
+            if not isinstance(slug, str) or not slug.strip() or slug.strip() in seen:
+                raise ValueError(f"Linha {index}: slug vazio ou repetido.")
+            slug = slug.strip()
+            seen.add(slug)
+            data = {k: v for k, v in row.items() if k in METADATA_COLUMNS - {"slug"} and v != ""}
+            for field in ("minimum", "step", "grams_per_unit"):
+                if isinstance(data.get(field), str):
+                    data[field] = float(data[field].replace(",", "."))
+            if isinstance(data.get("active"), str):
+                active = data["active"].strip().lower()
+                if active not in ("true", "false", "1", "0"):
+                    raise ValueError(f"Linha {index}: active deve ser true ou false.")
+                data["active"] = active in ("true", "1")
+            for field in ("aliases", "food_ids"):
+                if isinstance(data.get(field), str):
+                    data[field] = json.loads(data[field])
+            try:
+                ingredient_admin.validate_payload(data, partial=True)
+            except ValueError as exc:
+                raise ValueError(f"Linha {index}: {exc}") from exc
+            result.append((slug, data))
+        return result
+    except (ValueError, TypeError, UnicodeError, csv.Error) as exc:
+        raise HTTPException(422, f"CSV ou JSON de metadados inválido: {exc}") from exc
+
+
+@router.post("/api/admin/grocery-ingredients/import")
+async def import_grocery_ingredients(request: Request, _auth=Depends(require_service_token)):
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco de dados indisponível.")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 1024 * 1024:
+            raise HTTPException(413, "Importação limitada a 1 MiB.")
+    rows = _parse_metadata_rows(bytes(raw), request.headers.get("content-type", "").split(";", 1)[0].lower())
+    try:
+        async with _state.db_pool.acquire() as conn:
+            async with conn.transaction():
+                for index, (slug, data) in enumerate(rows, 1):
+                    try:
+                        await ingredient_admin.update_ingredient(conn, slug, data, bump=False)
+                    except (ValueError, LookupError) as exc:
+                        raise ValueError(f"Linha {index}: {exc}") from exc
+                revision = await ingredient_admin.bump_revision(conn)
+        return {"importados": len(rows), "erros": 0, "detalhes": [], "revision": revision}
+    except Exception as exc:
+        raise _crud_error(exc) from exc
 
 
 @router.post("/api/admin/grocery-ingredients")

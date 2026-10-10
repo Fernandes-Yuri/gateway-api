@@ -17,7 +17,7 @@ ALLOWED_UNITS = ("kg", "L", "un")
 MAX_NAME = 200
 MAX_ALIAS = 100
 MAX_ALIASES = 20
-DETAIL_FIELDS = ("aliases", "food_ids", "grams_per_unit", "minimum")
+DETAIL_FIELDS = ("aliases", "food_ids", "grams_per_unit", "minimum", "step")
 
 
 FORBIDDEN_NAME_PATTERNS = [
@@ -106,7 +106,7 @@ def validate_payload(data, *, partial=False):
     """Valida o corpo de criação/edição e devolve apenas os campos aceitos."""
     if not isinstance(data, dict):
         raise ValueError("Envie um objeto com os campos do ingrediente.")
-    allowed = {"name", "unit", "aliases", "grams_per_unit", "minimum", "group", "food_ids", "active"}
+    allowed = {"name", "unit", "aliases", "grams_per_unit", "minimum", "step", "group", "food_ids", "active"}
     unknown = set(data) - allowed
     if unknown:
         raise ValueError("Campos desconhecidos: " + ", ".join(sorted(unknown)))
@@ -125,6 +125,11 @@ def validate_payload(data, *, partial=False):
         result["grams_per_unit"] = _clean_number(data["grams_per_unit"], "Gramas por unidade", 100000)
     if "minimum" in data:
         result["minimum"] = _clean_number(data["minimum"], "Quantidade mínima", 100000)
+    if "step" in data:
+        value = _clean_number(data["step"], "Passo de compra", 100000)
+        if value is None or value < 1 or not value.is_integer():
+            raise ValueError("Passo de compra deve ser um inteiro entre 1 e 100000.")
+        result["step"] = int(value)
     if "group" in data:
         result["group"] = _clean_text(data["group"], "Grupo", 80) if data["group"] else None
     if "food_ids" in data:
@@ -195,7 +200,7 @@ async def _check_food_ids(conn, food_ids):
 
 
 async def _load_row(conn, slug):
-    row = await conn.fetchrow("SELECT slug,name,unit,details,active FROM grocery_ingredients WHERE slug=$1", slug)
+    row = await conn.fetchrow("SELECT slug,name,unit,details,active FROM grocery_ingredients WHERE slug=$1 FOR UPDATE", slug)
     if row is None:
         raise LookupError("Ingrediente não encontrado.")
     return row
@@ -217,7 +222,7 @@ async def create_ingredient(conn, data):
             "revision": revision, "details": details, "avisos": []}
 
 
-async def update_ingredient(conn, slug, data):
+async def update_ingredient(conn, slug, data, *, bump=True):
     payload = validate_payload(data, partial=True)
     current = await _load_row(conn, slug)
     current_details = as_json(current["details"]) or {}
@@ -238,7 +243,7 @@ async def update_ingredient(conn, slug, data):
     await conn.execute(
         "UPDATE grocery_ingredients SET name=$2, unit=$3, details=$4::jsonb, active=$5 WHERE slug=$1",
         slug, name, unit, _as_json(details), active)
-    revision = await bump_revision(conn)
+    revision = await bump_revision(conn) if bump else None
     print(f"[ADMIN-CATALOG] Ingrediente editado: {slug} ({name}) campos={sorted(payload)}")
     return {"slug": slug, "name": name, "unit": unit, "active": active, "revision": revision,
             "details": details, "avisos": avisos}
@@ -250,7 +255,12 @@ async def delete_ingredient(conn, slug):
     total = await conn.fetchval("SELECT COUNT(*) FROM grocery_price_contributions WHERE ingredient_slug=$1", slug)
     if total:
         raise PermissionError(f"Ingrediente com {total} contribuição(ões) de usuários. Desative-o em vez de excluir, para preservar o histórico.")
-    await conn.execute("DELETE FROM grocery_price_cache WHERE food_name=$1 AND source='manual'", current["name"])
+    await conn.execute("""INSERT INTO grocery_price_cache_history
+        (food_name, ingredient_slug, price_avg, price_min, price_max, source, price_unit, reason)
+        SELECT food_name, ingredient_slug, price_avg, price_min, price_max, source, price_unit,
+               'ingredient_deleted'
+        FROM grocery_price_cache WHERE ingredient_slug=$1""", slug)
+    await conn.execute("DELETE FROM grocery_price_cache WHERE ingredient_slug=$1", slug)
     await conn.execute("DELETE FROM grocery_ingredients WHERE slug=$1", slug)
     revision = await bump_revision(conn)
     print(f"[ADMIN-CATALOG] Ingrediente excluído: {slug} ({current['name']})")

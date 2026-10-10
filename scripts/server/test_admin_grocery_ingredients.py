@@ -338,6 +338,100 @@ class CrudIngredientTests(unittest.TestCase):
         self.assertTrue(any("DELETE FROM grocery_price_cache" in sql for sql in statements))
         self.assertTrue(any("DELETE FROM grocery_ingredients" in sql for sql in statements))
 
+    def test_delete_archives_estimated_cache_by_slug(self):
+        self.conn.fetchrow.return_value = CATALOG[3]
+        self.conn.fetchval.side_effect = [0, 12]
+        linked = {"source": "estimated", "ingredient_slug": "arroz-branco"}
+
+        async def execute(sql, *args):
+            if "DELETE FROM grocery_price_cache" in sql:
+                self.assertIn("ingredient_slug=$1", sql)
+                self.assertNotIn("source=", sql)
+                self.assertEqual(args, ("arroz-branco",))
+                linked.clear()
+            if "DELETE FROM grocery_ingredients" in sql:
+                self.assertNotIn("FOR UPDATE", sql)
+            if "DELETE FROM grocery_ingredients" in sql and linked:
+                from asyncpg.exceptions import ForeignKeyViolationError
+                raise ForeignKeyViolationError()
+            return "OK"
+
+        self.conn.execute.side_effect = execute
+        response = self.client.delete("/api/admin/grocery-ingredients/arroz-branco", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("grocery_price_cache_history", self.conn.execute.call_args_list[0].args[0])
+        self.assertIn("ingredient_deleted", self.conn.execute.call_args_list[0].args[0])
+
+    def test_delete_foreign_key_conflict_is_actionable(self):
+        from asyncpg.exceptions import ForeignKeyViolationError
+        self.conn.fetchrow.return_value = CATALOG[3]
+        self.conn.fetchval.return_value = 0
+        self.conn.execute.side_effect = ForeignKeyViolationError()
+        response = self.client.delete("/api/admin/grocery-ingredients/arroz-branco", headers=self.headers)
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Desative-o", response.json()["detail"])
+
+    def test_step_create_and_edit(self):
+        response = self.create({"name": "Novo Item", "unit": "kg", "step": 150})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["details"]["step"], 150)
+        self.conn.fetchrow.return_value = CATALOG[0]
+        response = self.client.patch("/api/admin/grocery-ingredients/feijao-carioca",
+                                     headers=self.headers, json={"step": 250})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["details"]["step"], 250)
+
+    def test_step_invalid_values(self):
+        for value in (0, -1, 1.5, True, None, 100001, float("inf"), float("nan")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    catalog.ingredient_admin.validate_payload({"step": value}, partial=True)
+
+    def test_metadata_import_csv_and_single_revision(self):
+        self.conn.fetchrow.return_value = CATALOG[0]
+        response = self.client.post("/api/admin/grocery-ingredients/import",
+                                   headers={**self.headers, "Content-Type": "text/csv"},
+                                   content="slug;step;minimum;active;grams_per_unit;price_avg\nfeijao-carioca;250;500;false;1,5;9,50\npao-frances;1;2;true;;")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["importados"], 2)
+        self.conn.fetchval.assert_awaited_once()
+        self.assertEqual(json.loads(self.conn.execute.call_args_list[0].args[4])["step"], 250)
+        self.assertFalse(self.conn.execute.call_args_list[0].args[5])
+
+    def test_metadata_import_invalid_row_writes_nothing(self):
+        response = self.client.post("/api/admin/grocery-ingredients/import", headers=self.headers,
+                                   json=[{"slug": "feijao-carioca", "step": 250}, {"slug": "pao-frances", "step": 0}])
+        self.assertEqual(response.status_code, 422)
+        self.conn.execute.assert_not_awaited()
+
+    def test_metadata_import_db_failure_rolls_back(self):
+        self.conn.fetchrow.side_effect = [CATALOG[0], None]
+        response = self.client.post("/api/admin/grocery-ingredients/import", headers=self.headers,
+                                   json=[{"slug": "feijao-carioca", "step": 250}, {"slug": "missing", "step": 1}])
+        self.assertEqual(response.status_code, 422)
+        self.conn.execute.assert_awaited_once()
+        self.conn.fetchval.assert_not_awaited()
+        exit_args = self.conn.transaction.return_value.__aexit__.call_args.args
+        self.assertIsNotNone(exit_args[0])
+
+    def test_metadata_parser_limits_and_headers(self):
+        for raw in (b"name;step\nNome;1", b"slug;surpresa\na;1", b"slug;step;step\na;1;2",
+                    b"slug;step\na;1;extra", b"[]",
+                    json.dumps([{"slug": str(i), "step": 1} for i in range(5001)]).encode()):
+            with self.subTest(raw=raw[:80]), self.assertRaises(catalog.HTTPException) as error:
+                catalog._parse_metadata_rows(raw, "application/json" if raw.startswith(b"[") else "text/csv")
+            self.assertEqual(error.exception.status_code, 422)
+        with self.assertRaises(catalog.HTTPException) as error:
+            catalog._parse_metadata_rows(b"x" * (1024 * 1024 + 1), "text/csv")
+        self.assertEqual(error.exception.status_code, 413)
+
+    def test_admin_rows_include_purchase_metadata(self):
+        item = {**CATALOG[0], "step": 250, "minimum": 500, "grams_per_unit": 1000}
+        row = build_admin_rows([item], [], [])[0]
+        self.assertEqual(row["step"], 250)
+        self.assertEqual(row["minimum"], 500)
+        self.assertEqual(row["grams_per_unit"], 1000)
+
     def test_create_rejects_preparation_terms_in_name(self):
         for bad_name in ["Beterraba Cozida", "Peito de Frango Desfiado", "Cenoura Ralada Crua",
                          "Carne Moída", "Ovo Mexido", "Batata no Vapor", "Tomate Fatiado"]:
