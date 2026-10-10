@@ -15,8 +15,9 @@ def pool_for(conn):
     return pool
 
 
-def ingredient(slug="test", name="Ingrediente", unit="kg"):
-    return dict(slug=slug, name=name, unit=unit, details={"aliases": ["Preparo de teste"], "food_ids": ["remote"], "step": 500, "minimum": 500})
+def ingredient(slug="test", name="Ingrediente", unit="kg", active=True):
+    return dict(slug=slug, name=name, unit=unit, active=active,
+                details={"aliases": ["Preparo de teste"], "food_ids": ["remote"], "step": 500, "minimum": 500})
 
 
 class IngredientCatalogTests(unittest.IsolatedAsyncioTestCase):
@@ -28,6 +29,7 @@ class IngredientCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["name"], "Ingrediente novo")
         self.assertIsNone(rows[0]["price_avg"])
         self.assertEqual(rows[0]["source"], "unavailable")
+        self.assertTrue(rows[0]["active"])
         self.assertIn("WHERE active", conn.fetch.call_args_list[0].args[0])
 
     async def test_prefers_matching_community_unit_and_explicit_manual_price(self):
@@ -48,6 +50,18 @@ class IngredientCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["version"], 7)
         self.assertEqual(snapshot["foods"][0]["shoppingComponents"], ["test"])
         conn.transaction.assert_called_once_with(readonly=True, isolation="repeatable_read")
+
+    async def test_matches_price_by_ingredient_slug_even_when_food_name_differs(self):
+        conn = AsyncMock(); pool = pool_for(conn)
+        # food_name is a dish name, but ingredient_slug directly points to the ingredient slug "test"
+        legacy_row = dict(food_name="Beterraba Cozida em Cubos", ingredient_slug="test",
+                          price_avg=Decimal("8.50"), price_min=Decimal("8.00"), price_max=Decimal("9.00"),
+                          source="manual", price_unit="kg", updated_at=datetime.now(timezone.utc))
+        conn.fetch.side_effect = [[ingredient(slug="test", name="Beterraba")], [legacy_row], []]
+        rows = await prices_for_ingredients(pool, "averages")
+        self.assertEqual(rows[0]["name"], "Beterraba")
+        self.assertEqual(rows[0]["price_avg"], 8.5)
+        self.assertEqual(rows[0]["source"], "manual")
 
     async def test_contributions_resolve_active_database_aliases(self):
         conn = AsyncMock(); conn.fetch.return_value = [ingredient()]

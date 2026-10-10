@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 
 from security_defense import get_client_ip
 from api_identity import firebase_uid
-from services.ingredient_catalog import nutrition_snapshot, resolve_ingredient
+from services import ingredient_admin
+from services.ingredient_catalog import admin_price_rows, load_ingredients, key, nutrition_snapshot, resolve_ingredient
 from services.grocery_contributions import GroceryPriceContribution, AVERAGES_SQL, UPSERT_SQL
 
 router = APIRouter()
@@ -68,6 +69,11 @@ class ManualPriceUpdate(BaseModel):
     price: float = Field(..., gt=0, le=99999999.99, multiple_of=0.01, allow_inf_nan=False, description="Preço unitário ou de embalagem em Reais (BRL)")
 
 
+class IngredientPriceUpdate(BaseModel):
+    price: float = Field(..., gt=0, le=99999999.99, multiple_of=0.01, allow_inf_nan=False, description="Preço por unidade do ingrediente (kg, L ou un) em Reais (BRL)")
+    price_unit: Optional[Literal["kg", "L", "un"]] = None
+
+
 _MANUAL_UPSERT = """
 INSERT INTO grocery_price_cache
     (food_name, search_term, price_avg, price_min, price_max, source, results_count, needs_manual, updated_at)
@@ -76,6 +82,19 @@ ON CONFLICT (food_name) DO UPDATE SET
     price_avg = EXCLUDED.price_avg, price_min = EXCLUDED.price_min,
     price_max = EXCLUDED.price_max, source = 'manual', results_count = 0,
     needs_manual = FALSE, price_unit = NULL, updated_at = now()
+"""
+
+# Preço manual ancorado no ingrediente do catálogo: a chave é o nome canônico e
+# a unidade do ingrediente, para o enriquecimento do app reconhecer a linha.
+_MANUAL_INGREDIENT_UPSERT = """
+INSERT INTO grocery_price_cache
+    (food_name, search_term, price_avg, price_min, price_max, source, results_count, needs_manual, updated_at, price_unit, ingredient_slug)
+VALUES ($1, $2, $3, $3, $3, 'manual', 0, FALSE, now(), $4, $2)
+ON CONFLICT (food_name) DO UPDATE SET
+    price_avg = EXCLUDED.price_avg, price_min = EXCLUDED.price_min,
+    price_max = EXCLUDED.price_max, source = 'manual', results_count = 0,
+    needs_manual = FALSE, price_unit = EXCLUDED.price_unit,
+    ingredient_slug = EXCLUDED.ingredient_slug, updated_at = now()
 """
 
 _BASELINE_UPSERT = _MANUAL_UPSERT.replace("'manual'", "'estimated'") + "\nWHERE grocery_price_cache.source <> 'manual' RETURNING food_name"
@@ -201,34 +220,14 @@ async def list_admin_grocery_prices(
     request: Request,
     _auth=Depends(require_service_token)
 ):
-    """Lista todos os itens com métricas de preço, fonte e status."""
+    """Lista o catálogo de ingredientes com preço resolvido (manual > comunidade > estimado)."""
     if not _state.db_pool:
         raise HTTPException(503, "Banco de dados indisponível.")
 
     try:
         async with _state.db_pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT food_name, search_term, price_avg, price_min, price_max,
-                       source, results_count, updated_at, needs_manual
-                FROM grocery_price_cache
-                ORDER BY needs_manual DESC, food_name ASC
-                """
-            )
-        items = [
-            {
-                "food_name": r["food_name"],
-                "search_term": r["search_term"],
-                "price_avg": float(r["price_avg"]) if r["price_avg"] is not None else None,
-                "price_min": float(r["price_min"]) if r["price_min"] is not None else None,
-                "price_max": float(r["price_max"]) if r["price_max"] is not None else None,
-                "source": r["source"],
-                "results_count": r["results_count"],
-                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else "",
-                "needs_manual": bool(r["needs_manual"]),
-            }
-            for r in rows
-        ]
+            async with conn.transaction(readonly=True, isolation="repeatable_read"):
+                items = await admin_price_rows(conn, AVERAGES_SQL)
         return {"success": True, "total": len(items), "items": items}
     except Exception as e:
         raise HTTPException(500, f"Erro ao consultar itens: {e}")
@@ -239,35 +238,14 @@ async def list_missing_grocery_prices(
     request: Request,
     _auth=Depends(require_service_token)
 ):
-    """Lista itens sem preço ou marcados como pendentes de inserção manual."""
+    """Lista ingredientes sem preço resolvido, pendentes de definição manual."""
     if not _state.db_pool:
         raise HTTPException(503, "Banco de dados indisponível.")
 
     try:
         async with _state.db_pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT food_name, search_term, price_avg, price_min, price_max,
-                       source, results_count, updated_at, needs_manual
-                FROM grocery_price_cache
-                WHERE needs_manual = TRUE OR price_avg IS NULL
-                ORDER BY food_name ASC
-                """
-            )
-        items = [
-            {
-                "food_name": r["food_name"],
-                "search_term": r["search_term"],
-                "price_avg": float(r["price_avg"]) if r["price_avg"] is not None else None,
-                "price_min": float(r["price_min"]) if r["price_min"] is not None else None,
-                "price_max": float(r["price_max"]) if r["price_max"] is not None else None,
-                "source": r["source"],
-                "results_count": r["results_count"],
-                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else "",
-                "needs_manual": bool(r["needs_manual"]),
-            }
-            for r in rows
-        ]
+            async with conn.transaction(readonly=True, isolation="repeatable_read"):
+                items = [row for row in await admin_price_rows(conn, AVERAGES_SQL) if row["needs_manual"]]
         return {"success": True, "total": len(items), "items": items}
     except Exception as e:
         raise HTTPException(500, f"Erro ao consultar pendências: {e}")
@@ -293,6 +271,186 @@ async def update_grocery_price_manual(
         return {"success": True, "food_name": food_name, "price": body.price}
     except Exception as e:
         raise HTTPException(500, f"Erro ao atualizar preço manual: {e}")
+
+
+@router.put("/api/admin/grocery-prices/ingredient/{slug}")
+async def update_ingredient_price_manual(
+    slug: str,
+    body: IngredientPriceUpdate,
+    request: Request,
+    _auth=Depends(require_service_token)
+):
+    """Preço manual por ingrediente do catálogo, sempre na unidade dele (kg, L ou un)."""
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco de dados indisponível.")
+
+    try:
+        async with _state.db_pool.acquire() as conn:
+            async with conn.transaction():
+                try:
+                    ingredient = await resolve_ingredient(conn, slug)
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc))
+                if body.price_unit and body.price_unit != ingredient["unit"]:
+                    raise HTTPException(422, f"Ingrediente medido em {ingredient['unit']}; corrija a unidade e o preço.")
+                await conn.execute(_MANUAL_INGREDIENT_UPSERT, ingredient["name"], slug,
+                                   Decimal(str(body.price)), ingredient["unit"])
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, "Erro ao atualizar preço manual.")
+    return {"success": True, "slug": ingredient["slug"], "food_name": ingredient["name"],
+            "price": body.price, "unit": ingredient["unit"]}
+
+
+async def _parse_price_rows(raw, content_type):
+    """Extrai linhas {referencia, price, price_unit} de CSV UTF-8 ou lista JSON."""
+    if len(raw) > 1024 * 1024:
+        raise HTTPException(413, "Importação limitada a 1 MiB.")
+    try:
+        text = raw.decode("utf-8-sig")
+        if content_type == "application/json":
+            rows = json.loads(text)
+            if not isinstance(rows, list):
+                raise ValueError("Esperada uma lista JSON")
+        else:
+            reference_columns = (["slug", "price"], ["food_name", "price"], ["price", "slug"],
+                                 ["price", "food_name"], ["slug", "price", "price_unit"])
+            delimiter = next((sep for sep in (",", ";")
+                              if next(csv.reader(io.StringIO(text), delimiter=sep), []) in reference_columns), None)
+            if delimiter is None:
+                raise ValueError("Cabeçalho esperado: slug,price (ou food_name,price)")
+            rows = list(csv.DictReader(io.StringIO(text), delimiter=delimiter, strict=True))
+        if not rows or len(rows) > 5000:
+            raise ValueError("Informe entre 1 e 5000 linhas")
+    except (ValueError, UnicodeError, csv.Error):
+        raise HTTPException(422, "CSV ou JSON inválido. Use slug e price.")
+    return rows
+
+
+@router.post("/api/admin/grocery-prices/import-ingredients")
+async def import_ingredient_prices(request: Request, _auth=Depends(require_service_token)):
+    """Importa preços manuais em lote por ingrediente (slug ou nome), na unidade do catálogo."""
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco de dados indisponível.")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 1024 * 1024:
+            raise HTTPException(413, "Importação limitada a 1 MiB.")
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    rows = await _parse_price_rows(bytes(raw), content_type)
+
+    valid, details, seen = [], [], set()
+    try:
+        async with _state.db_pool.acquire() as conn:
+            ingredients = await load_ingredients(conn)
+            catalog = {key(item["slug"]): item for item in ingredients}
+            catalog.update({key(item["name"]): item for item in ingredients})
+            for index, row in enumerate(rows, 1):
+                try:
+                    if not isinstance(row, dict):
+                        raise ValueError("Linha inválida")
+                    reference = row.get("slug") or row.get("food_name")
+                    if not isinstance(reference, str) or not reference.strip():
+                        raise ValueError("Informe o slug ou o nome do ingrediente")
+                    ingredient = catalog.get(key(reference.strip()))
+                    if ingredient is None:
+                        raise ValueError("Ingrediente fora do catálogo ativo")
+                    if ingredient["slug"] in seen:
+                        raise ValueError("Ingrediente repetido")
+                    value = row.get("price")
+                    if isinstance(value, bool) or row.get(None) is not None:
+                        raise ValueError("Preço ou colunas inválidos")
+                    if isinstance(value, str):
+                        value = value.strip().replace(",", ".")
+                    model = ManualPriceUpdate(price=value, price_unit=row.get("price_unit"))
+                    if model.price_unit and model.price_unit != ingredient["unit"]:
+                        raise ValueError(f"Unidade do catálogo é {ingredient['unit']}")
+                    valid.append((ingredient["name"], ingredient["slug"],
+                                  Decimal(str(model.price)), ingredient["unit"]))
+                    seen.add(ingredient["slug"])
+                except (ValueError, TypeError):
+                    details.append({"linha": index, "erro": "Ingrediente, preço ou unidade inválidos."})
+        if valid:
+            async with _state.db_pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.executemany(_MANUAL_INGREDIENT_UPSERT, valid)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, "Falha ao importar preços; nenhuma linha do lote foi gravada.")
+    print(f"[ADMIN-CATALOG] Importação ingredientes: importados={len(valid)} erros={len(details)}")
+    return {"importados": len(valid), "erros": len(details), "detalhes": details}
+
+
+# ---- CRUD do catálogo de ingredientes (webservice) ------------------------
+
+def _crud_error(exc: Exception) -> HTTPException:
+    """Erro de CRUD em mensagem segura para o painel, sem vazar detalhe interno."""
+    if isinstance(exc, LookupError):
+        return HTTPException(404, str(exc))
+    if isinstance(exc, PermissionError):
+        return HTTPException(409, str(exc))
+    if isinstance(exc, ValueError):
+        return HTTPException(422, str(exc))
+    return HTTPException(500, "Falha na operação sobre o catálogo.")
+
+
+@router.post("/api/admin/grocery-ingredients")
+async def create_grocery_ingredient(request: Request, _auth=Depends(require_service_token)):
+    """Cria um ingrediente novo no catálogo da lista de compras."""
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco de dados indisponível.")
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(422, "Corpo JSON inválido.")
+    try:
+        async with _state.db_pool.acquire() as conn:
+            async with conn.transaction():
+                item = await ingredient_admin.create_ingredient(conn, data)
+        return {"success": True, "item": item}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _crud_error(exc)
+
+
+@router.patch("/api/admin/grocery-ingredients/{slug}")
+async def update_grocery_ingredient(slug: str, request: Request, _auth=Depends(require_service_token)):
+    """Edita nome, unidade, metadados ou situação ativo/inativo de um ingrediente."""
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco de dados indisponível.")
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(422, "Corpo JSON inválido.")
+    try:
+        async with _state.db_pool.acquire() as conn:
+            async with conn.transaction():
+                item = await ingredient_admin.update_ingredient(conn, slug, data)
+        return {"success": True, "item": item}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _crud_error(exc)
+
+
+@router.delete("/api/admin/grocery-ingredients/{slug}")
+async def delete_grocery_ingredient(slug: str, request: Request, _auth=Depends(require_service_token)):
+    """Excluí definitivamente; bloqueado quando há contribuições de usuários."""
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco de dados indisponível.")
+    try:
+        async with _state.db_pool.acquire() as conn:
+            async with conn.transaction():
+                item = await ingredient_admin.delete_ingredient(conn, slug)
+        return {"success": True, "item": item}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _crud_error(exc)
 
 
 @router.post("/api/admin/grocery-prices/refresh")

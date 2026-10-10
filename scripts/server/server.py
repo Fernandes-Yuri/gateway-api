@@ -538,7 +538,7 @@ async def startup():
             retention_scheduler.add_job(
                 _price_cascade_job,
                 CronTrigger(day_of_week="mon", hour=3, minute=0, timezone="America/Sao_Paulo"),
-                id="meli_grocery_price_weekly", replace_existing=True, max_instances=1, coalesce=True,
+                id="grocery_price_cascade_weekly", replace_existing=True, max_instances=1, coalesce=True,
             )
             print("[Scheduler] Rotinas pró-ativas registradas: 09h00, 14h30, 20h30. Job semanal IPCA registrado: Seg 03h00.")
             retention_scheduler.start()
