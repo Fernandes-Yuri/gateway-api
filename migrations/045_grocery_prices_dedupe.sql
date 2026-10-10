@@ -58,13 +58,16 @@ WHERE c.ingredient_slug IS NULL
   );
 
 -- 4d. Casamento através da ponte food_ids / food_catalog
+-- A tabela alvo do UPDATE (c) nao pode ser referenciada no ON-clause de um
+-- JOIN do FROM (erro: "invalid reference to FROM-clause entry"). Por isso a
+-- ligacao g<->f vive no ON e a comparacao com c.food_name vai para o WHERE.
 UPDATE grocery_price_cache c
 SET ingredient_slug = g.slug
 FROM grocery_ingredients g
-JOIN food_catalog f ON lower(trim(f.name)) = lower(trim(c.food_name))
+JOIN food_catalog f ON g.details->'food_ids' ? f.remote_id
 WHERE c.ingredient_slug IS NULL
   AND g.details ? 'food_ids'
-  AND g.details->'food_ids' ? f.remote_id;
+  AND lower(trim(f.name)) = lower(trim(c.food_name));
 
 -- 4e. Casamento através de shoppingComponents em food_catalog
 UPDATE grocery_price_cache c
