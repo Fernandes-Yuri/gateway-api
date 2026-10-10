@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field
 from security_defense import get_client_ip
 from api_identity import firebase_uid
 from services import ingredient_admin
-from services.ingredient_catalog import admin_price_rows, load_ingredients, key, nutrition_snapshot, resolve_ingredient
+from services.ingredient_catalog import (admin_price_rows, load_ingredients, key, nutrition_snapshot,
+                                        resolve_ingredient, sale_to_canonical, sale_unit_allowed,
+                                        sale_unit_options)
 from services.grocery_contributions import GroceryPriceContribution, AVERAGES_SQL, UPSERT_SQL
 
 router = APIRouter()
@@ -72,6 +74,9 @@ class ManualPriceUpdate(BaseModel):
 class IngredientPriceUpdate(BaseModel):
     price: float = Field(..., gt=0, le=99999999.99, multiple_of=0.01, allow_inf_nan=False, description="Preço por unidade do ingrediente (kg, L ou un) em Reais (BRL)")
     price_unit: Optional[Literal["kg", "L", "un"]] = None
+    sale_price: Optional[float] = Field(default=None, gt=0, le=99999999.99, multiple_of=0.01, allow_inf_nan=False, description="Preço da embalagem comercial em Reais (BRL)")
+    sale_size: Optional[float] = Field(default=None, gt=0, le=1000000, allow_inf_nan=False, description="Quantidade na embalagem comercial (ex.: 300 para 300 g)")
+    sale_unit: Optional[Literal["g", "kg", "ml", "L", "un", "dz"]] = None
 
 
 _MANUAL_UPSERT = """
@@ -86,14 +91,19 @@ ON CONFLICT (food_name) DO UPDATE SET
 
 # Preço manual ancorado no ingrediente do catálogo: a chave é o nome canônico e
 # a unidade do ingrediente, para o enriquecimento do app reconhecer a linha.
+# $5..$7 são a embalagem comercial informada pelo administrador (opcional);
+# price_avg continua na unidade canônica, para não desalinhar app e comunidade.
 _MANUAL_INGREDIENT_UPSERT = """
 INSERT INTO grocery_price_cache
-    (food_name, search_term, price_avg, price_min, price_max, source, results_count, needs_manual, updated_at, price_unit)
-VALUES ($1, $2, $3, $3, $3, 'manual', 0, FALSE, now(), $4)
+    (food_name, search_term, price_avg, price_min, price_max, source, results_count, needs_manual, updated_at, price_unit,
+     sale_price, sale_size, sale_unit)
+VALUES ($1, $2, $3, $3, $3, 'manual', 0, FALSE, now(), $4, $5, $6, $7)
 ON CONFLICT (food_name) DO UPDATE SET
     price_avg = EXCLUDED.price_avg, price_min = EXCLUDED.price_min,
     price_max = EXCLUDED.price_max, source = 'manual', results_count = 0,
-    needs_manual = FALSE, price_unit = EXCLUDED.price_unit, updated_at = now()
+    needs_manual = FALSE, price_unit = EXCLUDED.price_unit, updated_at = now(),
+    sale_price = EXCLUDED.sale_price, sale_size = EXCLUDED.sale_size,
+    sale_unit = EXCLUDED.sale_unit
 """
 
 _BASELINE_UPSERT = _MANUAL_UPSERT.replace("'manual'", "'estimated'") + "\nWHERE grocery_price_cache.source <> 'manual' RETURNING food_name"
@@ -272,6 +282,59 @@ async def update_grocery_price_manual(
         raise HTTPException(500, f"Erro ao atualizar preço manual: {e}")
 
 
+def _sale_triplet(body):
+    """Campos de embalagem juntos ou ausentes; devolve a tupla normalizada.
+
+    A embalagem é opcional, mas os três campos andam em combo: preço de
+    embalagem sem tamanho ou unidade não dá para converter.
+    """
+    provided = [body.sale_price is not None, body.sale_size is not None, body.sale_unit is not None]
+    if any(provided) and not all(provided):
+        raise ValueError("Informe preço, tamanho e unidade da embalagem juntos, ou nenhum deles.")
+    if not all(provided):
+        return None, None, None
+    return Decimal(str(body.sale_price)), Decimal(str(body.sale_size)), body.sale_unit
+
+
+def _import_sale_triplet(row, ingredient):
+    """Extrai a embalagem de uma linha de importação (CSV ou JSON).
+
+    Aceita vírgula como separador decimal, igual ao preço. Os três campos
+    andam juntos ou ausentes, e a unidade precisa caber na dimensão do
+    ingrediente — o mesmo contrato do PUT individual.
+    """
+    raw_price = row.get("sale_price")
+    raw_size = row.get("sale_size")
+    sale_unit = row.get("sale_unit")
+    provided = [v is not None and str(v).strip() != "" for v in (raw_price, raw_size, sale_unit)]
+    if not any(provided):
+        return None, None, None
+    if not all(provided):
+        raise ValueError("Informe preço, tamanho e unidade da embalagem juntos.")
+    sale_price = Decimal(str(raw_price).strip().replace(",", "."))
+    sale_size = Decimal(str(raw_size).strip().replace(",", "."))
+    sale_unit = str(sale_unit).strip()
+    if not sale_unit_allowed(ingredient["unit"], sale_unit):
+        raise ValueError(f"Unidade de venda deve ser uma de {', '.join(sale_unit_options(ingredient['unit']))}.")
+    return sale_price, sale_size, sale_unit
+
+
+def _normalized_price(body, ingredient, sale_price, sale_size, sale_unit):
+    """Preço na unidade canônica do ingrediente.
+
+    Com embalagem declarada, o valor gravado vem da conversão (fonte de
+    verdade é o que o admin digitou para o pacote), não do `price` enviado
+    pelo cliente, que pode trazer arredondamento do navegador.
+    """
+    if sale_unit is None:
+        return Decimal(str(body.price))
+    factor = sale_to_canonical(sale_size, sale_unit, ingredient["unit"])
+    normalized = sale_price / factor
+    if normalized <= 0 or normalized > Decimal("99999999.99"):
+        raise ValueError("Preço da embalagem converte para um valor fora do intervalo aceito.")
+    return normalized.quantize(Decimal("0.01"))
+
+
 @router.put("/api/admin/grocery-prices/ingredient/{slug}")
 async def update_ingredient_price_manual(
     slug: str,
@@ -279,7 +342,7 @@ async def update_ingredient_price_manual(
     request: Request,
     _auth=Depends(require_service_token)
 ):
-    """Preço manual por ingrediente do catálogo, sempre na unidade dele (kg, L ou un)."""
+    """Preço manual por ingrediente, na unidade canônica dele ou via embalagem comercial."""
     if not _state.db_pool:
         raise HTTPException(503, "Banco de dados indisponível.")
 
@@ -292,8 +355,13 @@ async def update_ingredient_price_manual(
                     raise HTTPException(422, str(exc))
                 if body.price_unit and body.price_unit != ingredient["unit"]:
                     raise HTTPException(422, f"Ingrediente medido em {ingredient['unit']}; corrija a unidade e o preço.")
+                try:
+                    sale_price, sale_size, sale_unit = _sale_triplet(body)
+                    normalized = _normalized_price(body, ingredient, sale_price, sale_size, sale_unit)
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc))
                 await conn.execute(_MANUAL_INGREDIENT_UPSERT, ingredient["name"], slug,
-                                   Decimal(str(body.price)), ingredient["unit"])
+                                   normalized, ingredient["unit"], sale_price, sale_size, sale_unit)
     except HTTPException:
         raise
     except Exception:
@@ -314,11 +382,13 @@ async def _parse_price_rows(raw, content_type):
                 raise ValueError("Esperada uma lista JSON")
         else:
             reference_columns = (["slug", "price"], ["food_name", "price"], ["price", "slug"],
-                                 ["price", "food_name"], ["slug", "price", "price_unit"])
+                                 ["price", "food_name"], ["slug", "price", "price_unit"],
+                                 ["slug", "price", "sale_price", "sale_size", "sale_unit"],
+                                 ["food_name", "price", "sale_price", "sale_size", "sale_unit"])
             delimiter = next((sep for sep in (",", ";")
                               if next(csv.reader(io.StringIO(text), delimiter=sep), []) in reference_columns), None)
             if delimiter is None:
-                raise ValueError("Cabeçalho esperado: slug,price (ou food_name,price)")
+                raise ValueError("Cabeçalho esperado: slug,price (com sale_price,sale_size,sale_unit opcionais)")
             rows = list(csv.DictReader(io.StringIO(text), delimiter=delimiter, strict=True))
         if not rows or len(rows) > 5000:
             raise ValueError("Informe entre 1 e 5000 linhas")
@@ -366,8 +436,13 @@ async def import_ingredient_prices(request: Request, _auth=Depends(require_servi
                     model = ManualPriceUpdate(price=value, price_unit=row.get("price_unit"))
                     if model.price_unit and model.price_unit != ingredient["unit"]:
                         raise ValueError(f"Unidade do catálogo é {ingredient['unit']}")
+                    sale_price, sale_size, sale_unit = _import_sale_triplet(row, ingredient)
+                    if sale_unit is None:
+                        normalized = Decimal(str(model.price))
+                    else:
+                        normalized = _normalized_price(model, ingredient, sale_price, sale_size, sale_unit)
                     valid.append((ingredient["name"], ingredient["slug"],
-                                  Decimal(str(model.price)), ingredient["unit"]))
+                                  normalized, ingredient["unit"], sale_price, sale_size, sale_unit))
                     seen.add(ingredient["slug"])
                 except (ValueError, TypeError):
                     details.append({"linha": index, "erro": "Ingrediente, preço ou unidade inválidos."})

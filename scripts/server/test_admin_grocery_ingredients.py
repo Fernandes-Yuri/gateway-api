@@ -11,7 +11,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from routers import catalog
-from services.ingredient_catalog import build_admin_rows
+from services.ingredient_catalog import (build_admin_rows, sale_to_canonical,
+                                         sale_unit_options)
 
 
 def ingredient(slug, name, unit, details=None, active=True):
@@ -140,7 +141,8 @@ class AdminEndpointsTests(unittest.TestCase):
         self.assertEqual(response.json()["unit"], "un")
         call = self.conn.execute.call_args
         self.assertIn("price_unit", call.args[0])
-        self.assertEqual(call.args[1:], ("Pão Francês Tradicional", "pao-frances", Decimal("8.5"), "un"))
+        self.assertEqual(call.args[1:], ("Pão Francês Tradicional", "pao-frances", Decimal("8.5"), "un",
+                                         None, None, None))
 
     def test_put_rejects_unknown_slug_and_wrong_unit(self):
         self.conn.fetch.return_value = []
@@ -170,8 +172,10 @@ class AdminEndpointsTests(unittest.TestCase):
         self.assertEqual(body["erros"], 2)
         call = self.conn.executemany.call_args
         self.assertIn("price_unit", call.args[0])
-        self.assertEqual(call.args[1], [("Pão Francês Tradicional", "pao-frances", Decimal("8.5"), "un"),
-                                        ("Feijão Carioca", "feijao-carioca", Decimal("9.90"), "kg")])
+        self.assertEqual(call.args[1], [("Pão Francês Tradicional", "pao-frances", Decimal("8.5"), "un",
+                                         None, None, None),
+                                        ("Feijão Carioca", "feijao-carioca", Decimal("9.90"), "kg",
+                                         None, None, None)])
 
     def test_import_json_accepts_names_and_rejects_unit_mismatch(self):
         self.conn.fetch.return_value = CATALOG
@@ -371,6 +375,218 @@ class Migration045And046ContractTests(unittest.TestCase):
         for name in canonical_names:
             validated = _validate_clean_name(name)
             self.assertEqual(validated, name)
+
+
+class SaleUnitConversionTests(unittest.TestCase):
+    """Conversão de embalagem comercial para a unidade canônica do catálogo."""
+
+    def test_gram_and_milliliter_are_fractions_of_canonical_unit(self):
+        self.assertEqual(sale_to_canonical(300, "g", "kg"), Decimal("0.3"))
+        self.assertEqual(sale_to_canonical(1000, "ml", "L"), Decimal("1"))
+        self.assertEqual(sale_to_canonical(250, "g", "kg"), Decimal("0.25"))
+
+    def test_canonical_and_dozens_pass_through(self):
+        self.assertEqual(sale_to_canonical(5, "kg", "kg"), Decimal("5"))
+        self.assertEqual(sale_to_canonical(1, "un", "un"), Decimal("1"))
+        self.assertEqual(sale_to_canonical(1, "dz", "un"), Decimal("12"))
+        self.assertEqual(sale_to_canonical(2, "dz", "un"), Decimal("24"))
+
+    def test_rejects_unit_from_another_dimension(self):
+        for sale_unit, canonical in [("L", "kg"), ("g", "un"), ("ml", "kg"), ("dz", "kg"), ("g", "L")]:
+            with self.assertRaises(ValueError):
+                sale_to_canonical(1, sale_unit, canonical)
+
+    def test_rejects_non_positive_size(self):
+        for size in [0, -300]:
+            with self.assertRaises(ValueError):
+                sale_to_canonical(size, "g", "kg")
+
+    def test_options_follow_canonical_dimension(self):
+        self.assertEqual(sale_unit_options("kg"), ["kg", "g"])
+        self.assertEqual(sale_unit_options("L"), ["L", "ml"])
+        self.assertEqual(sale_unit_options("un"), ["un", "dz"])
+        self.assertEqual(sale_unit_options("outro"), [])
+
+
+class SaleUnitEndpointTests(AdminEndpointsTests):
+    """Preço informado por embalagem: normaliza para a unidade canônica."""
+
+    def test_put_by_pack_normalizes_and_records_sale_fields(self):
+        self.conn.fetch.return_value = [ingredient("queijo-mussarela", "Queijo Mussarela", "kg")]
+        response = self.client.put("/api/admin/grocery-prices/ingredient/queijo-mussarela",
+                                   headers=self.headers,
+                                   json={"price": 43.0, "sale_price": 12.90, "sale_size": 300, "sale_unit": "g"})
+        self.assertEqual(response.status_code, 200)
+        call = self.conn.execute.call_args
+        food_name, slug, normalized, unit, sale_price, sale_size, sale_unit = call.args[1:]
+        self.assertEqual((food_name, slug, unit), ("Queijo Mussarela", "queijo-mussarela", "kg"))
+        self.assertEqual(normalized, Decimal("43.00"))
+        self.assertEqual((sale_price, sale_size, sale_unit), (Decimal("12.90"), Decimal("300"), "g"))
+
+    def test_put_by_pack_ignores_client_side_rounded_price(self):
+        """A fonte de verdade é o que o admin digitou no pacote, não o price do cliente."""
+        self.conn.fetch.return_value = [ingredient("queijo-mussarela", "Queijo Mussarela", "kg")]
+        response = self.client.put("/api/admin/grocery-prices/ingredient/queijo-mussarela",
+                                   headers=self.headers,
+                                   json={"price": 42.99, "sale_price": 12.90, "sale_size": 300, "sale_unit": "g"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.conn.execute.call_args.args[3], Decimal("43.00"))
+
+    def test_put_by_pack_accepts_dozens_for_unit_ingredients(self):
+        self.conn.fetch.return_value = [ingredient("ovo-caipira", "Ovo Caipira", "un")]
+        response = self.client.put("/api/admin/grocery-prices/ingredient/ovo-caipira",
+                                   headers=self.headers,
+                                   json={"price": 1.0, "sale_price": 12.0, "sale_size": 1, "sale_unit": "dz"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.conn.execute.call_args.args[3], Decimal("1.00"))
+
+    def test_put_without_pack_sends_no_sale_fields(self):
+        self.conn.fetch.return_value = [ingredient("pao-frances", "Pão Francês Tradicional", "un")]
+        response = self.client.put("/api/admin/grocery-prices/ingredient/pao-frances",
+                                   headers=self.headers, json={"price": 8.5})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.conn.execute.call_args.args[3], Decimal("8.5"))
+        self.assertEqual(self.conn.execute.call_args.args[5:], (None, None, None))
+
+    def test_put_rejects_partial_pack(self):
+        self.conn.fetch.return_value = [ingredient("queijo-mussarela", "Queijo Mussarela", "kg")]
+        for payload in [{"sale_price": 12.9}, {"sale_price": 12.9, "sale_size": 300},
+                        {"sale_size": 300, "sale_unit": "g"}, {"sale_price": 12.9, "sale_unit": "g"}]:
+            response = self.client.put("/api/admin/grocery-prices/ingredient/queijo-mussarela",
+                                       headers=self.headers, json=payload)
+            self.assertEqual(response.status_code, 422, f"payload {payload} deveria ser recusado")
+        self.conn.execute.assert_not_called()
+
+    def test_put_rejects_pack_unit_from_another_dimension(self):
+        self.conn.fetch.return_value = [ingredient("queijo-mussarela", "Queijo Mussarela", "kg")]
+        response = self.client.put("/api/admin/grocery-prices/ingredient/queijo-mussarela",
+                                   headers=self.headers,
+                                   json={"price": 12.9, "sale_price": 12.9, "sale_size": 1, "sale_unit": "L"})
+        self.assertEqual(response.status_code, 422)
+        self.conn.execute.assert_not_called()
+
+    def test_put_rejects_pack_that_normalizes_out_of_bounds(self):
+        self.conn.fetch.return_value = [ingredient("queijo-mussarela", "Queijo Mussarela", "kg")]
+        response = self.client.put("/api/admin/grocery-prices/ingredient/queijo-mussarela",
+                                   headers=self.headers,
+                                   json={"price": 1.0, "sale_price": 99999999.99, "sale_size": 0.001, "sale_unit": "g"})
+        self.assertEqual(response.status_code, 422)
+        self.conn.execute.assert_not_called()
+
+    def test_import_with_pack_columns_normalizes_per_row(self):
+        self.conn.fetch.return_value = [item for item in CATALOG if item["active"]]
+        content = ("slug,price,sale_price,sale_size,sale_unit\n"
+                   "feijao-carioca,9.90,9.90,1000,g\n"
+                   "pao-frances,8.50,10.20,1,dz\n").encode()
+        body = self.client.post("/api/admin/grocery-prices/import-ingredients",
+                                headers=self.headers, content=content).json()
+        self.assertEqual(body["importados"], 2)
+        self.assertEqual(body["erros"], 0)
+        rows = self.conn.executemany.call_args.args[1]
+        feijao, pao = rows
+        self.assertEqual(feijao[2], Decimal("9.90"))
+        self.assertEqual(feijao[4:], (Decimal("9.90"), Decimal("1000"), "g"))
+        # 1 dúzia = 12 unidades; 10.20 / 12 = 0.85 por pão
+        self.assertEqual(pao[2], Decimal("0.85"))
+        self.assertEqual(pao[4:], (Decimal("10.20"), Decimal("1"), "dz"))
+
+    def test_import_rejects_row_with_pack_from_another_dimension(self):
+        self.conn.fetch.return_value = [item for item in CATALOG if item["active"]]
+        content = ("slug,price,sale_price,sale_size,sale_unit\n"
+                   "feijao-carioca,9.90,9.90,1000,L\n").encode()
+        body = self.client.post("/api/admin/grocery-prices/import-ingredients",
+                                headers=self.headers, content=content).json()
+        self.assertEqual(body["importados"], 0)
+        self.assertEqual(body["erros"], 1)
+        self.conn.executemany.assert_not_called()
+
+    def test_import_rejects_row_with_partial_pack(self):
+        self.conn.fetch.return_value = [item for item in CATALOG if item["active"]]
+        content = ("slug,price,sale_price,sale_size,sale_unit\n"
+                   "feijao-carioca,9.90,9.90,,g\n").encode()
+        body = self.client.post("/api/admin/grocery-prices/import-ingredients",
+                                headers=self.headers, content=content).json()
+        self.assertEqual(body["importados"], 0)
+        self.assertEqual(body["erros"], 1)
+        self.conn.executemany.assert_not_called()
+
+    def test_import_keeps_working_without_pack_columns(self):
+        self.conn.fetch.return_value = [item for item in CATALOG if item["active"]]
+        content = "slug,price\nfeijao-carioca,9.90\n".encode()
+        body = self.client.post("/api/admin/grocery-prices/import-ingredients",
+                                headers=self.headers, content=content).json()
+        self.assertEqual(body["importados"], 1)
+        self.assertEqual(self.conn.executemany.call_args.args[1][0][4:], (None, None, None))
+
+
+class SaleUnitAdminRowTests(AdminRowTests):
+    """A visão administrativa expõe a embalagem junto do preço normalizado."""
+
+    def _row_with_pack(self, sale_price="12.90", sale_size="300", sale_unit="g"):
+        manual = dict(legacy("Queijo Mussarela Fatiado", "43.00", "kg", "manual"))
+        manual.update({"ingredient_slug": "queijo-mussarela", "sale_price": sale_price,
+                       "sale_size": sale_size, "sale_unit": sale_unit})
+        return manual
+
+    def test_manual_row_exposes_pack_and_options(self):
+        rows = build_admin_rows(
+            [ingredient("queijo-mussarela", "Queijo Mussarela Fatiado", "kg")],
+            [self._row_with_pack()], [])
+        row = rows[0]
+        self.assertEqual(row["price_avg"], 43.0)
+        self.assertEqual(row["sale_price"], 12.9)
+        self.assertEqual(row["sale_size"], 300.0)
+        self.assertEqual(row["sale_unit"], "g")
+        self.assertEqual(row["sale_unit_options"], ["kg", "g"])
+
+    def test_community_and_estimated_rows_carry_no_pack(self):
+        """Só preço manual registra embalagem; os demais ficam None."""
+        community_row = community("Queijo Mussarela Fatiado", "kg", 41.0, 6)
+        rows = build_admin_rows(
+            [ingredient("queijo-mussarela", "Queijo Mussarela Fatiado", "kg")],
+            [], [community_row])
+        self.assertEqual(rows[0]["source"], "community")
+        self.assertEqual(rows[0]["sale_price"], None)
+        self.assertEqual(rows[0]["sale_size"], None)
+        self.assertEqual(rows[0]["sale_unit"], None)
+
+    def test_row_without_pack_keeps_none(self):
+        manual = dict(legacy("Queijo Mussarela Fatiado", "43.00", "kg", "manual"))
+        manual.update({"ingredient_slug": "queijo-mussarela", "sale_price": None,
+                       "sale_size": None, "sale_unit": None})
+        rows = build_admin_rows(
+            [ingredient("queijo-mussarela", "Queijo Mussarela Fatiado", "kg")], [manual], [])
+        self.assertEqual(rows[0]["sale_price"], None)
+        self.assertEqual(rows[0]["sale_unit_options"], ["kg", "g"])
+
+    def test_legacy_row_without_sale_columns_is_tolerated(self):
+        """Linha anterior à migração 047, sem as colunas sale_*, não pode quebrar."""
+        rows = build_admin_rows(
+            [ingredient("queijo-mussarela", "Queijo Mussarela Fatiado", "kg")],
+            [legacy("Queijo Mussarela Fatiado", "43.00", "kg", "manual")], [])
+        self.assertEqual(rows[0]["sale_price"], None)
+        self.assertEqual(rows[0]["sale_unit"], None)
+
+
+class Migration047ContractTests(unittest.TestCase):
+    def setUp(self):
+        self.migrations_dir = Path(__file__).resolve().parents[2] / "migrations"
+
+    def test_migration_047_and_rollback_exist_and_are_balanced(self):
+        migration = (self.migrations_dir / "047_grocery_sale_unit.sql").read_text(encoding="utf-8")
+        rollback = (self.migrations_dir / "047_grocery_sale_unit_rollback.sql").read_text(encoding="utf-8")
+        self.assertIn("BEGIN;", migration)
+        self.assertIn("COMMIT;", migration)
+        for column in ("sale_price", "sale_size", "sale_unit"):
+            self.assertIn(column, migration)
+            self.assertIn(f"DROP COLUMN IF EXISTS {column}", rollback)
+        self.assertIn("revision = revision + 1", migration)
+
+    def test_migration_047_defines_dimension_check(self):
+        migration = (self.migrations_dir / "047_grocery_sale_unit.sql").read_text(encoding="utf-8")
+        self.assertIn("price_unit = 'kg' AND sale_unit IN ('g', 'kg')", migration)
+        self.assertIn("price_unit = 'L' AND sale_unit IN ('ml', 'L')", migration)
+        self.assertIn("price_unit = 'un' AND sale_unit IN ('un', 'dz')", migration)
 
 
 if __name__ == "__main__":

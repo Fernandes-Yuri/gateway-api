@@ -13,6 +13,46 @@ def as_json(value):
     return json.loads(value) if isinstance(value, str) else value
 
 
+# Unidade de venda comercial aceita por unidade canônica do catálogo.
+# Cada unidade canônica só admite variações da mesma dimensão: não faz
+# sentido vender peixe por litro nem leite por gramas.
+SALE_UNITS_BY_CANONICAL = {
+    "kg": ("kg", "g"),
+    "L": ("L", "ml"),
+    "un": ("un", "dz"),
+}
+
+SALE_UNIT_LABELS = {"kg": "kg", "g": "g", "L": "L", "ml": "ml", "un": "un", "dz": "dúzia"}
+
+
+def sale_unit_allowed(canonical_unit, sale_unit):
+    """Confere se a unidade de venda cabe na dimensão da unidade canônica."""
+    return sale_unit in SALE_UNITS_BY_CANONICAL.get(canonical_unit, ())
+
+
+def sale_unit_options(canonical_unit):
+    """Unidades de venda que a UI deve oferecer para a unidade canônica."""
+    return list(SALE_UNITS_BY_CANONICAL.get(canonical_unit, ()))
+
+
+def sale_to_canonical(sale_size, sale_unit, canonical_unit):
+    """Converte a quantidade vendida para a unidade canônica do catálogo.
+
+    'g' e 'ml' são frações de kg e L; 'dz' equivale a 12 unidades. Devolve
+    Decimal para não acumuar erro de ponto flutuante no preço normalizado.
+    """
+    if not sale_unit_allowed(canonical_unit, sale_unit):
+        raise ValueError(f"Unidade de venda '{sale_unit}' não convive com a unidade canônica '{canonical_unit}'.")
+    size = Decimal(str(sale_size))
+    if size <= 0:
+        raise ValueError("Tamanho da embalagem deve ser maior que zero.")
+    if sale_unit in ("g", "ml"):
+        return size / Decimal("1000")
+    if sale_unit == "dz":
+        return size * Decimal("12")
+    return size
+
+
 async def load_ingredients(conn, *, active_only=True):
     rows = await conn.fetch("SELECT slug,name,unit,details,active FROM grocery_ingredients " +
                             ("WHERE active " if active_only else "") + "ORDER BY name,slug")
@@ -42,6 +82,21 @@ def _latest(rows):
     if not rows:
         return None
     return max(rows, key=lambda r: (r["updated_at"] is not None, r["updated_at"]))
+
+
+def _sale_field(row, field, caster):
+    """Valor da unidade de venda na linha manual escolhida; None quando ausente.
+
+    Só preço manual registra embalagem: preços de comunidade e estimados não
+    têm um "pacote" declarado por ninguém, então ficam None em vez de herdar
+    o valor de outra linha. O .get tolera linha legada ainda sem as colunas.
+    """
+    if not row:
+        return None
+    value = row.get(field) if hasattr(row, "get") else (row[field] if field in row else None)
+    if value is None:
+        return None
+    return caster(value)
 
 
 def _price_of(row):
@@ -79,6 +134,7 @@ def build_admin_rows(ingredients, legacy, community, categories=(), contribution
         latest = _latest(manual or candidates)
         row = latest if manual else sample or latest
         source = "manual" if manual else "community" if sample else "estimated" if latest else "unavailable"
+        chosen = row if source == "manual" else None
         result.append({
             "slug": item["slug"], "name": item["name"], "unit": item["unit"],
             "group": _group_of(item, groups), "active": item["active"],
@@ -90,6 +146,10 @@ def build_admin_rows(ingredients, legacy, community, categories=(), contribution
             "contributors": int(sample["contributors"]) if sample and source == "community" else 0,
             "contributions_total": int(contributions.get(item["slug"], 0)),
             "needs_manual": _price_of(row) is None,
+            "sale_price": _sale_field(chosen, "sale_price", float),
+            "sale_size": _sale_field(chosen, "sale_size", float),
+            "sale_unit": _sale_field(chosen, "sale_unit", str),
+            "sale_unit_options": sale_unit_options(item["unit"]),
         })
     return result
 
