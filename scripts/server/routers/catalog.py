@@ -88,13 +88,12 @@ ON CONFLICT (food_name) DO UPDATE SET
 # a unidade do ingrediente, para o enriquecimento do app reconhecer a linha.
 _MANUAL_INGREDIENT_UPSERT = """
 INSERT INTO grocery_price_cache
-    (food_name, search_term, price_avg, price_min, price_max, source, results_count, needs_manual, updated_at, price_unit, ingredient_slug)
-VALUES ($1, $2, $3, $3, $3, 'manual', 0, FALSE, now(), $4, $2)
+    (food_name, search_term, price_avg, price_min, price_max, source, results_count, needs_manual, updated_at, price_unit)
+VALUES ($1, $2, $3, $3, $3, 'manual', 0, FALSE, now(), $4)
 ON CONFLICT (food_name) DO UPDATE SET
     price_avg = EXCLUDED.price_avg, price_min = EXCLUDED.price_min,
     price_max = EXCLUDED.price_max, source = 'manual', results_count = 0,
-    needs_manual = FALSE, price_unit = EXCLUDED.price_unit,
-    ingredient_slug = EXCLUDED.ingredient_slug, updated_at = now()
+    needs_manual = FALSE, price_unit = EXCLUDED.price_unit, updated_at = now()
 """
 
 _BASELINE_UPSERT = _MANUAL_UPSERT.replace("'manual'", "'estimated'") + "\nWHERE grocery_price_cache.source <> 'manual' RETURNING food_name"

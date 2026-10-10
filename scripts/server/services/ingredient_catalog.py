@@ -105,7 +105,7 @@ def _group_of(item, groups):
 async def admin_price_rows(conn, averages_sql):
     """Linhas administrativas com o mesmo snapshot repetível do enriquecimento."""
     ingredients = await load_ingredients(conn, active_only=False)
-    legacy = await conn.fetch("SELECT food_name,ingredient_slug,price_avg,price_min,price_max,source,price_unit,updated_at FROM grocery_price_cache")
+    legacy = await conn.fetch("SELECT * FROM grocery_price_cache")
     community = await conn.fetch(averages_sql)
     categories = await conn.fetch("SELECT remote_id,details->>'category' AS category FROM food_catalog WHERE active")
     counts = await conn.fetch("SELECT ingredient_slug, COUNT(*) AS total FROM grocery_price_contributions GROUP BY ingredient_slug")
@@ -114,7 +114,7 @@ async def admin_price_rows(conn, averages_sql):
 
 
 async def enrich_prices(conn, ingredients, averages_sql):
-    legacy = await conn.fetch("SELECT food_name,ingredient_slug,price_avg,price_min,price_max,source,price_unit,updated_at FROM grocery_price_cache WHERE price_avg IS NOT NULL")
+    legacy = await conn.fetch("SELECT * FROM grocery_price_cache WHERE price_avg IS NOT NULL")
     community = await conn.fetch(averages_sql)
     slug_map = {item["slug"]: item for item in ingredients}
     aliases = aliases_for(ingredients)
