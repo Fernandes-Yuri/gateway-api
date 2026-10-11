@@ -61,15 +61,22 @@ def _strip_transaction_control(sql: str) -> str:
 
     out = []
     pos = 0
-    for line in sql.splitlines():
-        stripped = line.strip().upper()
+    # AUD-G(M) 11/10/2026: o `continue` do stripper original NAO avancava
+    # `pos`, entao os offsets deixavam de corresponder ao SQL original e o
+    # inside_dollar() passava a julgar as linhas seguintes pela posicao de
+    # uma linha ja removida. Consequencia medida em migrations reais:
+    # 023 perdia o BEGIN do bloco DO $$ (sintaxe partida) e 040 mantinha
+    # um COMMIT; de nivel zero (commit prematuro dentro da transacao).
+    # O avanco de offsets acontece SEMPRE, removida a linha ou nao.
+    for line in sql.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        stripped = body.strip().upper()
         is_ctrl = stripped in ("BEGIN;", "COMMIT;", "BEGIN", "COMMIT")
         # pos aponta para o 1o char desta linha no SQL original — so assim
         # inside_dollar() (que usa offsets absolutos) funciona.
-        if is_ctrl and not inside_dollar(pos):
-            continue
-        out.append(line)
-        pos += len(line) + 1  # +1 pelo \n que splitlines descartou
+        if not (is_ctrl and not inside_dollar(pos)):
+            out.append(body)
+        pos += len(line)
     return "\n".join(out)
 
 
@@ -136,29 +143,6 @@ async def run_status():
     finally:
         await conn.close()
 
-def _psql_dsn_without_password(dsn: str | None = None) -> tuple[str, dict]:
-    """AUD-G(M): devolve (dsn sem senha, env com PGPASSWORD).
-
-    Antes a URL completa — incluindo a senha do RDS — era passada como
-    argumento do psql, expondo a credencial a qualquer usuario do host via
-    `ps aux` (ficou visivel no processo da pipeline de deploy).
-    """
-    import urllib.parse
-
-    env = dict(os.environ)
-    parsed = urllib.parse.urlparse(dsn or MIGRATIONS_DATABASE_URL)
-    if parsed.password:
-        env["PGPASSWORD"] = urllib.parse.unquote(parsed.password)
-    # Reconstrói o DSN SEM a senha: scheme://user@host:port/path?params
-    netloc = parsed.hostname or ""
-    if parsed.port:
-        netloc += f":{parsed.port}"
-    if parsed.username:
-        netloc = f"{urllib.parse.quote(parsed.username, safe='')}@{netloc}"
-    dsn_safe = urllib.parse.urlunparse(parsed._replace(netloc=netloc))
-    return dsn_safe, env
-
-
 async def run_migrate():
     if not MIGRATIONS_DATABASE_URL:
         print("[Error] DATABASE_URL nao configurada.")
@@ -195,43 +179,26 @@ async def run_migrate():
         for f in pending:
             version = f.stem
             print(f"[Migrations] Aplicando: {f.name}...")
-            
-            import shutil
-            import subprocess
-            applied_successfully = False
-            if shutil.which("psql"):
-                # AUD-G(M): antes a senha do RDS vinha na linha de comando do
-                # psql (argv) — visivel para QUALQUER usuario do host em
-                # `ps aux` / `ps -ef`. Agora ela viaja so no ambiente (PGPASSWORD),
-                # e o DSN passado ao psql nao carrega credencial.
-                dsn_safe, psql_env = _psql_dsn_without_password()
-                # AUD-G(M): --single-transaction envolve o arquivo inteiro num
-                # BEGIN/COMMIT — antes cada statement rodava em autocommit, e
-                # uma migration de 4 statements que falhasse no #3 deixava #1
-                # e #2 aplicados e o schema_migrations sem registro da versao
-                # (estado parcial, dificil de diagnosticar). Com ON_ERROR_STOP
-                # + single-transaction, ou o arquivo inteiro aplica ou nada.
-                # Seguro: nenhuma migration usa CONCURRENTLY/VACUUM/REINDEX
-                # (auditado — esses comandos nao rodam dentro de transacao).
-                cmd = ["psql", dsn_safe, "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", str(f)]
-                res = subprocess.run(cmd, capture_output=True, text=True, env=psql_env)
-                if res.returncode == 0:
-                    await conn.execute(
-                        "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING;",
-                        version
-                    )
-                    applied_successfully = True
-                else:
-                    print(f"[Migrations] psql notice/stderr: {res.stderr.strip()}")
-            
-            if not applied_successfully:
-                sql_content = f.read_text(encoding="utf-8-sig")
-                # AUD-G(M): o stripper antigo removia TODA linha "BEGIN"/"COMMIT"
-                # — incluindo as dentro de blocos DO $$ ... $$ e corpos de
-                # FUNCTION (PL/pgSQL), partindo a sintaxe. Agora so remove
-                # controle de transacao FORA de dollar-quotes.
-                clean_sql = _strip_transaction_control(sql_content)
-                
+
+            sql_content = f.read_text(encoding="utf-8-sig")
+            # AUD-G(M): o stripper antigo removia TODA linha "BEGIN"/"COMMIT"
+            # — incluindo as dentro de blocos DO $$ ... $$ e corpos de
+            # FUNCTION (PL/pgSQL), partindo a sintaxe. Agora so remove
+            # controle de transacao FORA de dollar-quotes.
+            clean_sql = _strip_transaction_control(sql_content)
+
+            # AUD-G(M) 11/10/2026 (DT-003): caminho unico e atomico.
+            # Antes havia dois caminhos com comportamento diferente:
+            # (a) psql aplicava o arquivo NA INTEGRA numa conexao e o
+            #     registro da versao ia por OUTRA conexao (asyncpg) — janela
+            #     entre DDL aplicado e ledger gravado;
+            # (b) com psql ausente, o fallback asyncpg usava o stripper e
+            #     seguia adiante APOS erro de SQL, reexecutando a migration.
+            # Agora DDL e schema_migrations rodam na MESMA transacao da
+            # MESMA conexao: ou tudo aplica, ou nada (rollback).
+            # Seguro: nenhuma migration usa CONCURRENTLY/VACUUM/RESTART
+            # (auditado — esses comandos nao rodam dentro de transacao).
+            try:
                 async with conn.transaction():
                     await conn.execute("SET LOCAL lock_timeout = '10s';")
                     await conn.execute("SET LOCAL statement_timeout = '60s';")
@@ -240,8 +207,13 @@ async def run_migrate():
                         "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING;",
                         version
                     )
+            except Exception as exc:
+                print(f"[Migrations] FALHA em {f.name}: rollback da transacao, nada foi aplicado.")
+                print(f"[Migrations] Motivo: {type(exc).__name__}: {exc}")
+                raise
 
             print(f"[Migrations] OK: {f.name} aplicada com sucesso!")
+
 
 
         print("[Migrations] Todas as migrations foram aplicadas com sucesso.")
