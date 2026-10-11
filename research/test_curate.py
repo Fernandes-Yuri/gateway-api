@@ -74,5 +74,37 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(v, "keep")
 
 
+class CurateContractTests(unittest.TestCase):
+    """Contrato do agente B0 do ponto de vista da curadoria (movido de scripts/server)."""
+
+    def _entry(self, user, asst, action, source):
+        return {
+            "id": "t", "timestamp": "2026-09-01", "source": source, "category": "x",
+            "messages": [{"role": "user", "content": user},
+                         {"role": "assistant", "content": asst}],
+            "metadata": {"action": action, "params": {}},
+        }
+
+    def test_chat_registration_flagged(self):
+        v, r = audit(self._entry("pressão 12 por 8", "Entendi: 120 por 80.",
+                                 "REGISTRAR_PRESSAO", "app_chat"))
+        self.assertEqual(v, "quarantine")
+        self.assertTrue(any(x.startswith("action-sem-executor") for x in r))
+
+    def test_whatsapp_registration_kept(self):
+        v, _ = audit(self._entry("pressão 12 por 8", "Entendi: 120 por 80.",
+                                 "REGISTRAR_PRESSAO", "whatsapp"))
+        self.assertEqual(v, "keep")
+
+    def test_chat_list_ok(self):
+        v, _ = audit(self._entry("adiciona aveia", "Preparei sua lista com aveia.",
+                                 "ABRIR_LISTA_COMPRAS", "app_chat"))
+        self.assertEqual(v, "keep")
+
+    def test_fastlane_untouched(self):
+        v, _ = audit(self._entry("bom dia", "Bom dia!", "FAST_LANE", "whatsapp_fastlane"))
+        self.assertEqual(v, "keep")
+
+
 if __name__ == "__main__":
     unittest.main()
