@@ -1,10 +1,10 @@
 -- 024_profiles_photo_url.sql
 -- ============================================================
--- Foto de perfil (avatar) do PWA Cuidador.
+-- Foto de perfil (avatar) do aplicativo Android.
 --
 -- A coluna propositalmente FORA do upsert de perfil
 -- (PROFILE_FIELDS/profile_upsert): o app Android reenvia o perfil
--- inteiro a cada sync e o PWA usa o mesmo endpoint com posts
+-- inteiro a cada sync e o aplicativo Android usa o mesmo endpoint com posts
 -- parciais; se photo_url estivesse nesse caminho, um sync sem a
 -- foto apagaria a imagem do outro cliente (e vice-versa).
 -- A foto so muda pelos endpoints dedicados:

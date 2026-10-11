@@ -132,7 +132,7 @@ class TelemetryRequests(unittest.TestCase):
         self.assertEqual(self.event()[15], 'android')
 
         self.client.get('/api/items/2', headers={'origin': 'https://bragasaude.online'})
-        self.assertEqual(self.event()[15], 'pwa')
+        self.assertEqual(self.event()[15], 'site')
 
         @self.app.post('/api/whatsapp/webhook')
         async def wa():

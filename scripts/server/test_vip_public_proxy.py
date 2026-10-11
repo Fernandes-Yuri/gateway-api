@@ -19,7 +19,7 @@ class PublicProxyTests(unittest.TestCase):
 
     def test_only_allowed_routes_and_headers_reach_gateway(self):
         result = self.client.post('/api/public/vip-signups', json={'fullName':'Ana','email':'a@b.co'},
-                                  headers={'authorization':'Bearer must-not-forward','x-forwarded-for':'fake', 'origin':'https://braga-saude.web.app'})
+                                  headers={'authorization':'Bearer must-not-forward','x-forwarded-for':'fake', 'origin':'https://bragasaude.online'})
         self.assertEqual(200,result.status_code)
         self.assertEqual('http://127.0.0.1:8080/api/public/vip-signups',str(self.requests[0].url))
         self.assertNotIn('authorization',self.requests[0].headers)

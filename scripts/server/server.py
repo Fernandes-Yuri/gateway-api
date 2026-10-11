@@ -229,15 +229,10 @@ app.include_router(audio_router.router)
 
 # Origens permitidas via env (separadas por vírgula). "CORS *" com credenciais
 # é inseguro e inválido perante a spec; a lista precisa ser explícita.
-# A PWA cuidador e servida em braga-saude.web.app E bragasaude.online/app/
-# (README do site-pwa) -- os dois precisam estar aqui, senao o navegador
-# bloqueia todas as chamadas e o app para de funcionar.
 ALLOWED_ORIGINS = [
     o.strip() for o in os.getenv(
         "ALLOWED_ORIGINS",
-        "https://bragasaude.online,https://www.bragasaude.online,"
-        "https://braga-saude.web.app,https://braga-saude.firebaseapp.com,"
-        "http://localhost:5173,http://127.0.0.1:5173",
+        "https://bragasaude.online,https://www.bragasaude.online",
     ).split(",") if o.strip()
 ]
 
@@ -724,7 +719,7 @@ install_caregiver_alert_routes(app, lambda: db_pool, load_devices, dispatch_push
 # modelo (<|im_start|>, <|im_end|>, [INST], <<SYS>>), sem as variantes em
 # inglês (forget/bypass/all) e sem a guarda de tipo. Resultado: as rotas que
 # mais usam essa checagem (chat WhatsApp, /v1/chat/completions, Orb) eram as
-# MENOS protegidas — a doc 03_PWA...:2.4 prometia bloqueio de <|im_start|>
+# MENOS protegidas — a doc de especificacao do app prometia bloqueio de <|im_start|>
 # que nunca acontecia por aqui. Agora só existe UMA definição, a completa.
 
 def get_friendly_safety_response(text: str) -> dict:

@@ -1,12 +1,4 @@
-"""
-Testes de regressao das correcoes de seguranca do gateway.
-
-Estes testes existem porque uma mudanca de CORS quase quebrou a PWA em
-producao: a allowlist precisa conter TODAS as origens onde o frontend e
-servido (braga-saude.web.app E bragasaude.online/app/). Se um dia alguem
-restringir o CORS de novo sem cobrir as duas, este teste falha aqui em
-vez de falhar para o usuario.
-"""
+"""Testes de segurança e origens do site oficial."""
 import os
 import sys
 import unittest
@@ -58,12 +50,12 @@ class CorsAllowlistTests(unittest.TestCase):
     def test_no_wildcard(self):
         self.assertNotIn("*", self._origins())
 
-    def test_covers_pwa_primary_domain(self):
-        # README do site-pwa: "PWA Modo Cuidador: braga-saude.web.app
-        # (e bragasaude.online/app/)" -- os dois precisam estar presentes.
+    def test_official_origins_only(self):
         origins = self._origins()
         self.assertIn("https://bragasaude.online", origins)
-        self.assertIn("https://braga-saude.web.app", origins)
+        self.assertNotIn("https://braga-saude.web.app", origins)
+        self.assertNotIn("https://braga-saude.firebaseapp.com", origins)
+        self.assertNotIn("http://localhost:5173", origins)
 
 
 if __name__ == "__main__":

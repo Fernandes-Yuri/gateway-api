@@ -1383,7 +1383,7 @@
           "idempotency_key"
         ],
         "title": "MedicationRestockRequest",
-        "description": "Reposição autoritativa de uma nova caixa/lote.\n\n``new_total_units`` substitui o saldo atual pelo total conferido na caixa;\na chave torna reenvios offline seguros entre Android, PWA e gateway."
+        "description": "Reposição autoritativa de uma nova caixa/lote.\n\n``new_total_units`` substitui o saldo atual pelo total conferido na caixa;\na chave torna reenvios offline seguros entre o app Android e o gateway."
       },
       "MedicationTakeRequest": {
         "properties": {

@@ -49,7 +49,7 @@ class VipTests(unittest.TestCase):
     def test_origin_and_size(self):
         self.assertEqual(403, self.client.post(self.url, json=self.body, headers={'origin': 'https://evil.example'}).status_code)
         self.assertEqual(413, self.client.post(self.url, content='x'*4097, headers={'content-type': 'application/json'}).status_code)
-        self.assertEqual(200, self.client.post(self.url, json=self.body, headers={'origin': 'https://braga-saude.web.app'}).status_code)
+        self.assertEqual(200, self.client.post(self.url, json=self.body, headers={'origin': 'https://bragasaude.online'}).status_code)
 
     def test_outage_not_success_or_leaked_database_error(self):
         self.pool.conn.fetchval.side_effect = RuntimeError('private database details')

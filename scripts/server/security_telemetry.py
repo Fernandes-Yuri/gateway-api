@@ -226,8 +226,8 @@ class SecurityTelemetryMiddleware:
                 client_source = 'portal'
             elif scope['path'].startswith('/api/whatsapp') or scope['path'].startswith('/api/meta'):
                 client_source = 'meta'
-            elif 'bragasaude.online' in origin or 'web.app' in origin or x_client == 'pwa':
-                client_source = 'pwa'
+            elif origin in ('https://bragasaude.online', 'https://www.bragasaude.online') or x_client == 'site':
+                client_source = 'site'
             elif request.headers.get('x-app-version') or 'okhttp' in ua.lower() or 'android' in ua.lower() or x_client == 'android':
                 client_source = 'android'
             else:

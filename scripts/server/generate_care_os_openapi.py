@@ -1,4 +1,4 @@
-"""Gera o contrato OpenAPI público para clientes Android/PWA.
+"""Gera o contrato OpenAPI público para clientes Android.
 
 `firebase_uid` lê o header diretamente para preservar as mensagens 401 atuais;
 por isso o esquema Bearer é anotado explicitamente no artefato gerado.

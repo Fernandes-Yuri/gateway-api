@@ -6,7 +6,7 @@
 -- O mural real da comunidade e o social_posts (feed social global,
 -- escrito pelo app Android via POST /api/sync/social-post e lido
 -- pelo GET /api/social/feed). Ter duas fontes paralelas deixou as
--- publicacoes existentes invisiveis para o PWA Cuidador.
+-- publicacoes existentes invisiveis para o aplicativo Android.
 -- Correcao: exclui as tabelas equivocadas (a 022 foi removida do
 -- repositorio) e implementa de verdade a visibilidade no mural
 -- social, que antes nao existia no servidor.

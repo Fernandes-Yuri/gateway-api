@@ -45,7 +45,7 @@ class VipRateLimit:
 
 def install_vip_routes(app, get_pool, notify_admin=None, send_confirmation_email=None):
     limiter = VipRateLimit()
-    origins = set(os.getenv('VIP_ALLOWED_ORIGINS', 'https://braga-saude.web.app,https://braga-saude.firebaseapp.com').split(','))
+    origins = set(os.getenv('VIP_ALLOWED_ORIGINS', 'https://bragasaude.online,https://www.bragasaude.online').split(','))
     origins = {origin.strip().rstrip('/') for origin in origins if origin.strip()}
 
     @app.post('/api/public/vip-signups')

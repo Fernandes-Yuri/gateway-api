@@ -146,7 +146,7 @@ scripts/server/
 O módulo `care_os` adiciona contratos para estoque e receita, coordenação
 multi-cuidador, check-in sintomático, correlações temporais explicáveis, acesso
 médico temporário, PDF de uma página, resgate e telemetria BLE/GATT. A
-especificação congelada para geração dos clientes Android/PWA está em
+especificação congelada para geração dos clientes Android está em
 `scripts/server/openapi_care_os.json`.
 
 As rotas familiares exigem vínculo `ACTIVE` e permissão granular por papel

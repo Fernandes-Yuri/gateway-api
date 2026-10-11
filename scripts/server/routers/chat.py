@@ -42,8 +42,9 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = 220
     userId: Optional[str] = None
     # Escopo de papel (D48): distingue o MODO CUIDADOR do autocuidado.
-    # A mesma pessoa pode ser paciente no Android e cuidadora no PWA; o escopo
-    # separa o contexto (e a memoria) dos dois papeis — ver doc PWA secao 6.5.
+    # A mesma pessoa pode ser paciente num aparelho e cuidadora em outro; o
+    # escopo separa o contexto (e a memoria) dos dois papeis — ver doc do app
+    # Android, secao 6.5.
     acting_as: Optional[str] = None
     patient_id: Optional[str] = None
 
@@ -145,7 +146,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
         preferences = {}
         # D48: no escopo cuidador, a memoria e preferencias sao indexadas por
         # uid+patient_id — nunca so uid — para nao misturar os dois papeis
-        # da mesma pessoa (paciente no Android, cuidadora no PWA).
+        # da mesma pessoa (paciente em um aparelho, cuidadora em outro).
         scope_key = authenticated_uid
         if req.acting_as == "caregiver" and req.patient_id:
             scope_key = f"{authenticated_uid}@caregiver:{req.patient_id}"
