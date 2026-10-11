@@ -58,5 +58,42 @@ class CorsAllowlistTests(unittest.TestCase):
         self.assertNotIn("http://localhost:5173", origins)
 
 
+class PublicReleaseCorsTests(unittest.TestCase):
+    """A pagina de download le versao/hash do app sem estar na allowlist.
+
+    braga-saude.web.app serve so a pagina de download; se /api/app/latest
+    responder sem Access-Control-Allow-Origin, o navegador bloqueia o fetch e
+    a pagina publica "Versao indisponivel" em vez do hash real do APK.
+    """
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        import server
+        return TestClient(server.app)
+
+    def _acao(self, path, method="GET", headers=None):
+        res = self._client().request(method, path, headers=headers or {})
+        return res.headers.get("access-control-allow-origin")
+
+    def test_release_endpoints_allow_any_origin(self):
+        for path in ("/api/app/latest", "/api/app/version", "/api/app/download"):
+            with self.subTest(path=path):
+                self.assertEqual("*", self._acao(path))
+
+    def test_preflight_from_retired_host_is_accepted(self):
+        res = self._client().request(
+            "OPTIONS", "/api/app/latest",
+            headers={"origin": "https://braga-saude.web.app",
+                     "access-control-request-method": "GET",
+                     "access-control-request-headers": "cache-control"})
+        self.assertIn(res.status_code, (200, 204))
+        self.assertEqual("*", res.headers.get("access-control-allow-origin"))
+
+    def test_rest_of_api_stays_behind_allowlist(self):
+        # Caminho qualquer fora da distribuição: a origem aposentada continua
+        # bloqueada — o wildcard não vaza para o resto da API.
+        self.assertIsNone(self._acao("/api/items/1"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

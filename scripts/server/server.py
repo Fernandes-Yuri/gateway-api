@@ -3,7 +3,7 @@ import asyncio
 from typing import List, Optional, Any
 from fastapi import BackgroundTasks, FastAPI, HTTPException as HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -242,6 +242,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Distribuicao publica do app: metadados de versao/hash e o proprio APK sao
+# conteudo estatico sem credenciais. O site oficial e a pagina de download
+# (braga-saude.web.app/app-download.html) buscam version + SHA-256 por fetch;
+# sem ACAO aberto nesses caminhos o navegador engola a resposta e a pagina
+# mostra "Versao indisponivel". Nao entra na allowlist da API de proposito:
+# aqui nao ha cookie nem Bearer, entao "*" e seguro e nao abre o resto da API.
+PUBLIC_APP_PATHS = ('/api/app/latest', '/api/app/download', '/api/app/version')
+
+
+@app.middleware("http")
+async def public_app_release_cors(request: Request, call_next):
+    """CORS aberto só nos endpoints públicos de distribuição do APK."""
+    path = request.url.path.rstrip('/') or '/'
+    if path not in PUBLIC_APP_PATHS:
+        return await call_next(request)
+    if request.method == 'OPTIONS':
+        return Response(status_code=204, headers={
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, OPTIONS',
+            'Access-Control-Allow-Headers': request.headers.get(
+                'access-control-request-headers', 'content-type, cache-control, pragma'),
+            'Access-Control-Max-Age': '86400',
+        })
+    response = await call_next(request)
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    # "*" e credenciais são incompatíveis; esses endpoints nunca usam cookie.
+    if 'access-control-allow-credentials' in response.headers:
+        del response.headers['access-control-allow-credentials']
+    return response
 
 db_pool: Optional[Any] = None
 from user_moderation import configure_pool as configure_moderation_pool
