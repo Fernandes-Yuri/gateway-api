@@ -3,7 +3,7 @@
 
 Verifica:
 - Serviço braga-gateway (FastAPI gateway)
-- Túneis Cloudflare (WhatsApp e VIP)
+- Túnel Cloudflare do WhatsApp
 - PostgreSQL
 - Disco e memória
 - WhatsApp API
@@ -87,7 +87,6 @@ def check_tunnel(name: str) -> Dict:
     url_file_map = {
         "braga-ngrok": os.path.join(app_dir, ".whatsapp_tunnel_url"),
         "braga-whatsapp-tunnel": os.path.join(app_dir, ".whatsapp_tunnel_url"),
-        "braga-vip-tunnel": os.path.join(app_dir, ".vip_tunnel_url"),
     }
     if name in url_file_map:
         output, _ = run_cmd(f"cat {url_file_map[name]} 2>/dev/null")
@@ -320,16 +319,6 @@ def check_local_gateway() -> Dict:
     output, ok = run_cmd("curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8080/health")
     return {
         "name": "Gateway Local",
-        "status": f"HTTP {output}" if ok else "não responde",
-        "ok": ok and output == "200",
-    }
-
-
-def check_vip_proxy() -> Dict:
-    """Verifica se o proxy VIP está respondendo."""
-    output, ok = run_cmd("curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8081/api/public/vip-signups/health")
-    return {
-        "name": "Proxy VIP",
         "status": f"HTTP {output}" if ok else "não responde",
         "ok": ok and output == "200",
     }
@@ -578,7 +567,6 @@ def main():
 
     # Serviços
     checks.append({"name": "Serviço Braga Gateway", **check_service("braga-gateway")})
-    checks.append({"name": "Proxy VIP", **check_vip_proxy()})
     checks.append({"name": "Gateway Local (8080)", **check_local_gateway()})
 
     # Túneis

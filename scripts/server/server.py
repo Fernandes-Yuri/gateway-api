@@ -35,7 +35,6 @@ except ImportError:
 from assistant_preferences import install_preference_routes, process_preferences
 from family_api import install_family_routes, purge_expired_family_messages
 from caregiver_alerts import install_caregiver_alert_routes
-from vip_api import install_vip_routes
 from security_defense import (
     StrictRateLimiter,
     get_client_ip,
@@ -248,27 +247,6 @@ db_pool: Optional[Any] = None
 from user_moderation import configure_pool as configure_moderation_pool
 configure_moderation_pool(lambda: db_pool)
 
-async def _vip_notify_admin(text: str):
-    """doc 10 §4.4: avisa o admin no WhatsApp a cada inscrição VIP nova."""
-    if not HAS_WHATSAPP or not send_whatsapp_text:
-        return
-    admin_phone = os.getenv('ADMIN_PHONE') or os.getenv('SECURITY_ALERT_PHONE')
-    if not admin_phone:
-        print("[VIP] ADMIN_PHONE não configurado no .env; pulando notificação WhatsApp.")
-        return
-    await send_whatsapp_text(admin_phone, text)
-
-async def _vip_confirm_email(to_email: str, user_name: str):
-    """doc 10 §4.4: confirma a inscrição VIP por e-mail (best-effort)."""
-    if HAS_EMAIL and send_welcome_email:
-        await send_welcome_email(to_email, user_name)
-
-# doc 10 §4.4: inscrição VIP avisa o admin (WhatsApp) e confirma por e-mail ao inscrito.
-install_vip_routes(
-    app, lambda: db_pool,
-    notify_admin=_vip_notify_admin,
-    send_confirmation_email=_vip_confirm_email,
-)
 install_preference_routes(app, lambda: db_pool)
 rate_limiter = StrictRateLimiter()
 

@@ -9,19 +9,7 @@ service_name="braga-whatsapp-tunnel"
 
 echo "=== Cloudflare Tunnel Permanente — WhatsApp Webhook ==="
 
-# 1. Stop temporary VIP tunnel if running
-if systemctl is-active --quiet braga-vip-tunnel 2>/dev/null; then
-    echo "Parando túnel temporário VIP..."
-    sudo systemctl stop braga-vip-tunnel || true
-    sudo systemctl disable braga-vip-tunnel 2>/dev/null || true
-fi
-if systemctl is-active --quiet braga-vip-public 2>/dev/null; then
-    echo "Parando proxy VIP temporário..."
-    sudo systemctl stop braga-vip-public || true
-    sudo systemctl disable braga-vip-public 2>/dev/null || true
-fi
-
-# 2. Verify cloudflared is available
+# 1. Verify cloudflared is available
 test -x /usr/local/bin/cloudflared || { echo 'cloudflared não encontrado em /usr/local/bin/cloudflared' >&2; exit 1; }
 
 # 3. Verify main server is running

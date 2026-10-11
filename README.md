@@ -110,7 +110,6 @@ scripts/server/
 ├── assistant_preferences.py
 ├── family_api.py
 ├── caregiver_alerts.py
-├── vip_api.py
 ├── api_identity.py
 ├── conversation_policy.py
 ├── rate_limiter.py

@@ -1,7 +1,6 @@
 """Testes de regressão da Higiene Crítica do Gateway — Fase A."""
-import os
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -27,22 +26,6 @@ class HigieneFaseATest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("otp_paused", wa)
         self.assertIn("operational", wa)
         self.assertEqual(wa["operational"], wa["configured"] and not wa["otp_paused"])
-
-    async def test_vip_notify_admin_requires_env_phone(self):
-        """Item 3: sem ADMIN_PHONE/SECURITY_ALERT_PHONE no .env, não notifica."""
-        with patch.dict(os.environ, {}, clear=True), \
-                patch("server.send_whatsapp_text", new_callable=AsyncMock) as mock_send, \
-                patch.object(server, "HAS_WHATSAPP", True):
-            await server._vip_notify_admin("Nova inscrição VIP")
-            mock_send.assert_not_called()
-
-    async def test_vip_notify_admin_sends_when_configured(self):
-        """Item 3: com ADMIN_PHONE no .env, notifica."""
-        with patch.dict(os.environ, {"ADMIN_PHONE": "5511999998888"}), \
-                patch("server.send_whatsapp_text", new_callable=AsyncMock) as mock_send, \
-                patch.object(server, "HAS_WHATSAPP", True):
-            await server._vip_notify_admin("Nova inscrição VIP")
-            mock_send.assert_called_once_with("5511999998888", "Nova inscrição VIP")
 
     def test_normalize_aliasing_behavior(self):
         """Item 7: normalize() sem redundância de aliasing."""
