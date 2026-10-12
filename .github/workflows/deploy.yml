@@ -50,6 +50,10 @@ jobs:
         run: |
           python -m unittest discover scripts/server/ "test_*.py"
 
+      - name: Run research tests
+        run: |
+          PYTHONPATH=scripts/server python -m unittest discover research/ "test_*.py"
+
   deploy:
     needs: lint-and-test
     runs-on: ubuntu-latest

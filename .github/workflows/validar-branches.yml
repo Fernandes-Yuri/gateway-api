@@ -34,3 +34,4 @@ jobs:
       - run: pip install -r requirements.txt
       - run: ruff check scripts/server/
       - run: python -m unittest discover scripts/server/ "test_*.py"
+      - run: PYTHONPATH=scripts/server python -m unittest discover research/ "test_*.py"
