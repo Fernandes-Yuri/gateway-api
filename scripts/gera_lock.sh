@@ -4,13 +4,14 @@
 # inputs : requirements.txt (runtime) e requirements-dev.txt (dev/CI)
 # outputs: requirements.lock e requirements-dev.lock (GERADOS — nao editar)
 #
-# Alvo fixado: CPython 3.11 x86_64-linux, o mesmo do CI (setup-python 3.11,
-# ubuntu-latest) e da EC2. mudar o alvo = regenerar aqui, nunca a mao.
+# Alvo fixado: CPython 3.12 x86_64-linux, o mesmo do CI (setup-python 3.12,
+# ubuntu-latest) e do venv da EC2 (/usr/bin/python3.12). mudar o alvo =
+# regenerar aqui, nunca a mao.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-PYTHON_ALVO="3.11"
+PYTHON_ALVO="3.12"
 PLATAFORMA="x86_64-unknown-linux-gnu"
 
 if ! command -v uv >/dev/null 2>&1; then
