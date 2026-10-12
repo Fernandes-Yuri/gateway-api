@@ -160,7 +160,12 @@ class TestDeployWorkflow(unittest.TestCase):
         self.assertIn("lint-and-test:", content)
         self.assertIn("ruff check scripts/server/", content)
         self.assertIn("python -m unittest discover", content)
-        self.assertIn("needs: lint-and-test", content)
+        # O deploy precisa depender dos gates (forma escalar ou de lista).
+        linha_needs = next(
+            (l.strip() for l in content.splitlines()
+             if l.strip().startswith("needs:")), "")
+        self.assertIn("lint-and-test", linha_needs)
+        self.assertIn("ensaio-migracoes", linha_needs)
 
 
 if __name__ == "__main__":

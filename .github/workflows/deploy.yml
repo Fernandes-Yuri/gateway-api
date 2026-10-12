@@ -44,7 +44,7 @@ jobs:
 
       - name: Lint with Ruff
         run: |
-          ruff check scripts/server/
+          ruff check scripts/server/ scripts/ migrate.py
 
       - name: Run unit tests
         run: |
@@ -54,8 +54,13 @@ jobs:
         run: |
           PYTHONPATH=scripts/server python -m unittest discover research/ "test_*.py"
 
+  ensaio-migracoes:
+    # DT-004: gate do deploy. Uma migration quebrada reprova aqui antes de
+    # qualquer comando SSM tocar a EC2 (deploy.sh roda com set -e).
+    uses: ./.github/workflows/ensaio-migracoes.yml
+
   deploy:
-    needs: lint-and-test
+    needs: [lint-and-test, ensaio-migracoes]
     runs-on: ubuntu-latest
     steps:
       - name: Configure AWS credentials

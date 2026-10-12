@@ -1,0 +1,54 @@
+name: Ensaio de migrations
+# DT-004: o CI exercita o runner REAL (migrate.py) em banco Postgres efêmero,
+# do baseline publicado ao snapshot atual, com dados sintéticos, falha
+# deliberada e idempotência. Chamado por "Validar alterações" (PRs/branches)
+# e por "Deploy to EC2" (gate do deploy).
+on:
+  workflow_call:
+    inputs:
+      baseline:
+        description: "Ref usada como versão publicada (baseline do upgrade)"
+        required: false
+        type: string
+        default: "origin/master"
+
+permissions:
+  contents: read
+
+jobs:
+  ensaio:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: braga_migrate_ensaio
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d braga_migrate_ensaio"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MIGRATIONS_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/braga_migrate_ensaio
+      ENSAIO_BASELINE: ${{ inputs.baseline }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Precisa da ref do baseline (origin/master) para o diff de migrations.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Instala dependências do runner
+        run: pip install asyncpg python-dotenv
+
+      - name: Ensaio do runner real
+        run: python scripts/ensaio_migracoes.py
