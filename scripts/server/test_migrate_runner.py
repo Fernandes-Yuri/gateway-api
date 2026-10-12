@@ -180,18 +180,21 @@ class AtomicidadeMigrateTests(unittest.TestCase):
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         self.migrations = Path(self._tmp.name)
-        self._dir_original = migrate.MIGRATIONS_DIR
-        self._dsn_original = migrate.MIGRATIONS_DATABASE_URL
+        # Limpa ANTES de mexer no módulo: se _limpar() falhar, o setUp aborta
+        # e o tearDown não corre — nunca deixar globals do migrate apontando
+        # para uma pasta temporária (foi assim que um erro em cascata se
+        # espalhou pelo suite no CI de 11/10/2026).
+        self._limpar()
+        self.addCleanup(setattr, migrate, "MIGRATIONS_DIR", migrate.MIGRATIONS_DIR)
+        self.addCleanup(setattr, migrate, "MIGRATIONS_DATABASE_URL",
+                        migrate.MIGRATIONS_DATABASE_URL)
         migrate.MIGRATIONS_DIR = self.migrations
         migrate.MIGRATIONS_DATABASE_URL = DSN
-        self._limpar()
 
     def tearDown(self):
-        migrate.MIGRATIONS_DIR = self._dir_original
-        migrate.MIGRATIONS_DATABASE_URL = self._dsn_original
         self._limpar()
-        self._tmp.cleanup()
 
     def _limpar(self):
         import asyncpg
@@ -201,6 +204,12 @@ class AtomicidadeMigrateTests(unittest.TestCase):
             try:
                 for t in self.TABELAS:
                     await conn.execute(f"DROP TABLE IF EXISTS {t} CASCADE;")
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS schema_migrations (
+                        version TEXT PRIMARY KEY,
+                        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
                 await conn.execute(
                     "DELETE FROM schema_migrations WHERE version LIKE 'dt003%';")
             finally:
@@ -306,9 +315,13 @@ class AtomicidadeMigrateTests(unittest.TestCase):
         self.assertEqual(self._versoes(), 0)
 
     def test_runner_para_na_primeira_falha_e_e_idempotente(self):
-        (self.migrations / "dt003_ok.sql").write_text(
+        # Nomes numerados de propósito: o runner aplica por ordem alfabética,
+        # e a boa tem de correr ANTES da quebrada (com "dt003_fail" <dt003_ok"
+        # a boa nunca chegava a aplicar-se e o teste só passava por contaminação
+        # de estado deixada por outro teste).
+        (self.migrations / "dt003_1_ok.sql").write_text(
             "CREATE TABLE IF NOT EXISTS dt003_probe (id INT);\n", encoding="utf-8")
-        (self.migrations / "dt003_fail.sql").write_text(
+        (self.migrations / "dt003_2_fail.sql").write_text(
             "CREATE TABLE dt003_meio (id INT);\nSELECT 1/0;\n", encoding="utf-8")
         with self.assertRaises(Exception):
             self._migrar()
@@ -316,8 +329,8 @@ class AtomicidadeMigrateTests(unittest.TestCase):
         self.assertEqual(self._versoes(), 1)
 
         # Corrige a migration quebrada e reexecuta: só ela é aplicada.
-        (self.migrations / "dt003_fail.sql").unlink()
-        (self.migrations / "dt003_fail.sql").write_text(
+        (self.migrations / "dt003_2_fail.sql").unlink()
+        (self.migrations / "dt003_2_fail.sql").write_text(
             "CREATE TABLE IF NOT EXISTS dt003_meio (id INT);\n", encoding="utf-8")
         self._migrar()
         self.assertTrue(self._existe("dt003_meio"))
