@@ -546,8 +546,6 @@ async def startup():
             print("[Scheduler] Rotinas pró-ativas registradas: 09h00, 14h30, 20h30. Job semanal IPCA registrado: Seg 03h00.")
             retention_scheduler.start()
 
-    if HAS_WHATSAPP and hasattr(whatsapp_router, "init_fast_lane_audio_cache"):
-        asyncio.create_task(whatsapp_router.init_fast_lane_audio_cache())
 
 async def scheduled_proactive_job(periodo: str):
     """Rotina pró-ativa periódica (doc 10 §4.6).
@@ -840,8 +838,7 @@ sync_router.configure_state(
 )
 app.include_router(sync_router.router)
 
-# Registro do router do WhatsApp (Fase A passo 7). O fast-lane de audio
-# continua sendo inicializado no startup daqui (init_fast_lane_audio_cache).
+# Registro do router do WhatsApp (Fase A passo 7), com respostas em texto.
 whatsapp_router.configure_state(
     db_pool=None,  # preenchido no startup (init_db)
     sem_wa=SEM_WA,
@@ -885,9 +882,8 @@ dataset_module.configure_state(
 # =============================================================
 # WHATSAPP BUSINESS CLOUD API: ver routers/whatsapp.py (Fase A passo 7).
 # Webhook (GET desafio + POST com HMAC), pipeline de mensagem entrante
-# (audio -> router Fase 4 -> Groq), fast-lane de audio, callback de
-# confirmacao e /api/whatsapp/{status,send,events}. O fast-lane e
-# inicializado no startup via whatsapp_router.init_fast_lane_audio_cache().
+# (transcricao -> router Fase 4 -> Groq), respostas rapidas em texto,
+# callback de confirmacao e /api/whatsapp/{status,send,events}.
 # Nao redeclarar aqui.
 # =============================================================
 

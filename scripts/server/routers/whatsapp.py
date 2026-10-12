@@ -13,7 +13,7 @@ O que mora aqui:
   audio -> reacao calorosa -> anti-injection -> vinculo TOTP -> portao de
   conta -> fast-lane de audio -> router deterministico Fase 4 -> Groq)
 - handle_confirmation_callback (botes Confirmar/Editar/Cancelar)
-- fast-lane de audio engatilhado (FAST_LANE_*) + init_fast_lane_audio_cache
+- respostas rápidas em texto (FAST_LANE_INTENTS)
 
 Seguranca preservada: verify_meta_signature no webhook (zero-trust),
 match EXATO de telefone (AUD-G10), admin-only em /events (AUD-G09),
@@ -21,7 +21,6 @@ expira pendencias vencidas a cada callback, is_prompt_injection antes
 do LLM e clean_text_for_tts antes de sintetizar.
 """
 import asyncio
-import hashlib
 import json
 import os
 import re
@@ -35,7 +34,6 @@ from pydantic import BaseModel
 
 from api_identity import firebase_uid
 from config import (
-    AUDIO_CACHE_DIR,
     GROQ_API_KEY_WHATSAPP,
     GROQ_API_URL,
     MODEL_ID,
@@ -65,6 +63,7 @@ from orb_router import (
 )
 from security_defense import is_prompt_injection
 from trace_llm import trace_llm
+from whatsapp_conversation import identity_reply, parse_conversation_reply
 
 router = APIRouter()
 
@@ -77,13 +76,11 @@ try:
         WHATSAPP_PHONE_NUMBER_ID,
         download_whatsapp_media,
         mark_whatsapp_message_read,
-        send_whatsapp_audio,
         send_whatsapp_interactive,
         send_whatsapp_reaction,
         send_whatsapp_template,
         send_whatsapp_text,
         transcribe_audio_whisper,
-        upload_whatsapp_media,
     )
     HAS_WHATSAPP = True
 except ImportError:
@@ -96,9 +93,6 @@ except ImportError:
     async def send_whatsapp_template(*args, **kwargs):  # type: ignore
         return {"success": False, "error": "whatsapp_service ausente"}
 
-    async def send_whatsapp_audio(*args, **kwargs):  # type: ignore
-        return {"success": False, "error": "whatsapp_service ausente"}
-
     async def send_whatsapp_reaction(*args, **kwargs):  # type: ignore
         return {"success": False, "error": "whatsapp_service ausente"}
 
@@ -106,9 +100,6 @@ except ImportError:
         return {"success": False, "error": "whatsapp_service ausente"}
 
     async def download_whatsapp_media(*args, **kwargs):  # type: ignore
-        return None
-
-    async def upload_whatsapp_media(*args, **kwargs):  # type: ignore
         return None
 
     async def send_whatsapp_interactive(*args, **kwargs):  # type: ignore
@@ -197,15 +188,12 @@ def is_warm_and_affectionate(text: str) -> bool:
 
 
 # =============================================================
-# ÁUDIOS ENGATILHADOS (FAST-LANE PRE-CACHED RESPONSES)
+# RESPOSTAS RÁPIDAS EM TEXTO
 # =============================================================
-# Respostas padrao de voz humanizada pre-renderizadas (cache rapido).
-# Garante resposta de audio em menos de 1.5s para saudacoes e duvidas
-# frequentes, liberando o modelo Qwen 2.5 72B para focar nas respostas
-# clinicas complexas.
-FAST_LANE_AUDIO_INTENTS = {
+# Saudações e dúvidas frequentes não precisam de uma chamada ao modelo.
+FAST_LANE_INTENTS = {
     "ask_audio": {
-        "text": "Com certeza! Eu adoro conversar por áudio. Você pode me mandar áudios sempre que preferir, e eu te respondo por áudio também! Como posso te ajudar hoje?",
+        "text": "Por enquanto, minhas respostas no WhatsApp são somente por texto. Como posso te ajudar hoje?",
         "keywords": [
             "manda audio", "manda áudio", "mandar audio", "mandar áudio",
             "responde em audio", "responde em áudio", "falar por audio", "falar por áudio",
@@ -248,9 +236,6 @@ CLINICAL_BYPASS_KEYWORDS = [
     "infarto", "avc", "queda", "machuquei", "ajuda medica", "ajuda médica", "receita"
 ]
 
-FAST_LANE_CACHE: Dict[str, Dict[str, Any]] = {}
-
-
 def match_fast_lane_intent(text: str) -> Optional[str]:
     """Retorna o intent engatilhado para respostas ultra-rápidas se não houver termos clínicos."""
     if not text:
@@ -264,43 +249,10 @@ def match_fast_lane_intent(text: str) -> Optional[str]:
 
     # Verifica intents por ordem de prioridade
     for intent_key in ("ask_audio", "app_info", "gratitude", "greeting_morning", "greeting_afternoon", "greeting_evening", "greeting_general"):
-        for kw in FAST_LANE_AUDIO_INTENTS[intent_key]["keywords"]:
+        for kw in FAST_LANE_INTENTS[intent_key]["keywords"]:
             if kw in lower:
                 return intent_key
     return None
-
-
-async def init_fast_lane_audio_cache():
-    """Pré-sintetiza os áudios engatilhados e pré-carrega em memória e na Meta."""
-    print("[Fast-Lane Audio] Inicializando cache de áudios rápidos...")
-    for intent_key, data in FAST_LANE_AUDIO_INTENTS.items():
-        audio_path = os.path.join(AUDIO_CACHE_DIR, f"fastlane_{intent_key}.wav")
-        file_bytes = None
-        if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
-            try:
-                with open(audio_path, "rb") as f:
-                    file_bytes = f.read()
-            except Exception as e:
-                print(f"[Fast-Lane Audio] Erro lendo cache em disco de {intent_key}: {e}")
-
-        if file_bytes:
-            FAST_LANE_CACHE[intent_key] = {
-                "text": data["text"],
-                "bytes": file_bytes,
-                "media_id": None
-            }
-            if HAS_WHATSAPP:
-                try:
-                    m_id = await upload_whatsapp_media(file_bytes, mime_type="audio/mpeg", filename=f"fastlane_{intent_key}.mp3")
-                    # NOTE: os bytes sao RIFF/WAVE de arquivos pre-gerados. A extensao
-                    # .mp3 no nome enviado a Meta e intencional por enquanto:
-                    # audio/wav nao esta na lista oficial de tipos suportados
-                    # para upload. Ver doc 06 (divida rebaixada a parcial).
-                    if m_id:
-                        FAST_LANE_CACHE[intent_key]["media_id"] = m_id
-                        print(f"[Fast-Lane Audio] Meta media_id pronto para {intent_key}: {m_id}")
-                except Exception as m_err:
-                    print(f"[Fast-Lane Audio] Pré-upload Meta falhou para {intent_key}: {m_err}")
 
 
 # =============================================================
@@ -485,6 +437,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     # ainda está em uso para que a migração seja concluída.
                     user_id = None
                     user_name = None
+                    verified_link = False
                     if db_pool:
                         try:
                             _wa_digits = "".join(filter(str.isdigit, sender_phone or ""))
@@ -494,6 +447,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                     "WHERE regexp_replace(whatsapp_phone, '\\D', '', 'g') = $1",
                                     _wa_digits
                                 )
+                                verified_link = bool(p_row)
                                 if not p_row and _wa_digits:
                                     # AUD-G10: match EXATO do número completo
                                     # (igualdade de dígitos), nunca substring.
@@ -552,28 +506,19 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         except Exception as _gate_err:
                             print(f"[WhatsApp Gate Error] {_gate_err}")
 
-                    # 2.7. Fast-Lane de Resposta Rápida com Áudios Engatilhados
+                    # Identidade vem do vínculo confirmado, não da memória do modelo.
+                    identity_text = identity_reply(
+                        user_text, verified_link=verified_link, full_name=user_name
+                    )
+                    if identity_text:
+                        await send_whatsapp_text(sender_phone, identity_text)
+                        continue
+
+                    # 2.7. Respostas rápidas em texto
                     # (somente após portão de conta: anônimo já respondeu antes)
                     fast_intent = match_fast_lane_intent(user_text)
                     if fast_intent:
-                        cached = FAST_LANE_CACHE.get(fast_intent)
-                        if not cached or not cached.get("bytes"):
-                            data = FAST_LANE_AUDIO_INTENTS[fast_intent]
-                            text_hash = hashlib.md5(data["text"].encode("utf-8")).hexdigest()[:8]
-                            audio_path = os.path.join(AUDIO_CACHE_DIR, f"fastlane_{fast_intent}_{text_hash}.mp3")
-                            f_bytes = None
-                            if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
-                                try:
-                                    with open(audio_path, "rb") as f:
-                                        f_bytes = f.read()
-                                except Exception:
-                                    pass
-                            cached = {"text": data["text"], "bytes": f_bytes, "media_id": None}
-                            FAST_LANE_CACHE[fast_intent] = cached
-
-                        reply_text = cached["text"]
-                        audio_bytes = cached.get("bytes")
-                        media_id = cached.get("media_id")
+                        reply_text = FAST_LANE_INTENTS[fast_intent]["text"]
 
                         print(f"[WhatsApp Fast-Lane] Intent '{fast_intent}' engatilhado para {sender_phone}!")
 
@@ -589,8 +534,8 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         )
 
                         await send_whatsapp_text(sender_phone, reply_text)
-                        if "link_text" in FAST_LANE_AUDIO_INTENTS[fast_intent]:
-                            await send_whatsapp_text(sender_phone, FAST_LANE_AUDIO_INTENTS[fast_intent]["link_text"])
+                        if "link_text" in FAST_LANE_INTENTS[fast_intent]:
+                            await send_whatsapp_text(sender_phone, FAST_LANE_INTENTS[fast_intent]["link_text"])
                         continue
 
                     # 2.8. Camada 0 (Fase 4): router determinístico antes do LLM.
@@ -658,25 +603,9 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             resp = await client.post(GROQ_API_URL, headers=headers, json=data)
                         if resp.status_code == 200:
                             r_json = resp.json()
-                            reply_text = r_json["choices"][0]["message"]["content"]
-                            action_name = "CONVERSA"
-                            action_params = {}
-                            try:
-                                raw_c = reply_text.strip()
-                                if "```" in raw_c:
-                                    m_code = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', raw_c)
-                                    if m_code:
-                                        raw_c = m_code.group(1).strip()
-                                s_idx = raw_c.find('{')
-                                e_idx = raw_c.rfind('}')
-                                if s_idx != -1 and e_idx != -1 and e_idx > s_idx:
-                                    raw_c = raw_c[s_idx:e_idx+1]
-                                parsed = json.loads(raw_c)
-                                reply_text = parsed.get("fala") or parsed.get("message") or reply_text
-                                action_name = parsed.get("acao", "CONVERSA")
-                                action_params = parsed.get("parametros", {})
-                            except Exception:
-                                pass
+                            reply_text, action_name, action_params = parse_conversation_reply(
+                                r_json["choices"][0]["message"]["content"]
+                            )
                             trace_llm('whatsapp', 'llm_response', wa_tid, reply_text=reply_text,
                                       action=action_name, params=action_params)
 
