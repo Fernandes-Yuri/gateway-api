@@ -32,6 +32,11 @@ jobs:
           python-version: '3.11'
           cache: pip
       - run: pip install -r requirements.txt
-      - run: ruff check scripts/server/
+      - run: ruff check scripts/server/ scripts/ migrate.py
       - run: python -m unittest discover scripts/server/ "test_*.py"
       - run: PYTHONPATH=scripts/server python -m unittest discover research/ "test_*.py"
+
+  ensaio-migracoes:
+    # DT-004: runner real (migrate.py) em banco efêmero, do baseline
+    # publicado ao snapshot atual, com dados sintéticos e falha deliberada.
+    uses: ./.github/workflows/ensaio-migracoes.yml
