@@ -31,16 +31,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: "pip"
+          cache-dependency-path: requirements*.lock
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # DT-015: mesmo lock com hashes que o deploy da EC2 (runtime)
+          # mais ferramentas de lint/teste desta etapa de CI.
+          pip install --require-hashes -r requirements-dev.lock
 
       - name: Lint with Ruff
         run: |

@@ -43,12 +43,14 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: "pip"
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements.lock
 
       - name: Instala dependências do runner
-        run: pip install asyncpg python-dotenv
+        # DT-015: o mesmo lock com hashes que a EC2 instala — asyncpg e
+        # python-dotenv (usado por migrate.py) sao runtime, nao avulso.
+        run: pip install --require-hashes -r requirements.lock
 
       - name: Ensaio do runner real
         run: python scripts/ensaio_migracoes.py

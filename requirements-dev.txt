@@ -1,0 +1,15 @@
+# Dependencias de DESENVOLVIMENTO/CI (lint + testes).
+# Runtime incluido via -r; instalar com:
+#
+#   pip install --require-hashes -r requirements-dev.lock
+#
+# Producao (EC2) nunca instala este ficheiro — só requirements.lock.
+
+-r requirements.txt
+
+# Cercas eletricas / linter (Fase A)
+ruff>=0.8.0
+
+# Testes de contrato HTTP e autorizacao de publicacoes
+pytest>=8.0
+pytest-asyncio>=0.24
