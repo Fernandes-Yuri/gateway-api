@@ -313,3 +313,14 @@ ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS patient_name VARCHAR(255);
 ALTER TABLE league_memberships ADD COLUMN IF NOT EXISTS user_name VARCHAR(255);
 ALTER TABLE league_memberships ADD COLUMN IF NOT EXISTS user_level INT DEFAULT 1;
 ALTER TABLE league_memberships ADD COLUMN IF NOT EXISTS user_streak INT DEFAULT 0;
+
+-- 24. ADMINS DO PORTAL (webservice)
+-- Na EC2 esta tabela nasceu do initDatabase() do Next.js, fora do
+-- versionamento: nenhuma migration a cria, mas 015 e 028 fazem nela
+-- apenas ADD COLUMN. Mesma forma base que
+-- scripts/server/test_moderation_postgres.py usa.
+CREATE TABLE IF NOT EXISTS admin_users (
+    id    TEXT PRIMARY KEY,
+    email TEXT UNIQUE,
+    role  TEXT
+);

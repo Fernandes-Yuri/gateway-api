@@ -19,7 +19,7 @@ class ModerationPostgres(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await privacy.PrivacyPostgres.asyncSetUp(self)
         async with self.pool.acquire() as conn:
-            await conn.execute("CREATE TABLE admin_users(id text PRIMARY KEY,email text UNIQUE,role text)")
+            await conn.execute("CREATE TABLE IF NOT EXISTS admin_users(id text PRIMARY KEY,email text UNIQUE,role text)")
             await conn.execute("INSERT INTO admin_users VALUES ('operador','admin@example.test','admin')")
             for number in (18, 28, 29, 35):
                 migration = next((privacy.ROOT / 'migrations').glob(f'{number:03d}_*.sql'))

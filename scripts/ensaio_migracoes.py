@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
 """Ensaio do runner de migrations num Postgres efêmero (DT-004).
 
-O CI passa a exercitar o runner REAL (`migrate.py`), não só fixtures de
-subconjunto. Nesta ordem:
+Corre o runner REAL (`migrate.py`) do zero, sobre o esquema de partida que o
+próprio projeto documenta — `scripts/docker/init_schema.sql`, o mesmo que o
+docker-compose e os testes de Postgres já carregam — e prova, nesta ordem:
 
- 1. aplica o baseline publicado (`--baseline`, padrão `origin/master`);
- 2. semeia dados sintéticos nas tabelas que as migrations novas tocam e
-    prova que eles sobrevivem ao upgrade até o snapshot atual;
- 3. injeta uma migration deliberadamente errada e prova que o erro é
-    propagado, com rollback de DDL e sem registro no ledger — é isso que
-    faz o deploy parar (`deploy.sh` roda com `set -e`);
- 4. reexecuta o runner e prova que o estado não muda (fingerprint do
-    schema estável).
+ 1. cadeia completa: do 001 ao ficheiro mais novo, aplicado de raiz, com
+    ledger de exatamente uma entrada por ficheiro;
+ 2. upgrade do baseline publicado (`origin/master`) ao snapshot atual, com
+    dados sintéticos que têm de sobreviver;
+ 3. erro deliberado numa migration: o erro sobe, o DDL reverte e o ledger
+    não regista — é isso que faz o deploy parar (deploy.sh corre com
+    `set -e`) antes de tocar no RDS;
+ 4. repetição: a segunda execução não altera o estado (fingerprint estável).
+
+Duas amarras do mundo real que o ensaio reproduz em vez de ignorar:
+
+ - a migration 025 faz `GRANT CONNECT ON DATABASE bragasaude` (o nome do
+   banco de produção está hardcoded); o ensaio cria um banco vazio homónimo
+   só para esse GRANT ter alvo;
+ - `admin_users` não é criada por nenhuma migration nem constava do
+   init_schema.sql: nasceu no initDatabase() do portal. O bootstrap passa
+   a declará-la (secção 24 do init_schema.sql).
 
 Uso:
     MIGRATIONS_DATABASE_URL=postgresql://... python scripts/ensaio_migracoes.py
@@ -38,6 +48,9 @@ import migrate  # noqa: E402
 
 DSN = os.getenv("MIGRATIONS_DATABASE_URL") or os.getenv("TEST_POSTGRES_URL")
 BASELINE_REF = "origin/master"
+BOOTSTRAP = BASE_DIR / "scripts" / "docker" / "init_schema.sql"
+# Nome de produção usado hardcoded pela migration 025 (GRANT CONNECT).
+BANCO_HOMONIMO = "bragasaude"
 
 ALVO = re.compile(
     r"\b(?:ALTER\s+TABLE|UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+(?:ONLY\s+)?"
@@ -106,6 +119,62 @@ async def fingerprint(dsn: str) -> str:
         [dict(c) for c in colunas] + [dict(v) for v in ledger],
         sort_keys=True, default=str)
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+async def prepara_esquema(dsn: str, bootstrap: Path) -> None:
+    """Estado de partida: esquema do projeto + banco homónimo da migration 025."""
+    if not bootstrap.exists():
+        falha(f"bootstrap ausente: {bootstrap}")
+    conteudo = bootstrap.read_text(encoding="utf-8")
+    if "CREATE TABLE" not in conteudo.upper():
+        falha(f"{bootstrap} não declara tabelas: não é um esquema de partida.")
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        # A 025 faz GRANT CONNECT ON DATABASE bragasaude: sem este banco o
+        # erro seria InvalidCatalogNameError no meio da cadeia, mascarado
+        # como se a migration em si estivesse partida.
+        await conn.execute(f"DROP DATABASE IF EXISTS {BANCO_HOMONIMO};")
+        await conn.execute(f"CREATE DATABASE {BANCO_HOMONIMO};")
+        await conn.execute(conteudo)
+        tabelas = await conn.fetchval(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_schema='public' AND table_type='BASE TABLE';")
+    finally:
+        await conn.close()
+    ok(f"bootstrap aplicado ({bootstrap.relative_to(BASE_DIR)}): "
+       f"{tabelas} tabelas de partida")
+
+
+async def versoes_ledger(dsn: str) -> set[str]:
+    conn = await asyncpg.connect(dsn)
+    try:
+        return {r["version"] for r in await conn.fetch(
+            "SELECT version FROM schema_migrations;")}
+    finally:
+        await conn.close()
+
+
+async def confere_ledger(dsn: str, diretorio: Path) -> None:
+    """Histórico completo: todo o ficheiro aplicado tem entrada no ledger.
+
+    Sobras são apenas as linhas-alias históricas que duas migrations gravam
+    a mais (019 e 026 escrevem também '019'/'026' sem sufixo, por
+    compatibilidade com referências antigas): reportam-se, mas não falham.
+    O inverso — ficheiro aplicado sem registo — sim, porque deixaria o
+    deploy a reexecutar migrations já aplicadas.
+    """
+    esperadas = {f.stem for f in diretorio.glob("*.sql")
+                 if not f.stem.endswith("_rollback")}
+    registadas = await versoes_ledger(dsn)
+    faltam = sorted(esperadas - registadas)
+    sobram = sorted(registadas - esperadas)
+    if faltam:
+        falha(f"migration(s) aplicada(s) sem entrada no ledger: {faltam}")
+    if sobram:
+        print(f"[ensaio] nota: linhas-alias históricas no ledger: {sobram} "
+              f"(migrations 019/026 gravam também a versão sem sufixo)")
+    ok(f"ledger cobre todas as {len(esperadas)} migrations do diretório")
 
 
 def extrai_baseline(ref: str, destino: Path) -> Path:
@@ -271,6 +340,8 @@ def main() -> None:
     if not atual.exists():
         falha(f"diretório de migrations ausente: {atual}")
 
+    asyncio.run(prepara_esquema(dsn, BOOTSTRAP))
+
     with tempfile.TemporaryDirectory() as tmp:
         baseline = extrai_baseline(os.getenv("ENSAIO_BASELINE", BASELINE_REF),
                                    Path(tmp) / "baseline")
@@ -280,6 +351,7 @@ def main() -> None:
 
         rodar_runner(baseline)
         ok("baseline publicado aplicado do zero")
+        asyncio.run(confere_ledger(dsn, baseline))
 
         alvos = {t for sql in novos.values() for t in ALVO.findall(sql)}
         candidatas = asyncio.run(tabelas_candidatas(dsn, alvos))
@@ -291,6 +363,7 @@ def main() -> None:
 
         rodar_runner(atual)
         ok("snapshot atual aplicado por cima do baseline")
+        asyncio.run(confere_ledger(dsn, atual))
         if semeadas:
             depois = asyncio.run(conta(dsn, semeadas))
             perdidas = {t: (antes[t], depois[t]) for t in semeadas
