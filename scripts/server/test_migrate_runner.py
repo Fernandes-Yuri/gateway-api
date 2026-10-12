@@ -176,7 +176,7 @@ DSN = os.getenv("TEST_POSTGRES_URL")
 class AtomicidadeMigrateTests(unittest.TestCase):
     """DDL + ledger na mesma transação: ou tudo aplica, ou nada."""
 
-    TABELAS = ("dt003_probe", "dt003_meio")
+    TABELAS = ("dt003_probe", "dt003_meio", "dt003_conc")
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -335,6 +335,27 @@ class AtomicidadeMigrateTests(unittest.TestCase):
         self._migrar()
         self.assertTrue(self._existe("dt003_meio"))
         self.assertEqual(self._versoes(), 2)
+
+
+    def test_concorrencia_dois_runners_aplicam_uma_vez(self):
+        """Dois runners em simultâneo: o advisory lock serializa.
+
+        Sem lock, ambos liam a mesma lista de pendentes e aplicavam a mesma
+        migration duas vezes. Com ele, o segundo espera, rele o ledger e
+        não reexecuta nada.
+        """
+        (self.migrations / "dt003_conc.sql").write_text(
+            "CREATE TABLE IF NOT EXISTS dt003_conc (id INT);\n", encoding="utf-8")
+
+        async def _dois():
+            return await asyncio.gather(migrate.run_migrate(), migrate.run_migrate(),
+                                        return_exceptions=True)
+
+        resultados = asyncio.run(_dois())
+        erros = [r for r in resultados if isinstance(r, Exception)]
+        self.assertEqual(erros, [], f"runners concorrentes falharam: {erros}")
+        self.assertEqual(self._versoes(), 1, "migration aplicada mais do que uma vez")
+        self.assertTrue(self._existe("dt003_conc"))
 
 
 if __name__ == "__main__":
