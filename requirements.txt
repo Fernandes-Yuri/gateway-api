@@ -1,12 +1,16 @@
-# Dependencias do Braga Saude Gateway (FastAPI + TTS + WhatsApp + RDS).
+# Dependencias de RUNTIME do Braga Saude Gateway (FastAPI + TTS + WhatsApp + RDS).
 #
-# deploy.sh:14-18 instala este arquivo a cada deploy na EC2. Antes ele nao
+# Este ficheiro e o INPUT humano (intervalos). O que instala de facto em
+# CI e na EC2 e o FICHEIRO GERADO requirements.lock, com hashes:
+#
+#   pip install --require-hashes -r requirements.lock
+#
+# Para atualizar: editar as linhas abaixo e regenerar com scripts/gera_lock.sh.
+# Nao fixar transitivas aqui — elas entram pelo lock.
+#
+# deploy.sh:21-23 instala o lock a cada deploy na EC2. Antes ele nao
 # existia, o pip install era pulado e as dependencias ficavam so no venv
 # -- sem versionamento (divida registrada no doc 11 §3.2).
-#
-# Estrategia: fixar o que foi verificado localmente/CI; minimo para o que so
-# existe na EC2 (asyncpg/APScheduler/firebase). Atualizar conforme os deploys
-# confirmarem as versoes.
 
 # Web framework (versao verificada localmente + CI verde)
 fastapi==0.141.1
@@ -24,8 +28,12 @@ requests>=2.31
 # Leitura e OCR de PDF de receitas medicas
 pymupdf>=1.24.0
 
-# PostgreSQL (RDS) via asyncpg — so instalado na EC2
+# PostgreSQL (RDS) via asyncpg
 asyncpg>=0.29
+
+# .env local e da EC2: migrate.py importa load_dotenv (DT-015: estava
+# usada em runtime mas NAO declarada — o lock nao a continha).
+python-dotenv>=1.0
 
 # Hash de senha de admins (bcrypt) — proxy de login do portal (doc 12).
 # Verifica password_hash de admin_users no RDS.
@@ -38,11 +46,4 @@ APScheduler>=3.10
 firebase-admin>=6.5
 
 # Google reCAPTCHA server-side: validado via POST para a API do Google com
-# requests; nao exige SDK adicional.
-
-# Cerca elétrica / Linter (Fase A)
-ruff>=0.8.0
-
-# Testes de contrato HTTP e autorização de publicações
-pytest>=8.0
-pytest-asyncio>=0.24
+# httpx; nao exige SDK adicional.

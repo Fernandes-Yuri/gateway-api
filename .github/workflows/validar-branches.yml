@@ -31,7 +31,9 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - run: pip install -r requirements.txt
+          cache-dependency-path: requirements*.lock
+      # DT-015: CI instala o MESMO lock com hashes que o deploy da EC2.
+      - run: pip install --require-hashes -r requirements-dev.lock
       - run: ruff check scripts/server/ scripts/ migrate.py
       - run: python -m unittest discover scripts/server/ "test_*.py"
       - run: PYTHONPATH=scripts/server python -m unittest discover research/ "test_*.py"

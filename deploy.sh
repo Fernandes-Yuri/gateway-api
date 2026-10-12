@@ -17,10 +17,21 @@ fi
 
 echo "=== [2/4] Verificando dependencias Python ==="
 source venv/bin/activate
-if [ -f "requirements.txt" ]; then
-    pip install -r requirements.txt --quiet
-elif [ -f "app/requirements.txt" ]; then
-    pip install -r app/requirements.txt --quiet
+# DT-015: o lock com hashes e a unica fonte de versoes em producao.
+# --require-hashes faz o pip recusar qualquer pacote cujo SHA256 nao bate
+# com o registado no lock (verificado: adulterar um hash aborta o install).
+if [ -f "requirements.lock" ]; then
+    pip install --require-hashes -r requirements.lock --quiet
+elif [ -f "app/requirements.lock" ]; then
+    pip install --require-hashes -r app/requirements.lock --quiet
+else
+    # Transicao apenas: EC2 ainda sem o lock sincronizado.
+    echo "AVISO: requirements.lock ausente — instalando sem lock (nao reproduzivel)."
+    if [ -f "requirements.txt" ]; then
+        pip install -r requirements.txt --quiet
+    elif [ -f "app/requirements.txt" ]; then
+        pip install -r app/requirements.txt --quiet
+    fi
 fi
 
 echo "=== [3/4] Executando Migrations do Banco de Dados (RDS) ==="
