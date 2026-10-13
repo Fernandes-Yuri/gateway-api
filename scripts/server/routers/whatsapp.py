@@ -186,6 +186,12 @@ except ImportError:  # pragma: no cover - fallback defensivo do monolito
     _WA_QUERY_HANDLERS = {}
 
 try:
+    from services.family_target import resolve_target_context as _wa_family_target_ctx
+    _WA_FAMILY_RESOLVER = _wa_family_target_ctx
+except ImportError:  # pragma: no cover - fallback defensivo do monolito
+    _WA_FAMILY_RESOLVER = None
+
+try:
     from webhook_security import verify_meta_signature
     HAS_WEBHOOK_SECURITY = True
 except ImportError:
@@ -701,15 +707,24 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         continue
 
                     # 2.8. Consultas de saúde (PR2, passo 2.3): o serviço
-                    # responde ANTES da conversa aberta — sem LLM. Só
-                    # autocuidado (familiar chega no PR4, com revalidação).
+                    # responde ANTES da conversa aberta — sem LLM.
+                    # PR4 (4.1/4.2): se a fala menciona outro pessoa, o alvo
+                    # é o familiar do vínculo ativo (actor != patient), com
+                    # permissão revalidada no próprio serviço.
                     wa_kind = detect_all(user_text).get("kind")
                     if user_id and wa_kind in _WA_QUERY_HANDLERS:
+                        _q_ctx = wa_ctx or context_from_identity(identity, message_id=msg_id)
                         _q_result = None
                         try:
                             async with db_pool.acquire() as _q_conn:
-                                _q_result = await _WA_QUERY_HANDLERS[wa_kind](
-                                    _q_conn, wa_ctx or context_from_identity(identity, message_id=msg_id))
+                                if _WA_FAMILY_RESOLVER is not None and _q_ctx is not None:
+                                    _q_ctx, _fam_err = await _WA_FAMILY_RESOLVER(
+                                        _q_conn, _q_ctx, user_text)
+                                    if _fam_err is not None and _fam_err.message:
+                                        await send_whatsapp_text(sender_phone, _fam_err.message)
+                                        continue
+                                if _q_ctx is not None:
+                                    _q_result = await _WA_QUERY_HANDLERS[wa_kind](_q_conn, _q_ctx)
                         except Exception as _q_err:
                             print(f"[WhatsApp Queries] Falha na consulta {wa_kind}: {_q_err}")
                             _q_result = None
@@ -723,7 +738,8 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                     source="whatsapp_query",
                                     system_prompt="health_queries (serviço, sem LLM)",
                                     user_name=user_name, action="CONSULTA",
-                                    action_params={"kind": wa_kind, "result": _q_result.status})
+                                    action_params={"kind": wa_kind, "result": _q_result.status,
+                                                   "self_care": _q_ctx is not None and _q_ctx.is_self_care})
                             except Exception:
                                 pass
                             await send_whatsapp_text(sender_phone, _q_result.message)
