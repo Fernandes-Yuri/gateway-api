@@ -201,11 +201,14 @@ async def confirm_pending_confirmation(
                     """, user_id, values_to_save.get("quantidade_ml"), confirmation_code)
 
                 elif metric_type == "PESO":
-                    await conn.execute("""
-                        INSERT INTO vital_signs
-                            (user_id, weight_kg, measured_at, confirmed_via, confirmation_code)
-                        VALUES ($1, $2, NOW(), 'whatsapp', $3)
-                    """, user_id, values_to_save.get("peso_kg"), confirmation_code)
+                    # Passo 2.4: peso vai para a biometria do app (mesmo
+                    # destino lógico do app), não para vital_signs. Altura e
+                    # IMC vêm do perfil; IMC nunca é inventado.
+                    from services.biometry import record_weight
+                    await record_weight(
+                        conn, patient_id=user_id,
+                        weight_kg=float(values_to_save.get("peso_kg") or 0),
+                        actor_id=user_id, confirmation_code=confirmation_code)
 
                 elif metric_type == "BATIMENTOS":
                     await conn.execute("""
@@ -289,7 +292,9 @@ def build_confirmation_message(metric_type: str, values: dict, confirmation_code
         value_display = f"{values.get('quantidade_ml')} ml"
         icon = "💧"
     elif metric_type == "PESO":
-        value_display = f"{values.get('peso_kg')} kg"
+        peso = values.get("peso_kg")
+        value_display = (f"{peso:.1f}".replace(".", ",") if isinstance(peso, float)
+                         else f"{peso}") + " kg"
         icon = "⚖️"
     elif metric_type == "BATIMENTOS":
         value_display = f"{values.get('batimentos')} bpm"

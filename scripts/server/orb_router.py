@@ -18,6 +18,55 @@ import time
 import unicodedata
 
 # ------------------------------------------------------------------
+# Consultas (PR2, passo 2.3): intenção de VER um dado, não de registrar.
+# Só vale quando a frase não traz número — número é registro (passo 2.4) —
+# e há um marcador de pergunta/pedido de informação.
+# ------------------------------------------------------------------
+_QUERY_MARKERS = re.compile(
+    r"\?|^(qual|quais|como|quando|quanto|quanta|quantos|quantas|onde|o que|"
+    r"me diz|me fale|me fala|mostra|mostre|ver|consulte|consultar|consulta|"
+    r"ultima|ultimo|ultimos|ultimas|resumo|hoje)\b"
+)
+
+_QUERY_METRICAS = (
+    ("query_bp", r"\bpressao\b"),
+    ("query_glucose", r"\bglicemi|\bglicose\b"),
+    ("query_hr", r"\bbatimento|\bfrequencia cardiaca"),
+    ("query_spo2", r"\bsaturacao|\boxigenacao|\boxigenio"),
+    ("query_weight", r"\bpeso\b"),
+    ("query_water", r"\bagua\b|\bhidratacao|\bhidrata"),
+    ("query_summary", r"\bresumo\b|\bcomo (eu )?(estou|to)\b|\bmeu dia\b|\bcomo ando\b"),
+)
+
+# Menção genérica a dados de saúde sem métrica específica: ambíguo.
+_QUERY_AMBIGUOUS = re.compile(
+    r"\bmeus (dados|registros|metricas|resultados|exames)\b|"
+    r"\bminhas (metricas|medicoes|leituras)\b|\bmeu historico\b"
+)
+
+QUERY_KINDS = tuple(k for k, _ in _QUERY_METRICAS) + ("query_ambiguous",)
+
+QUERY_AMBIGUOUS_FALA = (
+    "Posso consultar várias coisas suas: última pressão, glicemia, batimentos, "
+    "saturação, peso, água de hoje ou o resumo do dia. Qual você quer?"
+)
+
+
+def detect_query(norm: str):
+    """Kind da consulta (query_*) ou None. Número na frase é registro, não consulta."""
+    if not norm or re.search(r"\d", norm):
+        return None
+    if not _QUERY_MARKERS.search(norm):
+        return None
+    if _QUERY_AMBIGUOUS.search(norm):
+        return "query_ambiguous"
+    for kind, padrao in _QUERY_METRICAS:
+        if re.search(padrao, norm):
+            return kind
+    return None
+
+
+# ------------------------------------------------------------------
 # Normalização
 # ------------------------------------------------------------------
 
@@ -216,6 +265,30 @@ def detect_hydration(norm: str):
 
 
 # ------------------------------------------------------------------
+# Peso (PR2, passo 2.4): reconhecimento deterministico com faixa clinica.
+# ------------------------------------------------------------------
+_WEIGHT_CONTEXT = re.compile(r"\bpeso\b|\bpesando\b|\bquilos?\b")
+_WEIGHT_NUM = re.compile(r"(\d{1,3}(?:[.,]\d{1,2})?)")
+
+
+def detect_weight(norm: str):
+    """Peso em kg (20-300), ou None. Exige contexto de peso + número."""
+    if not _WEIGHT_CONTEXT.search(norm):
+        return None
+    m = _WEIGHT_NUM.search(norm)
+    if not m:
+        return None
+    try:
+        val = float(m.group(1).replace(",", "."))
+    except ValueError:
+        return None
+    # Faixa do HEALTH_VALIDATION_RULES do core/confirmation (PESO).
+    if not (20 <= val <= 300):
+        return None
+    return val
+
+
+# ------------------------------------------------------------------
 # Roteador principal (Fase 2) + API estruturada (Fase 4)
 # ------------------------------------------------------------------
 
@@ -232,8 +305,8 @@ def detect_all(raw: str) -> dict:
     """Classificação estruturada sem LLM.
 
     Retorna {'kind': ...} + dados (sys/dia, valor, ml...). Kinds:
-    empty, emergency, bp, glucose, hydration, hr, spo2, reminder,
-    exams, meds, nutrition, greeting_morning/afternoon/evening/general,
+    empty, emergency, bp, glucose, hydration, hr, spo2, query_* (consulta
+    de métrica), reminder, exams, meds, nutrition, greeting_*,
     gratitude, app, identity, topic, smalltalk, open.
     """
     if not raw or not raw.strip():
@@ -265,6 +338,14 @@ def detect_all(raw: str) -> dict:
     spo2 = detect_spo2(norm)
     if spo2:
         return {"kind": "spo2", "valor": spo2}
+    peso = detect_weight(norm)
+    if peso:
+        return {"kind": "weight", "peso_kg": peso}
+    # Passo 2.3: consulta (pergunta sem valor) é respondida pelo serviço de
+    # consultas, antes de qualquer conversa aberta.
+    query = detect_query(norm)
+    if query:
+        return {"kind": query}
     if re.search(r"\blembrete|\bme lembra|\bme avisa", norm):
         return {"kind": "reminder"}
     if re.search(r"\bexame", norm):
@@ -549,6 +630,8 @@ _WA_VITALS = {
     "hydration": ("AGUA", lambda d: {"quantidade_ml": d["ml"]}),
     "hr": ("BATIMENTOS", lambda d: {"batimentos": d["bpm"]}),
     "spo2": ("OXIGENACAO", lambda d: {"saturacao": d["valor"]}),
+    # Passo 2.4: peso vai para a biometria do app, não para vital_signs.
+    "weight": ("PESO", lambda d: {"peso_kg": d["peso_kg"]}),
 }
 
 
@@ -580,6 +663,8 @@ def whatsapp_next(raw: str, is_registered: bool) -> dict:
                 summary = f"{det['ml']} ml de água"
             elif kind == "hr":
                 summary = f"{det['bpm']} bpm"
+            elif kind == "weight":
+                summary = f"{det['peso_kg']} kg de peso"
             else:
                 summary = f"{det['valor']}% de saturação"
             return {"type": "vitals", "metric": metric, "values": values,
