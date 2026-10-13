@@ -53,6 +53,22 @@ def zone_of(name: Optional[str]) -> ZoneInfo:
         return ZoneInfo(DEFAULT_ZONE)
 
 
+async def patient_timezone(conn: Any, patient_id: str) -> Optional[str]:
+    """Fuso cadastrado no perfil (migration 052). NULL -> America/Sao_Paulo."""
+    try:
+        return await conn.fetchval("SELECT timezone FROM profiles WHERE id=$1", patient_id)
+    except Exception:
+        return None
+
+
+async def _resolve_zone(conn: Any, context: OperationContext,
+                        zone: Optional[str]) -> ZoneInfo:
+    """Fuso explícito na chamada; senão, o cadastrado no perfil; senão, o padrão."""
+    if zone:
+        return zone_of(zone)
+    return zone_of(await patient_timezone(conn, context.patient_id))
+
+
 def format_value(kind: str, row: Any) -> str:
     """Valor já formatado para exibição (ex.: '130 x 85', '74,5')."""
     if kind == "pressao":
@@ -98,10 +114,11 @@ def day_bounds(day: Optional[date], zone: ZoneInfo) -> Tuple[datetime, datetime]
 
 
 async def _query_reading(conn: Any, context: OperationContext, kind: str,
-                         zone: ZoneInfo) -> OperationResult:
+                         zone_name: Optional[str]) -> OperationResult:
     denied = await validate_actor(conn, context)
     if denied:
         return denied
+    tz = await _resolve_zone(conn, context, zone_name)
     colunas, nao_nulo = _COLS[kind]
     try:
         row = await conn.fetchrow(
@@ -121,34 +138,34 @@ async def _query_reading(conn: Any, context: OperationContext, kind: str,
             data={"kind": kind})
     return OperationResult.success(
         f"Sua última {_LABEL[kind]} foi {format_value(kind, row)} {_UNIT[kind]}, "
-        f"registrada {format_when(row['measured_at'], zone)}.",
+        f"registrada {format_when(row['measured_at'], tz)}.",
         data={"kind": kind, "value": format_value(kind, row),
               "unit": _UNIT[kind], "measured_at": row["measured_at"].isoformat()})
 
 
 async def last_blood_pressure(conn: Any, context: OperationContext,
                               zone: Optional[str] = None) -> OperationResult:
-    return await _query_reading(conn, context, "pressao", zone_of(zone))
+    return await _query_reading(conn, context, "pressao", zone)
 
 
 async def last_glucose(conn: Any, context: OperationContext,
                        zone: Optional[str] = None) -> OperationResult:
-    return await _query_reading(conn, context, "glicemia", zone_of(zone))
+    return await _query_reading(conn, context, "glicemia", zone)
 
 
 async def last_heart_rate(conn: Any, context: OperationContext,
                           zone: Optional[str] = None) -> OperationResult:
-    return await _query_reading(conn, context, "batimentos", zone_of(zone))
+    return await _query_reading(conn, context, "batimentos", zone)
 
 
 async def last_oxygen_saturation(conn: Any, context: OperationContext,
                                  zone: Optional[str] = None) -> OperationResult:
-    return await _query_reading(conn, context, "saturacao", zone_of(zone))
+    return await _query_reading(conn, context, "saturacao", zone)
 
 
 async def last_weight(conn: Any, context: OperationContext,
                       zone: Optional[str] = None) -> OperationResult:
-    return await _query_reading(conn, context, "peso", zone_of(zone))
+    return await _query_reading(conn, context, "peso", zone)
 
 
 async def water_today(conn: Any, context: OperationContext, *,
@@ -158,7 +175,7 @@ async def water_today(conn: Any, context: OperationContext, *,
     denied = await validate_actor(conn, context)
     if denied:
         return denied
-    tz = zone_of(zone)
+    tz = await _resolve_zone(conn, context, zone)
     inicio, fim = day_bounds(day, tz)
     try:
         total = await conn.fetchval(
@@ -190,7 +207,7 @@ async def day_summary(conn: Any, context: OperationContext, *,
     denied = await validate_actor(conn, context)
     if denied:
         return denied
-    tz = zone_of(zone)
+    tz = await _resolve_zone(conn, context, zone)
     inicio, fim = day_bounds(day, tz)
     try:
         rows = await conn.fetch(
