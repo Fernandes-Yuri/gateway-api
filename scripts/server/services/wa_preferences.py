@@ -11,7 +11,8 @@ Escopo idêntico ao do app: nickname, response_length, cup_ml. Nada além.
 import json
 import re
 import unicodedata
-from typing import Any, Optional, Tuple
+import uuid
+from typing import Any, Optional
 
 from services.operations import OperationContext, OperationResult
 
@@ -137,7 +138,7 @@ def detect_preference_intent(text: str) -> Optional[dict]:
         if valor:
             return {"op": "set", "key": "response_length", "value": valor}
 
-    m = _SET_CUP_RE.search(text)
+    m = _SET_CUP_RE.search(norm)
     if m:
         volume = int(m.group(9))
         if 50 <= volume <= 2000:
@@ -273,7 +274,15 @@ async def handle_preference(conn: Any, db_pool: Any, *,
     # Confirmação: "sim" genérico não basta; a fala precisa ser afirmativa E
     # a pendência precisa estar ativa e pertencer a esta conta.
     if pending and _is_affirmative(norm):
-        return await _confirm(conn, context.actor_id, pending)
+        code = await conn.fetchval(
+            """SELECT confirmation_code FROM pending_confirmations
+               WHERE user_id=$1 AND metric_type='PREFERENCE' AND status='pending'
+                 AND expires_at > NOW() AND value_json->>'proposal_id'=$2
+               ORDER BY created_at DESC LIMIT 1""", context.actor_id, pending["proposal_id"])
+        if code:
+            return await confirm_pending_preference(
+                db_pool, confirmation_code=code, actor_id=context.actor_id)
+        return None
 
     if pending and _is_negative(norm):
         await _cancel_pending(conn, context.actor_id, pending)
@@ -310,8 +319,9 @@ async def handle_preference(conn: Any, db_pool: Any, *,
             f"Não consegui entender essa preferência. {erro} Tente novamente, "
             f"tipo 'me chama de Ana' ou 'prefiro respostas curtas'.")
 
-    value_json = {"op": intent["op"], "key": intent["key"],
-                  "value": intent.get("value")}
+    proposal_id = str(uuid.uuid4())
+    value_json = {"op": "propose", "key": intent["key"],
+                  "value": intent.get("value"), "proposal_id": proposal_id}
     from core.confirmation import create_pending_confirmation
     code = await create_pending_confirmation(
         user_id=context.actor_id,
@@ -329,17 +339,19 @@ async def handle_preference(conn: Any, db_pool: Any, *,
     try:
         await conn.execute(
             """INSERT INTO assistant_preference_pending
-                   (user_id, proposal_id, operation, question)
-               VALUES ($1, $2, $3::jsonb, $4)
+                   (user_id, proposal_id, operation, question, expires_at)
+               VALUES ($1, $2, $3::jsonb, $4, NOW() + INTERVAL '5 minutes')
                ON CONFLICT (user_id) DO UPDATE SET
                    proposal_id=EXCLUDED.proposal_id,
                    operation=EXCLUDED.operation,
                    question=EXCLUDED.question,
                    expires_at=NOW() + INTERVAL '5 minutes'""",
-            context.actor_id, code, json.dumps(value_json), _question(intent),
+            context.actor_id, proposal_id, json.dumps(value_json), _question(intent),
         )
     except Exception as err:
-        print(f"[WA Preferences] Aviso: pendência do app não gravada: {err}")
+        print(f"[WA Preferences] Pendência não preparada: {err}")
+        return OperationResult.unavailable(
+            "Não consegui preparar a alteração. Nada foi gravado; tente novamente.")
 
     return OperationResult.confirmation(
         _question(intent), pending_op_id=code, data=value_json)
@@ -364,55 +376,6 @@ async def _cancel_pending(conn: Any, user_id: str, pending: Any) -> None:
             user_id, pending["proposal_id"])
     except Exception as err:
         print(f"[WA Preferences] Aviso: pendência não cancelada: {err}")
-
-
-async def _confirm(conn: Any, user_id: str, pending: Any) -> OperationResult:
-    """Passo 5.2/5.3: consome a proposta ativa e grava na conta."""
-    try:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """DELETE FROM assistant_preference_pending
-                   WHERE user_id=$1 AND proposal_id=$2 AND expires_at > NOW()
-                   RETURNING operation""",
-                user_id, pending["proposal_id"])
-            if not row:
-                return OperationResult.missing_data(
-                    "Essa proposta já foi resolvida ou expirou. "
-                    "Diga novamente o que quer guardar ou apagar.")
-            change = json.loads(row["operation"]) if isinstance(row["operation"], str) \
-                else dict(row["operation"])
-            await conn.execute(
-                "INSERT INTO assistant_preferences(user_id) VALUES($1) "
-                "ON CONFLICT DO NOTHING", user_id)
-            prefs = json.loads(await conn.fetchval(
-                "SELECT preferences FROM assistant_preferences "
-                "WHERE user_id=$1 FOR UPDATE", user_id) or "{}")
-            if change.get("key") == "all":
-                prefs = {}
-            elif change.get("value") is None:
-                prefs.pop(change["key"], None)
-            else:
-                prefs[change["key"]] = change["value"]
-            await conn.execute(
-                "UPDATE assistant_preferences SET preferences=$2::jsonb, "
-                "updated_at=NOW() WHERE user_id=$1",
-                user_id, json.dumps(prefs))
-    except Exception as err:
-        print(f"[WA Preferences] Falha ao confirmar preferência: {err}")
-        return OperationResult.unavailable(
-            "Não consegui confirmar a alteração agora. Nada foi gravado — "
-            "tente novamente em instantes.")
-
-    if change.get("value") is None:
-        if change.get("key") == "all":
-            return OperationResult.success(
-                "Pronto, apaguei todas as preferências. Sua conta e seus "
-                "registros de saúde continuam intactos.")
-        return OperationResult.success(
-            "Pronto, apaguei a preferência solicitada.")
-    return OperationResult.success(
-        f"Combinado, guardei a preferência de "
-        f"{_describe(change['key'], change['value'])}.")
 
 
 async def confirm_pending_preference(db_pool: Any, *,
@@ -442,14 +405,18 @@ async def confirm_pending_preference(db_pool: Any, *,
                 "Diga novamente o que quer guardar ou apagar.")
         value = json.loads(row["value_json"])
         pending_id = row["id"]
+        proposal_id = value.get("proposal_id") or confirmation_code
 
         # A pendência do app (assistant_preference_pending) precisa estar
         # ativa e casar com o código desta proposta — vínculo da confirmação.
         app_pending = await conn.fetchrow(
             """SELECT proposal_id FROM assistant_preference_pending
                WHERE user_id=$1 AND proposal_id=$2 AND expires_at > NOW()""",
-            actor_id, confirmation_code)
+            actor_id, proposal_id)
 
+        if not app_pending:
+            return OperationResult.missing_data(
+                "Essa proposta foi substituída ou expirou. Confirme a proposta mais recente.")
         try:
             async with conn.transaction():
                 consumed = await conn.execute(
@@ -468,7 +435,9 @@ async def confirm_pending_preference(db_pool: Any, *,
                            WHERE user_id=$1 AND proposal_id=$2
                              AND expires_at > NOW()
                            RETURNING operation""",
-                        actor_id, confirmation_code)
+                        actor_id, proposal_id)
+                    if not app_row:
+                        raise ValueError("Proposta ativa não está mais disponível")
                     if app_row:
                         change = json.loads(app_row["operation"]) \
                             if isinstance(app_row["operation"], str) \

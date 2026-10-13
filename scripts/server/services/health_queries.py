@@ -85,7 +85,7 @@ async def _owner_first_name(conn: Any, context: OperationContext) -> Optional[st
     except Exception as err:
         print(f"[Health Queries] Aviso: nome do paciente não lido: {err}")
         nome = None
-    return (nome or "").split()[0] or None
+    return (nome or "").split()[0] if (nome or "").strip() else "seu familiar"
 
 
 def _last_reading_message(owner: Optional[str], label: str, value: str,
@@ -215,8 +215,8 @@ async def last_weight(conn: Any, context: OperationContext,
             """SELECT weight_kg, measured_at FROM biometrics
                WHERE user_id = $1
                UNION ALL
-               SELECT weight_kg, measured_at FROM vital_signs
-               WHERE user_id = $1 AND weight_kg IS NOT NULL
+               SELECT (to_jsonb(vs)->>'weight_kg')::double precision AS weight_kg, measured_at FROM vital_signs vs
+               WHERE user_id = $1 AND to_jsonb(vs)->>'weight_kg' IS NOT NULL
                ORDER BY measured_at DESC LIMIT 1""",
             context.patient_id,
         )
@@ -284,9 +284,9 @@ async def day_summary(conn: Any, context: OperationContext, *,
     try:
         rows = await conn.fetch(
             """SELECT systolic_pressure, diastolic_pressure, heart_rate,
-                      oxygen_saturation, glucose_level, hydration_ml, weight_kg,
-                      measured_at
-               FROM vital_signs
+                      oxygen_saturation, glucose_level, hydration_ml,
+                      (to_jsonb(vs)->>'weight_kg')::double precision AS weight_kg, measured_at
+               FROM vital_signs vs
                WHERE user_id = $1 AND measured_at >= $2 AND measured_at < $3
                ORDER BY measured_at ASC""",
             context.patient_id, inicio, fim,
@@ -320,11 +320,14 @@ async def day_summary(conn: Any, context: OperationContext, *,
             context.patient_id, inicio, fim,
         )
         for row in bio_rows:
-            leituras.append({"kind": "peso", "value": format_value("peso", row),
-                             "unit": _UNIT["peso"], "at": row["measured_at"].isoformat()})
+            item = {"kind": "peso", "value": format_value("peso", row),
+                    "unit": _UNIT["peso"], "at": row["measured_at"].isoformat()}
+            if item not in leituras:
+                leituras.append(item)
         leituras.sort(key=lambda leitura: leitura["at"])
     except Exception as err:
-        print(f"[Health Queries] Aviso: biometria do dia não lida: {err}")
+        print(f"[Health Queries] Biometria do dia indisponível: {err}")
+        return OperationResult.unavailable("Não consegui consultar todos os registros agora. Tente novamente.")
     agua = sum(r["hydration_ml"] or 0 for r in rows)
     dia_iso = (day or datetime.now(tz).date()).isoformat()
     if not leituras and agua <= 0:

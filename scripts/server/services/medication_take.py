@@ -23,7 +23,7 @@ from fastapi import HTTPException
 
 from services.care_os import require_patient_permission
 from services.medication_lookup import detect_hour, identify_medication
-from services.health_queries import DEFAULT_ZONE
+from services.health_queries import DEFAULT_ZONE, patient_timezone
 from services.operations import OperationContext, OperationResult
 
 _METRIC_TYPE = "MED_TOMADA"
@@ -44,6 +44,8 @@ async def take_medication(conn: Any, *, medication_id: str, actor_id: str,
     Retorna {"status": "recorded", ...} ou {"status": "already_recorded", ...}.
     Erros de negócio levantam HTTPException, como no endpoint original.
     """
+    if not 1 <= units_taken <= 20:
+        raise HTTPException(422, "Quantidade de unidades inválida.")
     if scheduled_for.tzinfo is None:
         raise HTTPException(422, "scheduled_for deve conter fuso horário.")
     if not idempotency_key or len(idempotency_key) < 8:
@@ -141,6 +143,8 @@ def resolve_scheduled_for(text: str, schedule_time: Optional[str],
     hora = detect_hour(norm)
     if hora:
         return datetime.combine(dia, datetime.strptime(hora, "%H:%M").time(), tz)
+    if re.search(r"\b(?:as|das|pelas?|para as)\s+(?:\d|vinte e quatro)|\b\d{1,2}(?:h|:)\d*", norm):
+        return None
     if schedule_time:
         try:
             hora_cad = datetime.strptime(schedule_time[:5], "%H:%M").time()
@@ -176,13 +180,21 @@ async def prepare_medication_take(conn: Any, db_pool: Any, *,
     if not ident.is_success or not ident.data:
         return ident
     med = ident.data
-    scheduled_for = resolve_scheduled_for(text, med.get("schedule_time"))
+    scheduled_for = resolve_scheduled_for(
+        text, med.get("schedule_time"), await patient_timezone(conn, context.patient_id))
     if scheduled_for is None:
         return OperationResult.clarification(
             "Não consegui saber o horário dessa dose. Me diz algo como "
             "'tomei o remédio das 8' ou confirme o horário certo.",
             data=med)
-    units = 1
+    quantity = re.search(r"\b(\d+|um|uma|dois|duas|tres|quatro)\s+(?:comprimidos?|capsulas?|unidades?)\b", _normalize_text(text))
+    if quantity:
+        raw = quantity.group(1)
+        units = int(raw) if raw.isdigit() else {"um": 1, "uma": 1, "dois": 2, "duas": 2, "tres": 3, "quatro": 4}[raw]
+        if not 1 <= units <= 20:
+            return OperationResult.clarification("Confirme a quantidade de unidades tomadas (1 a 20).")
+    else:
+        units = 1
     value_json = {
         "medication_id": med["medication_id"],
         "name": med["name"],
@@ -191,7 +203,7 @@ async def prepare_medication_take(conn: Any, db_pool: Any, *,
     }
     from core.confirmation import create_pending_confirmation
     confirmation_code = await create_pending_confirmation(
-        user_id=context.patient_id,
+        user_id=context.actor_id,
         metric_type=_METRIC_TYPE,
         value_json=value_json,
         db_pool=db_pool,

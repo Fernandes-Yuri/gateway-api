@@ -26,7 +26,7 @@ from services.operations import OperationContext, OperationResult
 
 # Marcadores de que a fala é sobre OUTRA pessoa (não autocuidado).
 _OTHER_HINT = re.compile(
-    r"\bminha mae|\bmaezinha|\bmeu pai|\bpapai|\bminha filha|\bmeu filho|"
+    r"\bmamae\b|\bminha mae|\bmaezinha|\bmeu pai|\bpapai|\bminha filha|\bmeu filho|"
     r"\bminha irma|\bmeu irmao|\bminha tia|\bmeu tio|\bminha avo|\bmeu avo|"
     r"\bvovo|\bvov|\bvovozinha|\bvovozi|\bminha sobrinha|\bmeu sobrinho|"
     r"\bminha esposa|\bminha mulher|\bmeu marido|\bmeu conjuge|\bfamiliar|"
@@ -40,9 +40,21 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", no_acc.lower()).strip()
 
 
+def _explicit_person_name(text: str) -> Optional[str]:
+    match = re.search(r"\b(?:do|da|de|para|pra)\s+(?:dona\s+|seu\s+)?([a-z]+)\b", _norm(text))
+    if not match:
+        return None
+    name = match.group(1)
+    if name in {"hoje", "ontem", "amanha", "dia", "semana", "mes", "ano", "mim", "voce",
+                "agua", "pressao", "glicose", "glicemia", "sangue", "peso", "copo", "remedio",
+                "medicamento", "conta", "perfil", "saude", "beber", "tomar", "comer", "um",
+                "uma", "minha", "meu", "mamae", "papai", "mae", "pai", "familiar", "paciente"}:
+        return None
+    return name
+
+
 def mentions_other_person(text: str) -> bool:
-    """True quando a fala sugere outra pessoa (destinatário da consulta)."""
-    return bool(_OTHER_HINT.search(_norm(text)))
+    return bool(_OTHER_HINT.search(_norm(text)) or _explicit_person_name(text))
 
 
 def _name_tokens(name: str) -> set:
@@ -54,23 +66,17 @@ def _matches_name(text_norm: str, name: str) -> bool:
     tokens = _name_tokens(name)
     if not tokens:
         return False
-    return any(t in text_norm for t in tokens)
+    return any(re.search(r"\b" + re.escape(t) + r"\b", text_norm) for t in tokens)
 
 
 async def list_active_relations(conn: Any, actor_id: str) -> List[Any]:
     """Vínculos ativos onde o ator é cuidador: pacientes que ele acompanha."""
-    try:
-        return await conn.fetch(
-            """SELECT b.patient_id, p.full_name, b.caregiver_role
-               FROM family_bindings b
-               JOIN profiles p ON p.id = b.patient_id
-               WHERE b.caregiver_id = $1 AND b.status = 'ACTIVE'
-               ORDER BY p.full_name""",
-            actor_id,
-        )
-    except Exception as err:
-        print(f"[Family Target] Falha ao listar vínculos: {err}")
-        return []
+    return await conn.fetch(
+        """SELECT b.patient_id, p.full_name, b.caregiver_role
+           FROM family_bindings b JOIN profiles p ON p.id = b.patient_id
+           WHERE b.caregiver_id = $1 AND b.status = 'ACTIVE'
+           ORDER BY p.full_name""", actor_id)
+
 
 
 async def resolve_family_target(conn: Any, context: OperationContext,
@@ -107,7 +113,13 @@ async def resolve_family_target(conn: Any, context: OperationContext,
         if len(by_name) > 1:
             return _choose_between(by_name)
 
-    # Sem nome (ou nome que não casa): vínculo único resolve; vários pedem.
+    if _explicit_person_name(text):
+        return OperationResult.clarification(
+            "Não encontrei esse nome nos seus vínculos ativos. "
+            "Qual familiar você quer consultar?", data={"candidates": [
+                {"patient_id": str(r["patient_id"]), "full_name": r["full_name"]} for r in rows]})
+
+    # Sem nome: vínculo único resolve; vários pedem.
     if len(rows) == 1:
         return _target_result(rows[0])
     return _choose_between(rows)

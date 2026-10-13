@@ -65,6 +65,7 @@ class WhatsAppPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.wa = whatsapp
         self.send = AsyncMock()
         conn = MagicMock()
+        conn.fetch = AsyncMock(return_value=[{'id': 'test-account', 'full_name': 'Ana Silva', 'user_role': 'PATIENT'}])
         conn.fetchrow = AsyncMock(return_value={'id': 'test-account', 'full_name': 'Ana Silva',
                                                'user_role': 'PATIENT'})
         pool = MagicMock()

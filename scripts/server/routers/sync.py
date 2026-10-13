@@ -109,6 +109,21 @@ class VitalSignSyncDto(BaseModel):
     measuredAt: str
 
 
+class BiometrySyncDto(BaseModel):
+    id: uuid.UUID
+    userId: str
+    weight: float = Field(ge=20, le=300, allow_inf_nan=False)
+    height: Optional[float] = Field(default=None, ge=0, le=250, allow_inf_nan=False)
+    measuredAt: datetime
+
+    @field_validator("measuredAt")
+    @classmethod
+    def require_timezone(cls, value):
+        if value.tzinfo is None:
+            raise ValueError("A medição precisa conter fuso horário.")
+        return value
+
+
 class MedicationSyncDto(BaseModel):
     id: Optional[str] = None
     userId: str
@@ -510,6 +525,38 @@ async def profile_avatar_file(user_id: str, filename: str, uid: str = Depends(fi
 # =============================================================
 # SINAIS VITAIS
 # =============================================================
+@router.post("/api/sync/biometry")
+async def sync_biometry(value: BiometrySyncDto, uid: str = Depends(firebase_uid)):
+    require_owner(uid, value.userId)
+    if not _state.db_pool:
+        raise HTTPException(503, "Biometria não sincronizada: banco indisponível.")
+    from services.biometry import height_in_meters, compute_imc
+    height = height_in_meters(value.height)
+    async with _state.db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO biometrics(id,user_id,weight_kg,height_m,imc,measured_at,source)
+               VALUES($1,$2,$3,$4,$5,$6,'app') ON CONFLICT(id) DO NOTHING RETURNING id""",
+            value.id, uid, value.weight, height, compute_imc(value.weight, height), value.measuredAt)
+        if not row:
+            row = await conn.fetchrow("SELECT id FROM biometrics WHERE id=$1 AND user_id=$2", value.id, uid)
+            if not row:
+                raise HTTPException(409, "Identificador de medição já utilizado.")
+    return {"status": "success", "id": str(row["id"])}
+
+
+@router.get("/api/biometry/{user_id}")
+async def get_biometry(user_id: str, uid: str = Depends(firebase_uid)):
+    require_owner(uid, user_id)
+    if not _state.db_pool:
+        raise HTTPException(503, "Biometria indisponível.")
+    async with _state.db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM biometrics WHERE user_id=$1 ORDER BY measured_at DESC LIMIT 1000", user_id)
+    return [{"id": str(r["id"]), "user_id": r["user_id"], "weight": r["weight_kg"],
+             "height": r["height_m"], "imc": r["imc"], "measured_at": r["measured_at"].isoformat()}
+            for r in rows]
+
+
 @router.post("/api/sync/vitals")
 async def sync_vital_sign(
     v: VitalSignSyncDto,
