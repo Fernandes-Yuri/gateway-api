@@ -67,6 +67,36 @@ def detect_query(norm: str):
 
 
 # ------------------------------------------------------------------
+# Tomada de medicação (PR3, passo 3.3): intenção de marcar dose tomada.
+# ------------------------------------------------------------------
+# Só conta como tomada a forma no passado ou no imperativo. O infinitivo
+# ("vou tomar", "preciso tomar", "me lembra de tomar") é intenção ou pedido
+# de lembrete — nunca registra dose (regra do passo 3.2/3.3: sem dados
+# suficientes, não há ocorrência).
+_TAKE_VERBS = re.compile(
+    r"\btomei|\btomou|\btomado|\btomados|\btomada|\btomadas|\btomando|"
+    r"\btoma\b|\btome\b|\bacabei de tomar|\bacabo de tomar")
+_MED_CONTEXT = re.compile(
+    r"\bremedio|\bremedios|\bmedicamento|\bmedicamentos|\bcomprimido|\bcapsula|"
+    r"\bxarope|\bgota|\bgotas|\binjecao|\bpedra")
+
+
+def detect_med_take(norm: str) -> bool:
+    """True quando a fala é marcação de dose tomada.
+
+    Exige verbo de tomar (passado/imperativo) E (palavra de remédio ou horário
+    explícito). Só nome do remédio, sem horário e sem palavra genérica, não
+    engatilha: não dá para saber se é tomada ou conversa sobre o remédio.
+    """
+    if not _TAKE_VERBS.search(norm):
+        return False
+    if _MED_CONTEXT.search(norm):
+        return True
+    from services.medication_lookup import detect_hour
+    return detect_hour(norm) is not None
+
+
+# ------------------------------------------------------------------
 # Normalização
 # ------------------------------------------------------------------
 
@@ -341,6 +371,11 @@ def detect_all(raw: str) -> dict:
     peso = detect_weight(norm)
     if peso:
         return {"kind": "weight", "peso_kg": peso}
+    # Passo 3.3: tomada de dose é reconhecida ANTES da consulta — "tomei o
+    # remédio da pressão das 8" carrega a palavra da métrica, mas é registro,
+    # não pergunta. Sem verbo de tomada, a consulta segue valendo.
+    if detect_med_take(norm):
+        return {"kind": "med_take"}
     # Passo 2.3: consulta (pergunta sem valor) é respondida pelo serviço de
     # consultas, antes de qualquer conversa aberta.
     query = detect_query(norm)

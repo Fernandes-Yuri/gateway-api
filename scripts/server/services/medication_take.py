@@ -1,4 +1,4 @@
-"""Serviço de tomada de medicação (PR3, passo 3.1).
+"""Serviço de tomada de medicação (PR3, passos 3.1, 3.3 e 3.4).
 
 Lógica extraída de routers/care_os.py (POST /api/medications/{id}/take) para
 um único caminho, usado pelo endpoint REST e pelo WhatsApp — sem versão
@@ -13,12 +13,26 @@ Levanta HTTPException nos mesmos casos do endpoint original (404/403/409/422);
 o adaptador do WhatsApp converte em OperationResult.
 """
 import json
-from datetime import datetime
-from typing import Any
+import re
+import unicodedata
+from datetime import datetime, timedelta
+from typing import Any, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
 
 from services.care_os import require_patient_permission
+from services.medication_lookup import detect_hour, identify_medication
+from services.health_queries import DEFAULT_ZONE
+from services.operations import OperationContext, OperationResult
+
+_METRIC_TYPE = "MED_TOMADA"
+
+_DAY_HINTS = (
+    ("anteontem", -2),
+    ("ontem", -1),
+    ("amanha", 1),  # normalização remove acento: cobre "amanhã"
+)
 
 
 async def take_medication(conn: Any, *, medication_id: str, actor_id: str,
@@ -90,3 +104,123 @@ async def take_medication(conn: Any, *, medication_id: str, actor_id: str,
     return {"status": "recorded", "log_id": str(log["id"]),
             "current_units": remaining, "stock_decremented": True,
             "patient_id": patient_id}
+
+
+# ------------------------------------------------------------------
+# Fluxo WhatsApp: horário + confirmação (passo 3.3) e registro (passo 3.4)
+# ------------------------------------------------------------------
+def _normalize_text(text: str) -> str:
+    no_acc = unicodedata.normalize("NFD", text or "")
+    no_acc = "".join(c for c in no_acc if unicodedata.category(c) != "Mn")
+    return re.sub(r"\s+", " ", no_acc.lower()).strip()
+
+
+def resolve_scheduled_for(text: str, schedule_time: Optional[str],
+                          zone_name: Optional[str] = None) -> Optional[datetime]:
+    """
+    scheduled_for (quando a dose era programada) a partir da fala ou do cadastro.
+
+    Regra do passo 3.3: scheduled_for é separado de taken_at (este último é
+    NOW() no ato da confirmação). Dia relativo (ontem/amanhã) + hora; sem hora
+    na fala, usa a programação do cadastro. Sem nenhum dos dois -> None
+    (esclarecer antes de gravar).
+    """
+    try:
+        tz = ZoneInfo(zone_name or DEFAULT_ZONE)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo(DEFAULT_ZONE)
+    norm = _normalize_text(text)
+    hoje = datetime.now(tz).date()
+    dia = hoje
+    achou_dia = False
+    for palavra, delta in _DAY_HINTS:
+        if re.search(r"\b" + palavra + r"\b", norm):
+            dia = hoje + timedelta(days=delta)
+            achou_dia = True
+            break
+    hora = detect_hour(norm)
+    if hora:
+        return datetime.combine(dia, datetime.strptime(hora, "%H:%M").time(), tz)
+    if schedule_time:
+        try:
+            hora_cad = datetime.strptime(schedule_time[:5], "%H:%M").time()
+        except ValueError:
+            return None
+        return datetime.combine(dia if achou_dia else hoje, hora_cad, tz)
+    return None
+
+
+def med_take_message(name: str, scheduled_for: datetime, units: int = 1) -> str:
+    """Texto da proposta de confirmação: medicamento + hora, sempre do banco."""
+    hora = scheduled_for.strftime("%H:%M")
+    dia = scheduled_for.strftime("%d/%m/%Y")
+    dose = f"{units} comprimido(s)" if units != 1 else "1 comprimido"
+    return (f"💊 *Confirmação de Tomada*\n\n"
+            f"Medicamento: *{name}*\n"
+            f"Programado para: *{hora}* de {dia}\n"
+            f"Dose: {dose}\n\n"
+            f"Confirma a tomada?")
+
+
+async def prepare_medication_take(conn: Any, db_pool: Any, *,
+                                  context: OperationContext,
+                                  text: str) -> OperationResult:
+    """
+    Identifica o medicamento, resolve o scheduled_for e cria a pendência de
+    confirmação da tomada. A tomada em si só acontece no confirm (passo 3.4).
+
+    Retorna confirmation (pendência criada), clarification (ambiguidade de
+    medicamento ou de horário) ou missing_data (sem candidato/horário).
+    """
+    ident = await identify_medication(conn, context, text)
+    if not ident.is_success or not ident.data:
+        return ident
+    med = ident.data
+    scheduled_for = resolve_scheduled_for(text, med.get("schedule_time"))
+    if scheduled_for is None:
+        return OperationResult.clarification(
+            "Não consegui saber o horário dessa dose. Me diz algo como "
+            "'tomei o remédio das 8' ou confirme o horário certo.",
+            data=med)
+    units = 1
+    value_json = {
+        "medication_id": med["medication_id"],
+        "name": med["name"],
+        "scheduled_for": scheduled_for.isoformat(),
+        "units_taken": units,
+    }
+    from core.confirmation import create_pending_confirmation
+    confirmation_code = await create_pending_confirmation(
+        user_id=context.patient_id,
+        metric_type=_METRIC_TYPE,
+        value_json=value_json,
+        db_pool=db_pool,
+    )
+    if not confirmation_code:
+        return OperationResult.unavailable(
+            "Não consegui preparar a confirmação da tomada agora. Tente novamente.")
+    return OperationResult.confirmation(
+        med_take_message(med["name"], scheduled_for, units),
+        pending_op_id=confirmation_code,
+        data={**med, "scheduled_for": scheduled_for.isoformat(), "units_taken": units})
+
+
+async def confirm_medication_take(conn: Any, *, user_id: str,
+                                  value_json: dict) -> dict:
+    """
+    Executa a tomada na transação do chamador (passo 3.4).
+
+    Reenvio da mesma pendência não duplica: a pendência é consumida por
+    confirm_pending_confirmation (UPDATE ... WHERE status='pending') e a
+    idempotency_key deriva do scheduled_for e do medicamento.
+    """
+    scheduled_raw = value_json.get("scheduled_for")
+    scheduled_for = datetime.fromisoformat(scheduled_raw)
+    return await take_medication(
+        conn,
+        medication_id=value_json["medication_id"],
+        actor_id=user_id,
+        scheduled_for=scheduled_for,
+        units_taken=int(value_json.get("units_taken") or 1),
+        idempotency_key=f"wa:{value_json['medication_id']}:{scheduled_raw}",
+    )

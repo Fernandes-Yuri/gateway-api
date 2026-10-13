@@ -101,6 +101,10 @@ class OperationResult(BaseModel):
     def is_success(self) -> bool:
         return self.status == STATUS_SUCCESS
 
+    @property
+    def is_confirmation(self) -> bool:
+        return self.status == STATUS_CONFIRMATION
+
 
 async def validate_actor(conn: Any, context: OperationContext,
                          permission: Optional[str] = None) -> Optional[OperationResult]:

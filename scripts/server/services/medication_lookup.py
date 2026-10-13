@@ -43,7 +43,8 @@ def _normalize(text: str) -> str:
 
 
 def detect_hour(norm: str) -> Optional[str]:
-    """Horário na fala, em 'HH:MM'. Detecta '20h', '20:00' e 'das oito'."""
+    """Horário na fala, em 'HH:MM'. Detecta '20h', '20:00', 'das oito' e
+    'às 8' / 'das 8' (número puro precedido de preposição de hora)."""
     m = re.search(r"\b(\d{1,2})\s*(?:h|hs|horas?)\b", norm)
     if m:
         hora = int(m.group(1))
@@ -54,6 +55,14 @@ def detect_hour(norm: str) -> Optional[str]:
         hora, minuto = int(m.group(1)), int(m.group(2))
         if 0 <= hora <= 23 and 0 <= minuto <= 59:
             return f"{hora:02d}:{minuto:02d}"
+    # "às 8" / "das 8" / "para as 8": número puro após preposição de horário.
+    # Sem 'h' explícito, só essas preposições valem como hora — evita ler
+    # "comprimido de 8" (dosagem) como oito horas.
+    m = re.search(r"\b(?:as|das|para as|pelas?)\s+(\d{1,2})\b", norm)
+    if m:
+        hora = int(m.group(1))
+        if 0 <= hora <= 23:
+            return f"{hora:02d}:00"
     for word, hora in sorted(_HOUR_BY_WORD.items(), key=lambda kv: -len(kv[0])):
         if re.search(r"\b" + re.escape(word) + r"\b", norm):
             return f"{hora:02d}:00"
