@@ -348,6 +348,10 @@ def _operation_followup(user_id, text):
     candidates = pending[2].get("candidates", [])
     names = [candidate.get("full_name") or candidate.get("name") or "" for candidate in candidates]
     matches = any(answer and (answer == _norm(name) or answer in _norm(name).split()) for name in names)
+    if pending[3] == "query_ambiguous" and len(answer.split()) <= 4:
+        metric = detect_all("qual " + text).get("kind", "")
+        if metric.startswith("query_") and metric != "query_ambiguous":
+            return pending[1] + " " + text
     if matches or (pending[3] == "med_take" and detect_hour(answer)):
         return pending[1] + " " + ("da " if pending[3] != "med_take" else "") + text
     return text
@@ -601,6 +605,7 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
         async with db.acquire() as conn:
             care_ctx, _fam_err = await _WA_FAMILY_RESOLVER(conn, care_ctx, user_text)
         if _fam_err is not None and _fam_err.message:
+            _remember_operation(user_id, user_text, _fam_err, "reminder")
             await send_whatsapp_text(sender_phone, _fam_err.message)
             return True
 

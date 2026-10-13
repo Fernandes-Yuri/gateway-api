@@ -38,6 +38,9 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(detect_all('quanto de água bebi hoje?')['kind'], 'query_water')
         self.assertEqual(detect_all('bebi 200 ml de água')['kind'], 'hydration')
 
+    def test_water_reminder_is_not_a_record(self):
+        self.assertEqual(detect_all('me lembra de beber água')['kind'], 'reminder')
+
     def test_cup_preference_accepts_accents(self):
         self.assertEqual(detect_preference_intent('meu copo é de 200 ml'),
                          {'op': 'set', 'key': 'cup_ml', 'value': 200})

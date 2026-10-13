@@ -58,11 +58,11 @@ def detect_query(norm: str):
         return None
     if not _QUERY_MARKERS.search(norm):
         return None
-    if _QUERY_AMBIGUOUS.search(norm):
-        return "query_ambiguous"
     for kind, padrao in _QUERY_METRICAS:
         if re.search(padrao, norm):
             return kind
+    if _QUERY_AMBIGUOUS.search(norm):
+        return "query_ambiguous"
     return None
 
 
@@ -356,6 +356,8 @@ def detect_all(raw: str) -> dict:
         return {"kind": "time"}
     if _DATE_RE.search(norm):
         return {"kind": "date"}
+    if re.search(r"\blembrete|\bme lembra|\bme avisa", norm):
+        return {"kind": "reminder"}
     # Passo 3.3: tomada de dose é reconhecida ANTES da consulta — "tomei o
     # remédio da pressão das 8" carrega a palavra da métrica, mas é registro,
     # não pergunta. Sem verbo de tomada, a consulta segue valendo.
@@ -384,8 +386,6 @@ def detect_all(raw: str) -> dict:
     peso = detect_weight(norm)
     if peso:
         return {"kind": "weight", "peso_kg": peso}
-    if re.search(r"\blembrete|\bme lembra|\bme avisa", norm):
-        return {"kind": "reminder"}
     if re.search(r"\bexame", norm):
         return {"kind": "exams"}
     if any(w in norm for w in _MED_WORDS):
