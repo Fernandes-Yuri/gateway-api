@@ -368,3 +368,14 @@ class DosePostgresTests(unittest.IsolatedAsyncioTestCase):
         result = await self.confirm(batch)
         self.assertEqual(result['counts']['already_recorded'],1)
         self.assertEqual(await self.stock(mid),40)
+
+    async def test_schedule_reader_preserves_unconfirmed_slots_and_permission(self):
+        mid = await self.med(configured=False)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                data = await doses.read_schedule(conn, actor_id='actor', patient_id='patient', medication_id=mid)
+                self.assertEqual(data['schedule_revision'],1)
+                self.assertEqual(data['slots'],[{'local_time':'08:00','dose_units':None,'quantity_confirmed':False}])
+                with self.assertRaises(HTTPException) as err:
+                    await doses.read_schedule(conn,actor_id='other',patient_id='patient',medication_id=mid)
+                self.assertEqual(err.exception.status_code,403)
