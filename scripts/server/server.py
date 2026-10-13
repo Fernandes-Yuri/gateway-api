@@ -408,9 +408,12 @@ def _propagate_db_pool():
         whatsapp_router._state.send_care_message = None
 
 
+release_control_server = None
+
+
 @app.on_event("startup")
 async def startup():
-    global db_pool
+    global db_pool, release_control_server
     if HAS_POSTGRES:
         for attempt in range(1, 6):
             try:
@@ -428,6 +431,14 @@ async def startup():
         if db_pool:
             await rate_limiter.load_blocked_ips_from_db(db_pool)
             _propagate_db_pool()  # routers extras: pool vivo a partir de agora
+            try:
+                from release_control import start_release_control
+                release_control_server = await start_release_control(
+                    RELEASES_DIR, lambda: app_router._state.db_pool, PUBLIC_API_BASE_URL,
+                    app_router.notify_published_release)
+            except Exception as error:
+                print(f"[Release Control] Indisponível: {type(error).__name__}")
+
 
             # AUD-G(M): expire_pending_confirmations() (migration 004:63-71)
             # existia mas nunca era chamada. Confirmações vencidas ficavam
@@ -607,7 +618,13 @@ async def scheduled_proactive_job(periodo: str):
 
 @app.on_event("shutdown")
 async def shutdown():
-    global db_pool
+    global db_pool, release_control_server
+    if release_control_server:
+        listener, path = release_control_server
+        listener.close()
+        await listener.wait_closed()
+        path.unlink(missing_ok=True)
+        release_control_server = None
     if globals().get('security_telemetry'):
         await security_telemetry.stop()
     if globals().get("retention_scheduler"):

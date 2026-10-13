@@ -5,6 +5,9 @@ Extraido do monolito server.py na Fase A passo 3
 /api/app/download, /api/app/version, /api/app/notify-update, / (landing).
 """
 import os
+import asyncio
+import hashlib
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -29,108 +32,59 @@ class BroadcastUpdateRequest(BaseModel):
 
 @router.get("/api/app/latest")
 async def get_latest_app_release():
-    """Retorna metadados da ultima versao disponivel para Auto-Update."""
-    default_payload = {
-        "version_name": "1.0",
-        "version_code": 1,
-        "release_type": "release",
-        "filename": "braga-saude.apk",
-        "download_url": "https://github.com/Fernandes-Yuri/bragasaude-releases/releases/download/v1.0.0/app-release.apk",
-        "changelog": "Versão inicial de testes do Braga Saúde.",
-        "min_android_sdk": 26
-    }
-    db_pool = _state.db_pool
-    if not db_pool:
-        return default_payload
-    try:
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                SELECT version_name, version_code, release_type, filename, file_size_bytes,
-                       sha256_hash, download_url, changelog, min_android_sdk, created_at
-                FROM app_releases
-                WHERE is_active = TRUE
-                ORDER BY version_code DESC
-                LIMIT 1
-            """)
-            if not row:
-                return default_payload
-            return {
-                "version_name": row["version_name"],
-                "version_code": row["version_code"],
-                "release_type": row["release_type"],
-                "filename": row["filename"],
-                "file_size_bytes": row["file_size_bytes"],
-                "sha256_hash": row["sha256_hash"],
-                "download_url": row["download_url"] or f"{PUBLIC_API_BASE_URL}/api/app/download",
-                "changelog": row["changelog"],
-                "min_android_sdk": row["min_android_sdk"],
-                "created_at": row["created_at"].isoformat() if row["created_at"] else None
-            }
-    except Exception as e:
-        print(f"[App Release Error] {e}")
-        return default_payload
+    if _state.db_pool is None:
+        raise HTTPException(503, "Catálogo de releases indisponível.")
+    async with _state.db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT version_name,version_code,release_type,filename,file_size_bytes,sha256_hash,changelog,min_android_sdk,created_at FROM app_releases WHERE is_active=TRUE ORDER BY version_code DESC LIMIT 1")
+    if not row:
+        raise HTTPException(404, "Nenhuma release publicada.")
+    result = dict(row)
+    if result.get('created_at'):
+        result['created_at'] = result['created_at'].isoformat()
+    result.pop('id', None)
+    result['download_url'] = f"{PUBLIC_API_BASE_URL}/api/app/download?version_code={row['version_code']}"
+    result['release_contract'] = 2
+    return result
 
 
 @router.get("/api/app/download")
-async def download_app_apk(token: Optional[str] = None):
-    """Endpoint de download do APK oficial da Release."""
-    candidates = [
-        os.path.join(RELEASES_DIR, "BragaSaude.apk"),
-        os.path.join(RELEASES_DIR, "latest.apk"),
-        "/home/ec2-user/braga-gateway/releases/BragaSaude.apk",
-        "/home/ec2-user/braga-gateway/releases/latest.apk",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "releases", "BragaSaude.apk"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "releases", "latest.apk"),
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "releases", "BragaSaude.apk"),
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "releases", "latest.apk"),
-    ]
-    for apk_path in candidates:
-        if os.path.exists(apk_path) and os.path.getsize(apk_path) > 0:
-            return FileResponse(
-                apk_path,
-                media_type="application/vnd.android.package-archive",
-                filename="BragaSaude.apk"
-            )
-    return JSONResponse(
-        status_code=404,
-        content={"detail": "APK de release em preparação. Tente novamente em alguns instantes."}
-    )
+async def download_app_apk(token: Optional[str] = None, version_code: Optional[int] = None):
+    """O catálogo escolhe um arquivo imutável, inclusive entre latest/download."""
+    row = None
+    if _state.db_pool is not None:
+        async with _state.db_pool.acquire() as conn:
+            if version_code is not None:
+                row = await conn.fetchrow("SELECT * FROM app_releases WHERE version_code=$1", version_code)
+            else:
+                row = await conn.fetchrow("SELECT * FROM app_releases WHERE is_active=TRUE ORDER BY version_code DESC LIMIT 1")
+        if row is None:
+            raise HTTPException(404, "Release não encontrada.")
+        filename = row['filename']
+        if Path(filename).name != filename or not filename.endswith('.apk'):
+            raise HTTPException(503, "Caminho de release inválido.")
+        candidates = [Path(RELEASES_DIR) / filename]
+    else:
+        if version_code is not None:
+            raise HTTPException(503, "Catálogo de releases indisponível.")
+        candidates = [Path(RELEASES_DIR) / name for name in ('BragaSaude.apk', 'latest.apk')]
+    for path in candidates:
+        if path.is_file() and not path.is_symlink():
+            if row:
+                def valid():
+                    digest = hashlib.sha256()
+                    with path.open('rb') as file:
+                        for block in iter(lambda: file.read(1024 * 1024), b''):
+                            digest.update(block)
+                    return path.stat().st_size == row['file_size_bytes'] and digest.hexdigest() == row['sha256_hash'].lower()
+                if not await asyncio.to_thread(valid):
+                    raise HTTPException(503, "Arquivo não corresponde à release publicada.")
+            return FileResponse(path, media_type="application/vnd.android.package-archive", filename="BragaSaude.apk")
+    return JSONResponse(status_code=404, content={"detail": "APK de release indisponível."})
 
 
 @router.get("/api/app/version")
 async def get_latest_app_version():
-    """Retorna os metadados da versao mais recente ativa do aplicativo."""
-    db_pool = _state.db_pool
-    if db_pool:
-        try:
-            async with db_pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT version_name, version_code, release_type, filename, file_size_bytes, sha256_hash, changelog, min_android_sdk "
-                    "FROM app_releases WHERE is_active = TRUE ORDER BY version_code DESC LIMIT 1"
-                )
-                if row:
-                    return {
-                        "version_name": row["version_name"],
-                        "version_code": row["version_code"],
-                        "release_type": row["release_type"],
-                        "file_size_bytes": row["file_size_bytes"],
-                        "sha256_hash": row["sha256_hash"],
-                        "changelog": row["changelog"],
-                        "min_android_sdk": row["min_android_sdk"],
-                        "download_url": "https://bragasaude.online/api/app/download"
-                    }
-        except Exception as e:
-            print(f"[Version Lookup Error] {e}")
-
-    return {
-        "version_name": "1.1.1",
-        "version_code": 3,
-        "release_type": "release",
-        "file_size_bytes": 13941419,
-        "sha256_hash": "4C624FABB031F92FB7A64C3D0F91B6EC40253152630F853080CC2BC252645702",
-        "changelog": "Versão oficial de produção: eliminação total de com.example, foco estrito de voz em sinais vitais com confirmação manual, auto-update push e vinculação de WhatsApp com validação real OTP.",
-        "download_url": "https://bragasaude.online/api/app/download"
-    }
+    return await get_latest_app_release()
 
 
 @router.post("/api/app/notify-update")
@@ -149,6 +103,10 @@ async def broadcast_app_update(req: BroadcastUpdateRequest, request: Request):
     supplied = request.headers.get("Authorization", "")
     if supplied != f"Bearer {admin_token}":
         raise HTTPException(401, "Não autorizado.")
+    return await _broadcast_app_update(req)
+
+
+async def _broadcast_app_update(req: BroadcastUpdateRequest):
     # Plano B (doc 10 §1B): le do banco device_push_tokens (a migracao de
     # startup renomeia o JSON, entao ler load_devices() devolvia 0 aparelhos).
     devices_by_user = await load_devices_by_user(_state.db_pool)
@@ -235,3 +193,9 @@ def configure_state(*, db_pool=None, messaging=None, has_fcm=False):
     _state.db_pool = db_pool
     _state.messaging = messaging
     _state.has_fcm = has_fcm
+
+
+async def notify_published_release(manifest):
+    return await _broadcast_app_update(BroadcastUpdateRequest(
+        version_name='v' + manifest.version_name, version_code=manifest.version_code,
+        download_url=f"{PUBLIC_API_BASE_URL}/api/app/download?version_code={manifest.version_code}"))
