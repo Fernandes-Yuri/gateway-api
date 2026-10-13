@@ -395,50 +395,16 @@ async def update_medication(
 
 @router.post("/api/medications/{medication_id}/take")
 async def take_medication(medication_id: str, payload: MedicationTakeRequest, uid: str = Depends(firebase_uid)):
-    if payload.scheduled_for.tzinfo is None:
-        raise HTTPException(422, "scheduled_for deve conter fuso horário.")
+    # Passo 3.1: lógica no serviço compartilhado (endpoint REST + WhatsApp),
+    # sem caminho paralelo só-com-log. A transação envolve a tomada inteira.
+    from services.medication_take import take_medication as _take
     async with _pool().acquire() as conn:
         async with conn.transaction():
-            med = await conn.fetchrow("SELECT * FROM medications WHERE id=$1::uuid FOR UPDATE", medication_id)
-            if not med:
-                raise HTTPException(404, "Medicamento não encontrado.")
-            patient_id = med["user_id"]
-            await require_patient_permission(conn, uid, patient_id, "medication:take")
-            existing = await conn.fetchrow(
-                "SELECT id,taken_at FROM medication_logs WHERE user_id=$1 AND idempotency_key=$2",
-                patient_id, payload.idempotency_key,
+            return await _take(
+                conn, medication_id=medication_id, actor_id=uid,
+                scheduled_for=payload.scheduled_for, units_taken=payload.units_taken,
+                idempotency_key=payload.idempotency_key,
             )
-            if existing:
-                return {"status": "already_recorded", "log_id": str(existing["id"]), "stock_decremented": False}
-            if (med.get("current_units") or 0) < payload.units_taken:
-                raise HTTPException(409, "Estoque insuficiente para registrar esta dose.")
-            duplicate = await conn.fetchval(
-                """SELECT EXISTS(SELECT 1 FROM medication_logs
-                   WHERE medication_id=$1::uuid AND scheduled_for=$2)""",
-                medication_id, payload.scheduled_for.isoformat(),
-            )
-            if duplicate:
-                raise HTTPException(409, "Esta dose já foi confirmada por outro cuidador.")
-            log = await conn.fetchrow(
-                """INSERT INTO medication_logs
-                   (user_id,medication_id,taken_at,scheduled_for,actor_id,units_taken,idempotency_key)
-                   VALUES ($1,$2::uuid,now(),$3,$4,$5,$6) RETURNING id,taken_at""",
-                patient_id, medication_id, payload.scheduled_for.isoformat(), uid,
-                payload.units_taken, payload.idempotency_key,
-            )
-            remaining = await conn.fetchval(
-                "UPDATE medications SET current_units=current_units-$2,updated_at=now() WHERE id=$1::uuid RETURNING current_units",
-                medication_id, payload.units_taken,
-            )
-            actor_name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid) or "Usuário autorizado"
-            await conn.execute(
-                """INSERT INTO care_audit_trail(patient_id,actor_id,actor_name,action_type,details)
-                   VALUES ($1,$2,$3,'MEDICATION_TAKEN',$4::jsonb)""",
-                patient_id, uid, actor_name,
-                json.dumps({"medication_id": medication_id, "medication_name": med["name"],
-                            "scheduled_for": payload.scheduled_for.isoformat(), "units_taken": payload.units_taken}),
-            )
-    return {"status": "recorded", "log_id": str(log["id"]), "current_units": remaining, "stock_decremented": True}
 
 
 @router.post("/api/medications/{medication_id}/restock")
