@@ -319,6 +319,11 @@ def build_confirmation_message(metric_type: str, values: dict, confirmation_code
         # destinatário já foi apresentado na proposta do serviço.
         value_display = (values.get("body") or "")[:120]
         icon = "💌"
+    elif metric_type == "PREFERENCE":
+        # Passo 5.3: proposta de preferência. O texto completo (chave e
+        # valor) já foi enviado pelo serviço; aqui é só o aceite.
+        value_display = "preferência da sua conta"
+        icon = "🧠"
     else:
         value_display = str(values)
         icon = "📋"

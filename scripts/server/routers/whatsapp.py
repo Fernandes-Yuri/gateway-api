@@ -610,6 +610,72 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
     return True
 
 
+async def handle_wa_preference(*, sender_phone: str, user_id: str, user_name,
+                               msg_type: str, db, user_text: str,
+                               context=None) -> bool:
+    """Preferências da conta no WhatsApp (PR5, passos 5.1 a 5.3).
+
+    Chave é a conta (nunca o telefone), escopo idêntico ao app: apelido,
+    extensão das respostas e volume do copo. Gravação só após confirmar a
+    proposta ativa; "sim" sem pendência não altera nada.
+
+    Retorna True quando respondeu (lista, proposta com botões ou
+    esclarecimento); False quando a fala não é de preferência e o pipeline
+    deve seguir seu fluxo normal.
+    """
+    if not user_id:
+        return False
+    try:
+        from services.wa_preferences import handle_preference
+        from services.operations import OperationContext
+    except ImportError:  # pragma: no cover - fallback defensivo do monolito
+        print("[WhatsApp Preferences] Serviço de preferências indisponível")
+        return False
+
+    pref_ctx = context or OperationContext(
+        actor_id=user_id, patient_id=user_id, channel="whatsapp")
+
+    pref_result = None
+    try:
+        async with db.acquire() as conn:
+            pref_result = await handle_preference(
+                conn, db, context=pref_ctx, text=user_text)
+    except Exception as pref_err:
+        print(f"[WhatsApp Preferences] Falha: {pref_err}")
+        return False
+    if pref_result is None or not pref_result.message:
+        # None = não é intenção de preferência; deixa o pipeline seguir.
+        return False
+
+    if pref_result.is_confirmation and pref_result.pending_op_id:
+        await send_confirmation_buttons(
+            to_number=sender_phone,
+            metric_type="PREFERENCE",
+            values={"describe": (pref_result.data or {}).get("key", "")},
+            confirmation_code=pref_result.pending_op_id,
+            user_name=user_name,
+        )
+        print(f"[WhatsApp Preferences] Botões enviados: {pref_result.pending_op_id}")
+    else:
+        await send_whatsapp_text(sender_phone, pref_result.message)
+
+    # Log sem o apelido (dado pessoal): só a intenção e o resultado.
+    try:
+        log_fine_tuning_sample(
+            user_prompt=user_text,
+            assistant_reply=pref_result.message,
+            source="whatsapp_voice" if msg_type in ("audio", "voice") else "whatsapp",
+            system_prompt="wa_preferences (serviço, sem LLM)",
+            user_name=user_name,
+            action="PREFERENCIA",
+            action_params={"result": pref_result.status,
+                           "confirmation_code": pref_result.pending_op_id}
+        )
+    except Exception:
+        pass
+    return True
+
+
 # =============================================================
 # PIPELINE DE MENSAGEM ENTRANTE
 # =============================================================
@@ -845,6 +911,18 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         if _c_handled:
                             continue
 
+                    # 2.8d. Preferências da conta (PR5, passos 5.1/5.3): o
+                    # serviço reconhece, propõe e grava na mesma conta do
+                    # app. A confirmação só vale para a proposta ativa (5.2).
+                    if user_id:
+                        _p_handled = await handle_wa_preference(
+                            sender_phone=sender_phone, user_id=user_id,
+                            user_name=user_name, msg_type=msg_type, db=db_pool,
+                            user_text=user_text, context=wa_ctx,
+                        )
+                        if _p_handled:
+                            continue
+
                     # 2.9. Camada 0 (Fase 4): router determinístico antes do LLM.
                     # Vitais com número vão direto aos botões; fofoca/social vai
                     # de template; só conversa aberta chega ao Groq.
@@ -1060,6 +1138,27 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
                     await send_whatsapp_text(
                         sender_phone,
                         "Não foi possível enviar a mensagem agora. Tente novamente em instantes.")
+                return
+
+            # PR5, passo 5.2: confirma a proposta de preferência ativa e grava
+            # na mesma conta do app. Reenvio do botão não duplica.
+            if _mt_metric == "PREFERENCE":
+                try:
+                    from services.wa_preferences import confirm_pending_preference
+                    _pr_result = await confirm_pending_preference(
+                        db_pool, confirmation_code=confirmation_code, actor_id=user_id)
+                    await send_whatsapp_text(
+                        sender_phone,
+                        _pr_result.message or "Não consegui confirmar a alteração agora.")
+                except ImportError:  # pragma: no cover
+                    await send_whatsapp_text(
+                        sender_phone,
+                        "Não consegui confirmar a alteração agora. Tente novamente.")
+                except Exception as _pr_err:
+                    print(f"[Callback] Falha na preferência: {_pr_err}")
+                    await send_whatsapp_text(
+                        sender_phone,
+                        "Não consegui confirmar a alteração agora. Nada foi gravado.")
                 return
 
             success = await confirm_pending_confirmation(confirmation_code, user_id, db_pool)
