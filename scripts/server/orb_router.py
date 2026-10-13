@@ -13,6 +13,7 @@ Regras de segurança do roteador:
   refeição — fofoca cotidiana cai em SMALLTALK (CONVERSA).
 """
 
+from services.emergency_reply import emergency_reply
 import re
 import time
 import unicodedata
@@ -275,17 +276,16 @@ def detect_bp(norm: str):
     dia = _to_int(m.group(2))
     if sys is None or dia is None:
         return None
-    if sys < 40:
+    if 0 < sys < 30:
         sys *= 10
-    if dia < 40:
+    if 0 < dia < 30:
         dia *= 10
     half = (m.group(3) or "").strip()
     if half in ("meio", "meia"):
         dia += 5
     elif half.isdigit():
         dia += int(half)
-    if not (60 <= sys <= 280 and 30 <= dia <= 180 and sys > dia):
-        return None
+    # Reconhecer a medição não é validá-la. O executor aplica as faixas.
     return sys, dia
 
 
@@ -399,7 +399,11 @@ def detect_all(raw: str) -> dict:
         return {"kind": "date"}
     if _CODE_REQUEST.search(norm) or _LONG_OUTPUT_REQUEST.search(norm):
         return {"kind": "out_of_scope"}
-    if re.search(r"\blembrete|\b(?:me\s+)?lemb(?:ra|re)\b|\bme avisa", norm):
+    from services.wa_preferences import detect_preference_intent
+    if detect_preference_intent(raw):
+        return {"kind": "preference"}
+    from services.care_intent import is_care_request
+    if is_care_request(raw) or re.search(r"\b(?:abrir|ver|mostrar|meus|minhas)\s+(?:meus\s+)?lembretes\b", norm):
         return {"kind": "reminder"}
     if re.search(r"\b(?:vou|pretendo|quero|irei)\s+tomar\b", norm) and _MED_CONTEXT.search(norm):
         return {"kind": "med_plan"}
@@ -531,7 +535,7 @@ def route_chat(raw: str, model_name: str = None):
         return None
     if kind == "emergency":
         return {
-            "fala": "Isso parece urgente. Acione o SAMU 192 ou vá ao pronto atendimento agora. Já deixei as opções de socorro na sua tela.",
+            "fala": emergency_reply(),
             "acao": "EMERGENCIA",
             "parametros": {},
         }
@@ -540,17 +544,12 @@ def route_chat(raw: str, model_name: str = None):
     if kind == "model_identity":
         suffix = f" Neste canal, o modelo configurado é {model_name}." if model_name else ""
         return _conversa("Sou o Braga, assistente virtual do Braga Saúde." + suffix)
-    if kind == "time":
-        import time as t_mod
-        lt = t_mod.localtime()
-        h = lt.tm_hour
-        m = lt.tm_min
-        time_str = f"Agora são {h} horas." if m == 0 else f"Agora são {h} horas e {m} minutos."
-        return _conversa(time_str)
-    if kind == "date":
+    if kind in {"time", "date"}:
         from services.calendar_reply import calendar_reply
         return _conversa(calendar_reply(raw, kind))
     if kind == "bp":
+        if not (60 <= det["sys"] <= 280 and 40 <= det["dia"] <= 180 and det["sys"] > det["dia"]):
+            return None
         band = classify_bp(det["sys"], det["dia"])
         return _conversa(
             f"Entendi: {det['sys']} por {det['dia']}. De acordo com a Sociedade Brasileira de Cardiologia, esse valor está {band}. "
@@ -693,12 +692,12 @@ _REPEAT_SUFFIX = (" Se quiser, te explico de outro jeito ou te mostro "
                   "onde anotar no aplicativo. É só pedir!")
 
 
-def dedupe_fala(memory: dict, key: str, fala: str) -> str:
+def dedupe_fala(memory: dict, key: str, fala: str, alternative: str = None) -> str:
     """Devolve a fala, variando se for idêntica à última enviada."""
     if len(memory) > LAST_FALA_MAX_KEYS:
         memory.clear()
     if memory.get(key) == fala:
-        return fala + _REPEAT_SUFFIX
+        fala = alternative or fala + _REPEAT_SUFFIX
     memory[key] = fala
     return fala
 
@@ -706,9 +705,6 @@ def dedupe_fala(memory: dict, key: str, fala: str) -> str:
 # ------------------------------------------------------------------
 # Mapeamento WhatsApp (Fase 4) — sem "voz do aplicativo" por lá
 # ------------------------------------------------------------------
-
-_SAMU_FALA = ("Isso parece urgente. Acione o SAMU 192 ou vá à UPA/pronto-socorro "
-              "mais próximo agora.")
 
 _WA_VITALS = {
     "bp": ("PRESSAO", lambda d: {"sistolica": d["sys"], "diastolica": d["dia"]}),
@@ -736,7 +732,7 @@ def whatsapp_next(raw: str, is_registered: bool, model_name: str = None) -> dict
                  "greeting", "gratitude"):
         return {"type": "llm"}
     if kind == "emergency":
-        return {"type": "text", "fala": _SAMU_FALA}
+        return {"type": "text", "fala": emergency_reply(), "acao": "EMERGENCIA"}
     if kind == "out_of_scope":
         return {"type": "text", "fala": "Posso ajudar com recursos de saúde e rotina do Braga Saúde. Para programação ou tarefas gerais, use um assistente apropriado."}
     if kind == "model_identity":
@@ -750,6 +746,10 @@ def whatsapp_next(raw: str, is_registered: bool, model_name: str = None) -> dict
     if kind in _WA_VITALS:
         metric, to_values = _WA_VITALS[kind]
         values = to_values(det)
+        from core.confirmation import validate_health_data
+        valid, error, values = validate_health_data(metric, values)
+        if not valid:
+            return {"type": "text", "fala": f"Valor inválido: {error}. Confira a medição e envie o valor correto."}
         if is_registered:
             if kind == "bp":
                 summary = f"{det['sys']} por {det['dia']}"

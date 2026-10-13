@@ -8,13 +8,17 @@ MONTHS = ('', 'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho
           'setembro', 'outubro', 'novembro', 'dezembro')
 
 
-def calendar_reply(text, kind, timezone_name='America/Sao_Paulo', now=None):
+def calendar_reply(text, kind, timezone_name='America/Sao_Paulo', now=None, *, alternate=False):
     try:
         zone = ZoneInfo(timezone_name or 'America/Sao_Paulo')
     except (ZoneInfoNotFoundError, ValueError, TypeError):
         zone = ZoneInfo('America/Sao_Paulo')
     current = now.astimezone(zone) if now is not None else datetime.now(zone)
     if kind == 'time':
+        if alternate:
+            return f"No seu fuso, são {current:%Hh%M}."
+        if current.minute == 0:
+            return f"Agora são {current.hour} horas em ponto."
         return f"Agora são {current.hour} horas e {current.minute} minutos."
     literal = re.search(r'\b(\d{1,2}/\d{1,2}/\d{4})\b', text)
     if literal and 'hoje' not in text.casefold():
