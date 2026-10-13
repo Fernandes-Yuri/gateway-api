@@ -445,6 +445,92 @@ async def handle_wa_health_confirmation(*, sender_phone: str, user_id: str, user
     return False
 
 
+async def handle_wa_medication_take(*, sender_phone: str, user_id: str, user_name,
+                                    msg_type: str, db, user_text: str,
+                                    context=None) -> bool:
+    """Tomada de medicação no WhatsApp (PR3, passo 3.3).
+
+    Identifica o remédio cadastrado, resolve o horário programado
+    (scheduled_for) e cria a pendência guardando medicamento e horário. A
+    tomada em si só acontece no botão Confirmar (passo 3.4), na mesma
+    transação do consumo da pendência — nada é gravado pela metade, e
+    Cancelar/Editar não gera tomada.
+
+    Retorna True quando respondeu (botões enviados ou pedido de
+    esclarecimento do serviço); False caso contrário, e o pipeline segue.
+    """
+    if not user_id:
+        return False
+    try:
+        from services.medication_take import prepare_medication_take
+        from services.operations import OperationContext
+    except ImportError:  # pragma: no cover - fallback defensivo do monolito
+        print("[WhatsApp Med Take] Serviço de tomada indisponível")
+        return False
+
+    take_ctx = context or OperationContext(
+        actor_id=user_id, patient_id=user_id, channel="whatsapp")
+    _op_message_id = getattr(take_ctx, "message_id", None)
+
+    # Chave de operação persistida (passo 1.4): mesma mensagem não cria duas
+    # pendências de tomada. Best-effort, como no fluxo de saúde.
+    try:
+        async with db.acquire() as _conn:
+            _claimed = await claim_operation_key(
+                _conn, message_id=_op_message_id, kind="pending:MED_TOMADA",
+                actor_id=take_ctx.actor_id)
+        if not _claimed:
+            print(f"[WhatsApp Med Take] Tomada já pendente: {_op_message_id}")
+            await send_whatsapp_text(
+                sender_phone,
+                "Você já me enviou essa tomada. Estou aguardando a confirmação nos botões. 💚")
+            return True
+    except Exception as _op_err:
+        print(f"[WhatsApp Med Take] Aviso ao reservar chave de operação: {_op_err}")
+
+    take_result = None
+    try:
+        async with db.acquire() as conn:
+            take_result = await prepare_medication_take(
+                conn, db, context=take_ctx, text=user_text)
+    except Exception as take_err:
+        print(f"[WhatsApp Med Take] Falha ao preparar tomada: {take_err}")
+        return False
+    if take_result is None or not take_result.message:
+        return False
+
+    if take_result.is_confirmation and take_result.pending_op_id:
+        await send_confirmation_buttons(
+            to_number=sender_phone,
+            metric_type="MED_TOMADA",
+            values=take_result.data or {},
+            confirmation_code=take_result.pending_op_id,
+            user_name=user_name,
+        )
+        print(f"[WhatsApp Med Take] Botões enviados: {take_result.pending_op_id}")
+    else:
+        # clarification (vários remédios ou horário ambíguo), missing_data
+        # (nenhum remédio cadastrado) ou indisponibilidade: texto do serviço.
+        await send_whatsapp_text(sender_phone, take_result.message)
+
+    # Log sem dado clínico (nome do remédio e horário não entram): registra
+    # a intenção e o resultado estruturado, como no fluxo de consultas.
+    try:
+        log_fine_tuning_sample(
+            user_prompt=user_text,
+            assistant_reply=take_result.message,
+            source="whatsapp_voice" if msg_type in ("audio", "voice") else "whatsapp",
+            system_prompt="medication_take (serviço, sem LLM)",
+            user_name=user_name,
+            action="TOMADA_MEDICAMENTO",
+            action_params={"result": take_result.status,
+                           "confirmation_code": take_result.pending_op_id}
+        )
+    except Exception:
+        pass
+    return True
+
+
 # =============================================================
 # PIPELINE DE MENSAGEM ENTRANTE
 # =============================================================
@@ -643,6 +729,19 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             await send_whatsapp_text(sender_phone, _q_result.message)
                             continue
 
+                    # 2.8b. Tomada de medicação (PR3, passo 3.3): identifica o
+                    # remédio cadastrado e o horário programado, cria a
+                    # pendência e envia os botões. A tomada só é registrada no
+                    # Confirmar (passo 3.4), na mesma transação da pendência.
+                    if user_id and wa_kind == "med_take":
+                        _t_handled = await handle_wa_medication_take(
+                            sender_phone=sender_phone, user_id=user_id,
+                            user_name=user_name, msg_type=msg_type, db=db_pool,
+                            user_text=user_text, context=wa_ctx,
+                        )
+                        if _t_handled:
+                            continue
+
                     # 2.9. Camada 0 (Fase 4): router determinístico antes do LLM.
                     # Vitais com número vão direto aos botões; fofoca/social vai
                     # de template; só conversa aberta chega ao Groq.
@@ -807,6 +906,36 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
 
         # Processar ação
         if action == "confirm":
+            # Passo 3.4: a tomada de medicamento tem fluxo próprio — o serviço
+            # compartilhado grava na mesma transação do consumo da pendência e
+            # devolve o resultado real (registrada / já registrada / erro).
+            # Não passa pelo caminho de vitais: destino e efeitos são outros.
+            _mt_metric = None
+            async with db_pool.acquire() as _c:
+                _mt_metric = await _c.fetchval(
+                    """SELECT metric_type FROM pending_confirmations
+                       WHERE confirmation_code = $1 AND user_id = $2""",
+                    confirmation_code, user_id,
+                )
+            if _mt_metric == "MED_TOMADA":
+                try:
+                    from services.medication_take import confirm_pending_medication_take
+                    _mt_result = await confirm_pending_medication_take(
+                        db_pool, confirmation_code=confirmation_code, actor_id=user_id)
+                    await send_whatsapp_text(
+                        sender_phone,
+                        _mt_result.message or "Não foi possível registrar a tomada agora.")
+                except ImportError:  # pragma: no cover
+                    await send_whatsapp_text(
+                        sender_phone,
+                        "Não foi possível registrar a tomada agora. Tente novamente.")
+                except Exception as _mt_err:
+                    print(f"[Callback] Falha na tomada: {_mt_err}")
+                    await send_whatsapp_text(
+                        sender_phone,
+                        "Não foi possível registrar a tomada agora. Tente novamente em instantes.")
+                return
+
             success = await confirm_pending_confirmation(confirmation_code, user_id, db_pool)
             if success:
                 # Buscar dados da confirmação para a mensagem final
@@ -881,6 +1010,16 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
                             "✏️ *Edição de Peso*\n\n"
                             "Por favor, envie novamente o valor correto.\n"
                             "Exemplo: *meu peso 75kg*"
+                        )
+                    elif metric_type == "MED_TOMADA":
+                        # Passo 3.3: editar a tomada cancela a pendência —
+                        # nenhum registro é feito. O usuário reenvia remédio e
+                        # horário; o serviço re-identifica do cadastro.
+                        await send_whatsapp_text(sender_phone,
+                            "✏️ *Edição de Tomada*\n\n"
+                            "A tomada anterior foi descartada (nada foi registrado).\n"
+                            "Envie novamente o remédio e o horário correto.\n"
+                            "Exemplo: *tomei o remédio das 20h*"
                         )
 
         elif action == "cancel":

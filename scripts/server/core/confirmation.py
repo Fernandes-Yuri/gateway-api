@@ -302,6 +302,18 @@ def build_confirmation_message(metric_type: str, values: dict, confirmation_code
     elif metric_type == "OXIGENACAO":
         value_display = f"{values.get('saturacao')}%"
         icon = "🫁"
+    elif metric_type == "MED_TOMADA":
+        # Passo 3.3: tomada de medicamento. O texto mostra o nome do
+        # remédio e o horário programado, ambos vindos do cadastro/serviço.
+        scheduled = values.get("scheduled_for")
+        hora = ""
+        if scheduled:
+            try:
+                hora = " — " + str(scheduled)[11:16]
+            except Exception:
+                hora = ""
+        value_display = f"{values.get('name', 'Medicamento')}{hora}"
+        icon = "💊"
     else:
         value_display = str(values)
         icon = "📋"
