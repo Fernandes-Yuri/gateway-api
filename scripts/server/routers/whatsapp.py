@@ -128,6 +128,7 @@ try:
         STATUS_OK,
         STATUS_UNAVAILABLE,
         STATUS_UNLINKED,
+        context_from_identity,
         is_confirmed,
         resolve_linked_account,
     )
@@ -140,11 +141,17 @@ except ImportError:  # pragma: no cover - fallback defensivo do monolito
     async def resolve_linked_account(conn, sender_phone):  # type: ignore
         return {"status": STATUS_UNLINKED, "user_id": None, "full_name": None}
 
+    def context_from_identity(identity, **kwargs):  # type: ignore
+        return None
+
 try:
-    from services.whatsapp_dedup import claim_message_receipt
+    from services.whatsapp_dedup import claim_message_receipt, claim_operation_key
 except ImportError:  # pragma: no cover - fallback defensivo do monolito
 
     async def claim_message_receipt(conn, message_id, user_id=None):  # type: ignore
+        return True
+
+    async def claim_operation_key(conn, *, message_id, kind, actor_id):  # type: ignore
         return True
 
 try:
@@ -324,16 +331,25 @@ async def _wa_send_router_text(sender_phone: str, msg_type: str, fala: str,
 async def handle_wa_health_confirmation(*, sender_phone: str, user_id: str, user_name,
                                         msg_type: str, db, action_name: str,
                                         action_params: dict, reply_text: str,
-                                        user_text: str, system_label: str) -> bool:
+                                        user_text: str, system_label: str,
+                                        context=None) -> bool:
     """Fluxo de confirmação com botões (extraído do caminho LLM, Fase 4).
 
     Retorna True quando resolveu (valor inválido avisado ou botões
     enviados); False quando o chamador deve seguir o fluxo normal.
+
+    context (passo 1.3/1.5): OperationContext do canal; carrega actor_id,
+    patient_id, channel e message_id. No autocuidado do WhatsApp, actor e
+    patient são a mesma conta; a pendência é sempre do paciente.
     """
     health_actions = ["REGISTRAR_PRESSAO", "REGISTRAR_GLICEMIA", "REGISTRAR_AGUA",
                       "REGISTRAR_PESO", "REGISTRAR_BATIMENTOS", "REGISTRAR_OXIGENACAO"]
     if action_name not in health_actions or not user_id:
         return False
+    # O registro é feito no contexto de uma operação; sem contexto (caminho
+    # legado), trata-se de autocuidado da própria conta.
+    patient_id = getattr(context, "patient_id", None) or user_id
+    actor_id = getattr(context, "actor_id", None) or user_id
     metric_type_map = {
         "REGISTRAR_PRESSAO": "PRESSAO",
         "REGISTRAR_GLICEMIA": "GLICEMIA",
@@ -352,8 +368,25 @@ async def handle_wa_health_confirmation(*, sender_phone: str, user_id: str, user
             f"Por favor, envie novamente o valor correto."
         )
         return True
+    # Chave de operação persistida (passo 1.4): amarra a pendência à mensagem
+    # que a originou — um reenvio daquela mensagem não cria segunda pendência.
+    _op_message_id = getattr(context, "message_id", None)
+    _op_kind = f"pending:{metric_type}"
+    if db and actor_id:
+        try:
+            async with db.acquire() as _conn:
+                _claimed = await claim_operation_key(
+                    _conn, message_id=_op_message_id, kind=_op_kind, actor_id=actor_id)
+            if not _claimed:
+                print(f"[WhatsApp Confirmation] Operação já pendente: {_op_kind} {_op_message_id}")
+                await send_whatsapp_text(
+                    sender_phone,
+                    "Você já me enviou este valor. Estou aguardando a confirmação nos botões. 💚")
+                return True
+        except Exception as _op_err:
+            print(f"[WhatsApp Confirmation] Aviso ao reservar chave de operação: {_op_err}")
     confirmation_code = await create_pending_confirmation(
-        user_id=user_id,
+        user_id=patient_id,
         metric_type=metric_type,
         value_json=validated_params,
         db_pool=db
@@ -481,6 +514,11 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     user_id = identity.get("user_id") if verified_link else None
                     user_name = identity.get("full_name") if verified_link else None
 
+                    # Passo 1.5: a identidade resolvida vira o contexto de
+                    # operação (actor/patient/channel/message_id) que os
+                    # serviços extraídos consomem. Sem vínculo -> None.
+                    wa_ctx = context_from_identity(identity, channel="whatsapp", message_id=msg_id)
+
                     # 2.5. VÍNCULO TOTP (arquitetura temporária, sem template).
                     # Roda ANTES do portão de conta: é assim que um número sem conta
                     # conquista a dele. Se consumir, já respondeu e paramos por aqui.
@@ -574,7 +612,8 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             sender_phone=sender_phone, user_id=user_id, user_name=user_name,
                             msg_type=msg_type, db=db_pool, action_name=_wa_action,
                             action_params=wa_route["values"], reply_text=wa_route["fala"],
-                            user_text=user_text, system_label="ORB router Fase 4 (vitals, sem LLM)"
+                            user_text=user_text, system_label="ORB router Fase 4 (vitals, sem LLM)",
+                            context=wa_ctx
                         )
                         if _wa_handled:
                             continue
@@ -621,7 +660,8 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                 sender_phone=sender_phone, user_id=user_id, user_name=user_name,
                                 msg_type=msg_type, db=db_pool, action_name=action_name,
                                 action_params=action_params, reply_text=reply_text,
-                                user_text=user_text, system_label=conv_prompt
+                                user_text=user_text, system_label=conv_prompt,
+                                context=wa_ctx
                             )
                             if _handled:
                                 return  # Não envia resposta de texto - aguarda confirmação

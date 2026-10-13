@@ -112,3 +112,27 @@ async def resolve_linked_account(conn: Any, sender_phone: Optional[str]) -> dict
 def is_confirmed(identity: Optional[dict]) -> bool:
     """True apenas para vínculo confirmado e inequívoco."""
     return bool(identity) and identity.get("status") == STATUS_OK
+
+
+def context_from_identity(identity: Optional[dict], *,
+                          channel: str = "whatsapp",
+                          message_id: Optional[str] = None,
+                          pending_op_id: Optional[str] = None) -> Optional[Any]:
+    """
+    Monta o contexto de operação (passo 1.3) a partir do vínculo confirmado.
+
+    Sem vínculo confirmado não há contexto: a operação não acontece. No canal
+    WhatsApp do autocuidado, actor e patient são a mesma conta (o dono do
+    número); operações de familiar (actor != patient) chegam no PR4, com
+    revalidação de vínculo no contexto da conversa.
+    """
+    if not is_confirmed(identity):
+        return None
+    from services.operations import OperationContext
+    return OperationContext(
+        actor_id=identity["user_id"],
+        patient_id=identity["user_id"],
+        channel=channel,
+        message_id=message_id,
+        pending_op_id=pending_op_id,
+    )
