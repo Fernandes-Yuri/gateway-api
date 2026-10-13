@@ -141,6 +141,13 @@ except ImportError:  # pragma: no cover - fallback defensivo do monolito
         return {"status": STATUS_UNLINKED, "user_id": None, "full_name": None}
 
 try:
+    from services.whatsapp_dedup import claim_message_receipt
+except ImportError:  # pragma: no cover - fallback defensivo do monolito
+
+    async def claim_message_receipt(conn, message_id, user_id=None):  # type: ignore
+        return True
+
+try:
     from webhook_security import verify_meta_signature
     HAS_WEBHOOK_SECURITY = True
 except ImportError:
@@ -418,6 +425,21 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
 
                     if not sender_phone or not user_text:
                         continue
+
+                    # Antiduplicidade (passo 1.4): a Meta reenvia mensagens.
+                    # Registra o recebimento no banco; reenvio = mesma
+                    # mensagem = não reprocessa (nova pendência, novo registro).
+                    # user_id fica em branco aqui: a identidade é resolvida
+                    # depois, no passo 2 do pipeline (vínculo confirmado).
+                    if db_pool and msg_id:
+                        try:
+                            async with db_pool.acquire() as _conn:
+                                _seen = await claim_message_receipt(_conn, msg_id)
+                            if not _seen:
+                                print(f"[WhatsApp Dedup] Reenvio ignorado: {msg_id}")
+                                continue
+                        except Exception as _dedup_err:
+                            print(f"[WhatsApp Dedup] Aviso: {msg_id}: {_dedup_err}")
 
                     wa_tid = trace_llm('whatsapp', 'request', user_text=user_text,
                                        msg_type=msg_type, phone_tail=(sender_phone or '')[-4:])

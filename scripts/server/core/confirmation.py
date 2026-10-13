@@ -164,12 +164,19 @@ async def confirm_pending_confirmation(
 
             # Transaction
             async with conn.transaction():
-                # 1. Atualiza pendencia
-                await conn.execute("""
+                # 1. Consome a pendencia de forma atomica (passo 1.4): o UPDATE
+                # so vence se ela ainda estiver 'pending', fechando a race entre
+                # dois cliques concorrentes no mesmo botao ou um reenvio da Meta.
+                # Consumir a pendencia e gravar o registro ficam nesta mesma
+                # transacao: ou entram juntos, ou nenhum entra.
+                consumed = await conn.execute("""
                     UPDATE pending_confirmations
                     SET status = 'confirmed', confirmed_at = NOW()
-                    WHERE id = $1
+                    WHERE id = $1 AND status = 'pending'
                 """, pending_id)
+                if consumed != "UPDATE 1":
+                    print(f"[Confirmation] Pendência já resolvida por outra via: {confirmation_code}")
+                    return False
 
                 # 2. Grava no vital_signs
                 if metric_type == "PRESSAO":
