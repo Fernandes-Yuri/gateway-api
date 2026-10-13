@@ -293,14 +293,15 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                 routed["fala"] = dedupe_fala(_REST_LASTFALA, scope_key, routed["fala"])
             trace_llm('chat-rest', 'router_hit', tid, action=routed["acao"], fala=routed["fala"])
             content = json.dumps(routed, ensure_ascii=False)
-            await asyncio.to_thread(_state.log_fine_tuning_sample,
-                user_prompt=user_prompt,
-                assistant_reply=content,
-                source="app_chat_router",
-                system_prompt=ORB_CHAT_PROMPT,
-                action=routed["acao"],
-                action_params=routed["parametros"]
-            )
+            if _query_kind != "out_of_scope":
+                await asyncio.to_thread(_state.log_fine_tuning_sample,
+                    user_prompt=user_prompt,
+                    assistant_reply=content,
+                    source="app_chat_router",
+                    system_prompt=ORB_CHAT_PROMPT,
+                    action=routed["acao"],
+                    action_params=routed["parametros"]
+                )
             return {
                 "id": "chatcmpl-router",
                 "object": "chat.completion",
