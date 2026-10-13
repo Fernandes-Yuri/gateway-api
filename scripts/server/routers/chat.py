@@ -10,6 +10,7 @@ gera fala). Tudo best-effort com fallback gracioso.
 """
 import asyncio
 import json
+import re
 import time
 from typing import Dict, List, Optional
 
@@ -55,6 +56,94 @@ _REST_MEMORY: Dict[str, tuple] = {}
 _REST_LASTFALA: Dict[str, str] = {}
 # Repeticoes de sintoma no REST (escalada anti-loop).
 _REST_SYMPTOM: Dict[str, tuple] = {}
+
+
+def _previous_assistant_text(messages: List[Message], current_user_text: str) -> str:
+    user_indexes = [i for i, message in enumerate(messages)
+                    if message.role == "user" and message.content == current_user_text]
+    if not user_indexes:
+        return ""
+    end = user_indexes[-1]
+    for message in reversed(messages[:end]):
+        if message.role == "assistant":
+            try:
+                payload = json.loads(message.content)
+                if isinstance(payload, dict) and isinstance(payload.get("fala"), str):
+                    return payload["fala"]
+            except (TypeError, ValueError):
+                pass
+            return message.content
+    return ""
+
+
+def _is_confirmation_word(text: str) -> bool:
+    return re.sub(r"[^a-z ]", " ", text.lower()).strip() in {
+        "sim", "s", "confirmo", "pode", "isso", "pode registrar", "pode salvar"
+    }
+
+
+def _confirmation_reply_without_write(messages: List[Message], user_text: str) -> Optional[str]:
+    """Evita transformar oferta incorreta do LLM em promessa de gravação."""
+    if not _is_confirmation_word(user_text):
+        return None
+    previous = _previous_assistant_text(messages, user_text)
+    offered = re.search(r"\b(quer|deseja|posso)\b.{0,45}\b(registr\w*|anot\w*|salv\w*)\b",
+                        previous.lower())
+    if not offered:
+        return None
+    return ("Ainda não registrei essa medida. Este chat não salva medições diretamente; "
+            "use a tela da medição no aplicativo para confirmar o registro.")
+
+
+async def _query_health_service(db_pool, *, actor_id: str, request: ChatCompletionRequest,
+                               kind: str, text: str):
+    """Executa consultas determinísticas no alvo autorizado, sem chamar o LLM."""
+    from services.operations import OperationContext, OperationResult
+    from services.family_target import resolve_family_target, resolve_target_context
+    from services.health_queries import (
+        blood_pressure_today, day_summary, last_blood_pressure, last_glucose, last_heart_rate,
+        last_oxygen_saturation, last_weight, water_today,
+    )
+    from services.medication_queries import medication_take_history
+
+    handlers = {
+        "query_bp": last_blood_pressure,
+        "query_glucose": last_glucose,
+        "query_hr": last_heart_rate,
+        "query_spo2": last_oxygen_saturation,
+        "query_weight": last_weight,
+        "query_water": water_today,
+        "query_summary": day_summary,
+    }
+    if kind not in handlers and kind != "query_medication":
+        return OperationResult.clarification(
+            "Qual dado de saúde você quer consultar: pressão, glicemia, batimentos, saturação, peso, água ou tomadas de remédio?")
+    self_care_words = (re.search(r"\b(eu|me|minha|minhas|meu|meus|tomei|comigo)\b", text.lower())
+                       and not re.search(r"\b(meu|minha)\s+(familiar|parente|mae|pai|filho|filha)\b", text.lower()))
+    patient_id = actor_id
+    if request.acting_as == "caregiver" and request.patient_id and not self_care_words:
+        patient_id = request.patient_id
+    context = OperationContext(actor_id=actor_id, patient_id=patient_id, channel="app_chat")
+    try:
+        async with db_pool.acquire() as conn:
+            if request.acting_as == "caregiver" and not request.patient_id and not self_care_words:
+                resolved = await resolve_family_target(conn, context, text)
+                if not resolved.is_success or not resolved.data:
+                    return resolved
+                context = context.model_copy(update={"patient_id": resolved.data["patient_id"]})
+            else:
+                context, error = await resolve_target_context(conn, context, text)
+                if error:
+                    return error
+            if kind == "query_medication":
+                return await medication_take_history(conn, context, text)
+            if kind == "query_bp" and re.search(r"\bhoje\b", text.lower()):
+                return await blood_pressure_today(conn, context)
+            return await handlers[kind](conn, context)
+    except Exception as err:
+        print(f"[Chat Query] Falha em {kind}: {err}")
+        return OperationResult.unavailable(
+            "Não consegui consultar esse registro agora. Tente novamente em instantes.")
 
 
 ORB_CHAT_PROMPT = SYSTEM_PROMPT + (
@@ -118,6 +207,18 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                 }]
             }
 
+        _confirmation_text = _confirmation_reply_without_write(req.messages, user_prompt)
+        if _confirmation_text:
+            trace_llm("chat-rest", "confirmation_without_write", tid, llm_skipped=True)
+            content = json.dumps({"fala": _confirmation_text, "acao": "CONVERSA", "parametros": {}},
+                                 ensure_ascii=False)
+            return {
+                "id": "chatcmpl-confirmation-guard",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content},
+                             "finish_reason": "stop"}],
+            }
+
         # Camada 0 (Fase 2): roteador deterministico antes de qualquer LLM.
         # D50: no escopo CUIDADOR, a intencao de agendar consulta e tratada
         # ANTES do roteador — grava na agenda do paciente (vinculo validado).
@@ -142,7 +243,32 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                 }],
             }
 
-        routed = route_chat(user_prompt)
+        _chat_detection = detect_all(user_prompt)
+        _query_kind = _chat_detection.get("kind", "")
+        if _query_kind.startswith("query_"):
+            if db_pool is None:
+                _query_result = None
+                _query_text = "Não consegui consultar esse registro agora. Tente novamente em instantes."
+                _query_status = "unavailable"
+            else:
+                _query_result = await _query_health_service(
+                    db_pool, actor_id=authenticated_uid or req.userId,
+                    request=req, kind=_query_kind, text=user_prompt)
+                _query_text = (_query_result.message or
+                               "Não encontrei uma resposta para essa consulta.")
+                _query_status = _query_result.status
+            trace_llm("chat-rest", "service_query", tid, kind=_query_kind,
+                      result=_query_status, llm_skipped=True)
+            content = json.dumps({"fala": _query_text, "acao": "CONVERSA", "parametros": {}},
+                                 ensure_ascii=False)
+            return {
+                "id": "chatcmpl-query",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content},
+                             "finish_reason": "stop"}],
+            }
+
+        routed = route_chat(user_prompt, model_name=_state.model_rest)
         preferences = {}
         # D48: no escopo cuidador, a memoria e preferencias sao indexadas por
         # uid+patient_id — nunca so uid — para nao misturar os dois papeis
@@ -150,7 +276,8 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
         scope_key = authenticated_uid
         if req.acting_as == "caregiver" and req.patient_id:
             scope_key = f"{authenticated_uid}@caregiver:{req.patient_id}"
-        if scope_key and (routed is None or routed.get('acao') == 'CONVERSA'):
+        if (scope_key and (routed is None or routed.get('acao') == 'CONVERSA')
+                and _query_kind not in {"out_of_scope", "model_identity"}):
             memory_reply, preferences = await _state.assistant_memory(scope_key, user_prompt, req.messages)
             if memory_reply:
                 return {'id': 'chatcmpl-memory', 'object': 'chat.completion', 'choices': [{
@@ -167,14 +294,15 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                 routed["fala"] = dedupe_fala(_REST_LASTFALA, scope_key, routed["fala"])
             trace_llm('chat-rest', 'router_hit', tid, action=routed["acao"], fala=routed["fala"])
             content = json.dumps(routed, ensure_ascii=False)
-            await asyncio.to_thread(_state.log_fine_tuning_sample,
-                user_prompt=user_prompt,
-                assistant_reply=content,
-                source="app_chat_router",
-                system_prompt=ORB_CHAT_PROMPT,
-                action=routed["acao"],
-                action_params=routed["parametros"]
-            )
+            if _query_kind != "out_of_scope":
+                await asyncio.to_thread(_state.log_fine_tuning_sample,
+                    user_prompt=user_prompt,
+                    assistant_reply=content,
+                    source="app_chat_router",
+                    system_prompt=ORB_CHAT_PROMPT,
+                    action=routed["acao"],
+                    action_params=routed["parametros"]
+                )
             return {
                 "id": "chatcmpl-router",
                 "object": "chat.completion",

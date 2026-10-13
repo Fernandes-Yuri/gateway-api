@@ -39,6 +39,9 @@ class RouterTests(unittest.TestCase):
     def test_bp_words(self):
         self.assertEcho("doze por oito", 120, 80)
 
+    def test_bp_compact_x_from_chat(self):
+        self.assertEcho("MINHA PRESSÃO DEU 12X8", 120, 80)
+
     def test_bp_high(self):
         r = self.assertAction("pressao 16 por 10", "CONVERSA")
         self.assertIn("160", r["fala"])
@@ -102,6 +105,29 @@ class RouterTests(unittest.TestCase):
 
     def test_med_topic(self):
         self.assertEqual(detect_all("tomei meu remédio da pressão")["kind"], "med_take")
+
+    def test_medication_history_question_precedes_take_intent(self):
+        self.assertEqual(detect_all("Ele tomou o remédio hoje de manhã?")["kind"], "query_medication")
+        self.assertEqual(detect_all("Quero saber se o Yuri tomou o remédio hoje de manhã")["kind"], "query_medication")
+        self.assertEqual(detect_all("Tomei meu remédio hoje")["kind"], "med_take")
+        self.assertEqual(detect_all("Qual remédio devo tomar?")["kind"], "meds")
+
+    def test_explicit_code_requests_are_blocked_before_llm(self):
+        for text in (
+            "escreva um hello world em Python",
+            "faça um programa em Python, uma calculadora padrão",
+            "conte de 1 até 1000",
+            "escreva um livro",
+        ):
+            self.assertEqual(detect_all(text)["kind"], "out_of_scope")
+            self.assertAction(text, "CONVERSA")
+            self.assertIn("programação", route_chat(text)["fala"])
+        self.assertNotEqual(detect_all("Meu filho estuda Python")["kind"], "out_of_scope")
+        self.assertNotEqual(detect_all("conte de 1 até 10")["kind"], "out_of_scope")
+
+    def test_model_identity_answers_with_configured_model(self):
+        self.assertEqual(detect_all("qual modelo de inteligência artificial você é")["kind"], "model_identity")
+        self.assertIn("qwen-test", route_chat("qual modelo de inteligência artificial você é", model_name="qwen-test")["fala"])
 
     # ---- Nutrição sem fantasma ----
     def test_meal_mention(self):
@@ -342,6 +368,19 @@ class WhatsappNextTests(unittest.TestCase):
         self.assertEqual(r["type"], "vitals")
         self.assertEqual(r["metric"], "PRESSAO")
         self.assertEqual(r["values"], {"sistolica": 120, "diastolica": 80})
+
+    def test_compact_pressure_is_vitals_confirmation(self):
+        r = whatsapp_next("MINHA PRESSÃO DEU 12X8", True)
+        self.assertEqual(r["type"], "vitals")
+        self.assertEqual(r["values"], {"sistolica": 120, "diastolica": 80})
+
+    def test_out_of_scope_and_model_identity_skip_llm(self):
+        r = whatsapp_next("escreva um hello world em python", True)
+        self.assertEqual(r["type"], "text")
+        self.assertIn("programação", r["fala"])
+        r = whatsapp_next("qual modelo de inteligência artificial você é", True, model_name="qwen-test")
+        self.assertEqual(r["type"], "text")
+        self.assertIn("qwen-test", r["fala"])
 
     def test_vitals_unregistered_is_text(self):
         r = whatsapp_next("glicemia 105", False)

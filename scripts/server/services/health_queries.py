@@ -151,7 +151,7 @@ def day_bounds(day: Optional[date], zone: ZoneInfo) -> Tuple[datetime, datetime]
 
 
 async def _query_reading(conn: Any, context: OperationContext, kind: str,
-                         zone_name: Optional[str]) -> OperationResult:
+                         zone_name: Optional[str], day: Optional[date] = None) -> OperationResult:
     denied = await validate_actor(conn, context)
     if denied:
         return denied
@@ -159,17 +159,33 @@ async def _query_reading(conn: Any, context: OperationContext, kind: str,
     owner = await _owner_first_name(conn, context)
     colunas, nao_nulo = _COLS[kind]
     try:
-        row = await conn.fetchrow(
-            f"""SELECT id, {colunas}, measured_at FROM vital_signs
-                WHERE user_id = $1 AND {nao_nulo}
-                ORDER BY measured_at DESC LIMIT 1""",
-            context.patient_id,
-        )
+        if day is None:
+            row = await conn.fetchrow(
+                f"""SELECT id, {colunas}, measured_at FROM vital_signs
+                    WHERE user_id = $1 AND {nao_nulo}
+                    ORDER BY measured_at DESC LIMIT 1""",
+                context.patient_id,
+            )
+        else:
+            start, end = day_bounds(day, tz)
+            row = await conn.fetchrow(
+                f"""SELECT id, {colunas}, measured_at FROM vital_signs
+                    WHERE user_id = $1 AND {nao_nulo}
+                      AND measured_at >= $2 AND measured_at < $3
+                    ORDER BY measured_at DESC LIMIT 1""",
+                context.patient_id, start.astimezone(zone_of("UTC")), end.astimezone(zone_of("UTC")),
+            )
     except Exception as err:
         print(f"[Health Queries] Falha ao consultar {kind}: {err}")
         return OperationResult.unavailable(
             "Não consegui acessar seus registros agora. Tente novamente em instantes.")
     if not row:
+        if day is not None:
+            day_label = "hoje" if day == datetime.now(tz).date() else f"em {day.strftime('%d/%m')}"
+            owner_label = f" de {owner}" if owner else " para você"
+            return OperationResult.missing_data(
+                f"Ainda não encontrei registro de {_LABEL[kind]}{owner_label} {day_label}.",
+                data={"kind": kind, "day": day.isoformat()})
         return OperationResult.missing_data(
             _no_reading_message(owner, _LABEL[kind]),
             data={"kind": kind})
@@ -183,6 +199,13 @@ async def _query_reading(conn: Any, context: OperationContext, kind: str,
 async def last_blood_pressure(conn: Any, context: OperationContext,
                               zone: Optional[str] = None) -> OperationResult:
     return await _query_reading(conn, context, "pressao", zone)
+
+
+async def blood_pressure_today(conn: Any, context: OperationContext) -> OperationResult:
+    """Última pressão medida hoje, no fuso do paciente; nunca substitui por dado antigo."""
+    zone = await _resolve_zone(conn, context, None)
+    today = datetime.now(zone).date()
+    return await _query_reading(conn, context, "pressao", zone.key, day=today)
 
 
 async def last_glucose(conn: Any, context: OperationContext,
