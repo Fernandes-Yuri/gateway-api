@@ -6,7 +6,7 @@ da conta autenticada, lidos no banco.
 
 Regras (PLANO-APP-WHATSAPP §4.1):
 - Sem vínculo ativo -> nenhum alvo; orienta o app.
-- Vínculo único -> alvo resolvido sem perguntar.
+- Vínculo único -> só resolve sem perguntar se não houver alvo incompatível.
 - Vários vínculos, ou nome ambíguo -> pede a escolha; NUNCA auto-seleciona o
   primeiro da lista.
 - Consulta pessoal ("minha pressão") segue na própria conta: este serviço só
@@ -23,9 +23,11 @@ import unicodedata
 from typing import Any, List, Optional, Tuple
 
 from services.operations import OperationContext, OperationResult
+from services.display_names import first_name, choice_labels
 
 # Marcadores de que a fala é sobre OUTRA pessoa (não autocuidado).
 _OTHER_HINT = re.compile(
+    r"\b(?:mae|pai|filha|filho|irma|irmao|tia|tio|avo|sobrinha|sobrinho|esposa|esposo|marido|conjuge)\b|"
     r"\bmamae\b|\bminha mae|\bmaezinha|\bmeu pai|\bpapai|\bminha filha|\bmeu filho|"
     r"\bminha irma|\bmeu irmao|\bminha tia|\bmeu tio|\bminha avo|\bmeu avo|"
     r"\bvovo|\bvov|\bvovozinha|\bvovozi|\bminha sobrinha|\bmeu sobrinho|"
@@ -113,7 +115,9 @@ async def resolve_family_target(conn: Any, context: OperationContext,
     norm = _norm(text)
     # Tenta casar pelo nome primeiro ("como está a Dona Maria?").
     if norm:
-        by_name = [r for r in rows if _matches_name(norm, r["full_name"])]
+        full_matches = [r for r in rows if len(_norm(r['full_name']).split()) > 1
+                        and re.search(r"\b" + re.escape(_norm(r['full_name'])) + r"\b", norm)]
+        by_name = full_matches or [r for r in rows if _matches_name(norm, r["full_name"])]
         if len(by_name) == 1:
             return _target_result(by_name[0])
         if len(by_name) > 1:
@@ -125,6 +129,15 @@ async def resolve_family_target(conn: Any, context: OperationContext,
             "Qual familiar você quer consultar?", data={"candidates": [
                 {"patient_id": str(r["patient_id"]), "full_name": r["full_name"]} for r in rows]})
 
+    # caregiver_role representa permissão; caregiver_relation descreve o ator,
+    # não o parentesco do paciente. Nenhum deles prova quem é "mamãe"/"pai".
+    # Mesmo um único vínculo não autoriza substituir o sujeito mencionado.
+    if _OTHER_HINT.search(re.sub(r"\b(?:familiar|paciente)\b", "", norm)):
+        return OperationResult.clarification(
+            "Preciso confirmar de quem você está falando. Qual é o nome do familiar?",
+            data={"candidates": [
+                {"patient_id": str(r["patient_id"]), "full_name": r["full_name"]} for r in rows]})
+
     # Sem nome: vínculo único resolve; vários pedem.
     if len(rows) == 1:
         return _target_result(rows[0])
@@ -133,22 +146,23 @@ async def resolve_family_target(conn: Any, context: OperationContext,
 
 def _target_result(row: Any) -> OperationResult:
     return OperationResult.success(
-        f"Alvo: {row['full_name']}.",
+        f"Alvo: {first_name(row['full_name'])}.",
         data={"patient_id": str(row["patient_id"]),
               "full_name": row["full_name"],
               "role": row["caregiver_role"]})
 
 
 def _choose_between(rows: List[Any]) -> OperationResult:
-    lista = "\n".join(f"• {r['full_name']}" for r in rows)
+    labels = choice_labels(rows)
+    lista = "\n".join(f"• {label}" for label in labels)
     return OperationResult.clarification(
-        "Você acompanha mais de uma pessoa. Qual é o alvo?\n\n"
+        "Qual destas pessoas você quer consultar?\n\n"
         + lista +
-        "\n\nMe diga o nome, ou pergunte direto, tipo "
+        "\n\nMe diga o nome ou o número da opção, ou pergunte direto, tipo "
         "'qual a pressão da Maria?'.",
         data={"candidates": [
-            {"patient_id": str(r["patient_id"]), "full_name": r["full_name"]}
-            for r in rows]})
+            {"patient_id": str(r["patient_id"]), "full_name": r["full_name"], "display_name": label}
+            for r, label in zip(rows, labels)]})
 
 
 def target_context(context: OperationContext, target: dict) -> OperationContext:

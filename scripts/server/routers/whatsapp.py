@@ -347,6 +347,11 @@ def _operation_followup(user_id, text):
     from services.medication_lookup import detect_hour
     answer = _norm(text)
     candidates = pending[2].get("candidates", [])
+    option = re.fullmatch(r"(?:opcao\s*)?(\d+)", answer)
+    if option and 1 <= int(option[1]) <= len(candidates):
+        selected = candidates[int(option[1]) - 1].get("full_name")
+        if selected:
+            return pending[1] + " da " + selected
     names = [candidate.get("full_name") or candidate.get("name") or "" for candidate in candidates]
     matches = any(answer and (answer == _norm(name) or answer in _norm(name).split()) for name in names)
     if pending[3] == "query_ambiguous" and len(answer.split()) <= 4:
@@ -792,9 +797,8 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     # 1. Blindagem contra Prompt Injection ou Tarefas Exaustivas (ex: contar até 100)
                     if is_prompt_injection(user_text):
                         refusal_text = (
-                            "Ih, contar até aí vai demorar uma eternidade! 😅 "
-                            "Meu foco por aqui é cuidar com todo carinho da sua saúde e bem-estar. "
-                            "Me conta, como você está se sentindo hoje? 💚"
+                            "Não compartilho instruções internas nem altero minhas regras por mensagem. "
+                            "Posso ajudar com sua saúde e rotina no Braga Saúde. 💚"
                         )
                         await send_whatsapp_text(sender_phone, refusal_text)
                         continue
@@ -869,6 +873,17 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         user_text = _operation_followup(user_id, user_text)
 
                     wa_kind = detect_all(user_text).get("kind")
+                    if wa_kind in {"date", "time"}:
+                        from services.calendar_reply import calendar_reply
+                        zone = None
+                        if user_id and db_pool:
+                            try:
+                                async with db_pool.acquire() as conn:
+                                    zone = await conn.fetchval("SELECT timezone FROM profiles WHERE id=$1", user_id)
+                            except Exception:
+                                pass
+                        await send_whatsapp_text(sender_phone, calendar_reply(user_text, wa_kind, zone))
+                        continue
 
                     # 2.7. Respostas rápidas em texto
                     # (somente após portão de conta: anônimo já respondeu antes)
@@ -1145,7 +1160,8 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
     try:
         # Extrair ação e código do button_id (formato: action_code)
         parts = button_id.split("_", 1)
-        if len(parts) != 2:
+        if len(parts) != 2 or not parts[1] or parts[0].lower() not in {"confirm", "edit", "cancel"}:
+            await send_whatsapp_text(sender_phone, "Não reconheci esta confirmação. Envie novamente o pedido.")
             return
 
         action, confirmation_code = parts
@@ -1154,6 +1170,7 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
         # Buscar pool de conexão
         if not db_pool:
             print("[Callback Error] db_pool não disponível")
+            await send_whatsapp_text(sender_phone, "Não consegui verificar a confirmação agora. Tente novamente em instantes.")
             return
 
         # AUD-G(M): a função expire_pending_confirmations() existia no banco
@@ -1186,19 +1203,29 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
             )
             return
 
+        # O estado pertence ao ator resolvido. Repetição/expiração tem retorno
+        # explícito e não executa uma ação nova.
+        async with db_pool.acquire() as conn:
+            proposal = await conn.fetchrow(
+                """SELECT metric_type, status, expires_at > NOW() AS active
+                   FROM pending_confirmations WHERE confirmation_code=$1 AND user_id=$2""",
+                confirmation_code, user_id)
+        if not proposal:
+            await send_whatsapp_text(sender_phone, "Não encontrei esta proposta na sua conta. Envie novamente o pedido.")
+            return
+        if proposal['status'] != 'pending' or not proposal['active']:
+            labels = {'confirmed': 'já foi confirmada', 'cancelled': 'já foi cancelada', 'expired': 'expirou'}
+            label = labels.get(proposal['status'], 'expirou')
+            await send_whatsapp_text(sender_phone, f"Esta proposta {label}. Nenhuma nova ação foi executada.")
+            return
+
         # Processar ação
         if action == "confirm":
             # Passo 3.4: a tomada de medicamento tem fluxo próprio — o serviço
             # compartilhado grava na mesma transação do consumo da pendência e
             # devolve o resultado real (registrada / já registrada / erro).
             # Não passa pelo caminho de vitais: destino e efeitos são outros.
-            _mt_metric = None
-            async with db_pool.acquire() as _c:
-                _mt_metric = await _c.fetchval(
-                    """SELECT metric_type FROM pending_confirmations
-                       WHERE confirmation_code = $1 AND user_id = $2""",
-                    confirmation_code, user_id,
-                )
+            _mt_metric = proposal['metric_type']
             if _mt_metric == "MED_TOMADA":
                 try:
                     from services.medication_take import confirm_pending_medication_take
@@ -1296,10 +1323,15 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
                             f"Este registro foi autenticado por você e pode ser consultado no aplicativo."
                         )
             else:
-                await send_whatsapp_text(sender_phone,
-                    "❌ Não foi possível confirmar. O registro pode ter expirado.\n"
-                    "Por favor, envie os dados novamente."
-                )
+                async with db_pool.acquire() as conn:
+                    state = await conn.fetchval(
+                        "SELECT status FROM pending_confirmations WHERE confirmation_code=$1 AND user_id=$2",
+                        confirmation_code, user_id)
+                if state == 'pending':
+                    message = "Não consegui gravar o registro agora. A proposta continua pendente; tente confirmar novamente."
+                else:
+                    message = "Esta proposta já foi processada ou expirou. Consulte seus registros antes de enviar novamente."
+                await send_whatsapp_text(sender_phone, message)
 
         elif action == "edit":
             # Buscar tipo de métrica para orientar o usuário
@@ -1311,7 +1343,9 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
 
                 if row:
                     metric_type = row['metric_type']
-                    await cancel_pending_confirmation(confirmation_code, user_id, db_pool)
+                    if not await cancel_pending_confirmation(confirmation_code, user_id, db_pool):
+                        await send_whatsapp_text(sender_phone, "Esta proposta já foi processada ou expirou. Envie novamente o pedido.")
+                        return
                     await conn.execute("DELETE FROM assistant_preference_pending WHERE user_id=$1 AND proposal_id IN (SELECT COALESCE(value_json->>'proposal_id', confirmation_code) FROM pending_confirmations WHERE user_id=$1 AND confirmation_code=$2)", user_id, confirmation_code)
 
                     if metric_type == "PRESSAO":
@@ -1348,6 +1382,12 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
                             "Envie novamente o remédio e o horário correto.\n"
                             "Exemplo: *tomei o remédio das 20h*"
                         )
+                    else:
+                        await send_whatsapp_text(sender_phone,
+                            "✏️ A proposta anterior foi cancelada. Envie novamente o pedido com os dados corretos.")
+                else:
+                    await send_whatsapp_text(sender_phone,
+                        "Esta proposta já foi processada ou expirou. Envie novamente o pedido.")
 
         elif action == "cancel":
             success = await cancel_pending_confirmation(confirmation_code, user_id, db_pool)
@@ -1418,6 +1458,24 @@ def verify_whatsapp_webhook(
     raise HTTPException(status_code=403, detail="Token de verificação inválido")
 
 
+async def process_whatsapp_webhook_payload(body: Dict[str, Any]):
+    """Preserva a ordem de mensagens e confirmações dentro do lote da Meta."""
+    for entry in body.get('entry', []):
+        for change in entry.get('changes', []):
+            value = change.get('value', {})
+            for msg in value.get('messages', []):
+                interactive = msg.get('interactive') or {}
+                reply_key = interactive.get('type')
+                if msg.get('type') == 'interactive' and reply_key in {'button_reply', 'button'}:
+                    button_id = (interactive.get(reply_key) or {}).get('id')
+                    sender_phone = msg.get('from')
+                    if button_id and sender_phone:
+                        await handle_confirmation_callback(button_id=button_id, sender_phone=sender_phone)
+                        continue
+                single = {'entry': [{**entry, 'changes': [{**change, 'value': {**value, 'messages': [msg]}}]}]}
+                await process_incoming_whatsapp_payload(single)
+
+
 @router.post("/api/whatsapp/webhook")
 async def receive_whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     """Endpoint receptor de eventos e mensagens da Meta Cloud API."""
@@ -1452,29 +1510,10 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
         if len(WHATSAPP_EVENT_LOG) > 200:
             WHATSAPP_EVENT_LOG.pop(0)
 
-        # Detectar cliques em botões interativos (confirmação)
-        if "entry" in body:
-            for entry in body.get("entry", []):
-                for change in entry.get("changes", []):
-                    value = change.get("value", {})
-                    messages = value.get("messages", [])
-                    for msg in messages:
-                        if msg.get("type") == "interactive":
-                            interactive = msg.get("interactive", {})
-                            if interactive.get("type") == "button":
-                                button_id = interactive.get("button", {}).get("id", "")
-                                sender_phone = msg.get("from", "")
-                                if button_id and sender_phone:
-                                    background_tasks.add_task(
-                                        handle_confirmation_callback,
-                                        button_id=button_id,
-                                        sender_phone=sender_phone
-                                    )
-                                    return JSONResponse({"status": "callback_received"}, status_code=200)
     except Exception:
         return JSONResponse({"status": "invalid_payload"}, status_code=400)
 
-    background_tasks.add_task(process_incoming_whatsapp_payload, body)
+    background_tasks.add_task(process_whatsapp_webhook_payload, body)
     return JSONResponse({"status": "received"}, status_code=200)
 
 

@@ -399,8 +399,10 @@ def detect_all(raw: str) -> dict:
         return {"kind": "date"}
     if _CODE_REQUEST.search(norm) or _LONG_OUTPUT_REQUEST.search(norm):
         return {"kind": "out_of_scope"}
-    if re.search(r"\blembrete|\bme lembra|\bme avisa", norm):
+    if re.search(r"\blembrete|\b(?:me\s+)?lemb(?:ra|re)\b|\bme avisa", norm):
         return {"kind": "reminder"}
+    if re.search(r"\b(?:vou|pretendo|quero|irei)\s+tomar\b", norm) and _MED_CONTEXT.search(norm):
+        return {"kind": "med_plan"}
     if detect_medication_query(norm):
         return {"kind": "query_medication"}
     # Passo 3.3: tomada de dose é reconhecida ANTES da consulta — "tomei o
@@ -546,14 +548,8 @@ def route_chat(raw: str, model_name: str = None):
         time_str = f"Agora são {h} horas." if m == 0 else f"Agora são {h} horas e {m} minutos."
         return _conversa(time_str)
     if kind == "date":
-        import datetime
-        now = datetime.datetime.now()
-        dias = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
-        meses = ["", "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
-        dia_semana = dias[now.weekday()]
-        mes = meses[now.month]
-        date_str = f"Hoje é {dia_semana}, {now.day} de {mes} de {now.year}."
-        return _conversa(date_str)
+        from services.calendar_reply import calendar_reply
+        return _conversa(calendar_reply(raw, kind))
     if kind == "bp":
         band = classify_bp(det["sys"], det["dia"])
         return _conversa(
@@ -746,6 +742,11 @@ def whatsapp_next(raw: str, is_registered: bool, model_name: str = None) -> dict
     if kind == "model_identity":
         suffix = f" Neste canal, o modelo configurado é {model_name}." if model_name else ""
         return {"type": "text", "fala": "Sou o Braga, assistente virtual do Braga Saúde." + suffix}
+    if kind in {"date", "time"}:
+        from services.calendar_reply import calendar_reply
+        return {"type": "text", "fala": calendar_reply(raw, kind)}
+    if kind == "med_plan":
+        return {"type": "text", "fala": "Entendi que você ainda vai tomar o remédio. Siga os horários cadastrados no aplicativo. Depois de tomar, me avise para preparar a confirmação da tomada."}
     if kind in _WA_VITALS:
         metric, to_values = _WA_VITALS[kind]
         values = to_values(det)

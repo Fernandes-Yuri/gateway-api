@@ -67,10 +67,10 @@ class ParsingTests(unittest.TestCase):
 
 
 class OperationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_named_family_target_and_mamae(self):
+    async def test_named_family_target(self):
         conn = connection()
         conn.fetch.return_value = [{'patient_id': 'mother', 'full_name': 'Maria Silva', 'caregiver_role': 'ADMIN_CHILD'}]
-        for text in ('qual a pressão da Maria?', 'como está a mamãe?'):
+        for text in ('qual a pressão da Maria?', 'como está a mamãe Maria?'):
             ctx, error = await resolve_target_context(conn, OperationContext(actor_id='child', patient_id='child'), text)
             self.assertIsNone(error)
             self.assertEqual(ctx.patient_id, 'mother')

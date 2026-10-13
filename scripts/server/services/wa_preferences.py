@@ -259,6 +259,7 @@ async def handle_preference(conn: Any, db_pool: Any, *,
     if not context or not context.actor_id:
         return None
     norm = _norm(text)
+    intent = detect_preference_intent(text)
     prefs = await read_preferences(conn, context.actor_id)
 
     # Passo 5.2: pendência ativa da CONTA; só ela autoriza a gravação.
@@ -273,7 +274,7 @@ async def handle_preference(conn: Any, db_pool: Any, *,
 
     # Confirmação: "sim" genérico não basta; a fala precisa ser afirmativa E
     # a pendência precisa estar ativa e pertencer a esta conta.
-    if pending and _is_affirmative(norm):
+    if pending and not intent and _is_affirmative(norm):
         code = await conn.fetchval(
             """SELECT confirmation_code FROM pending_confirmations
                WHERE user_id=$1 AND metric_type='PREFERENCE' AND status='pending'
@@ -284,12 +285,11 @@ async def handle_preference(conn: Any, db_pool: Any, *,
                 db_pool, confirmation_code=code, actor_id=context.actor_id)
         return None
 
-    if pending and _is_negative(norm):
+    if pending and not intent and _is_negative(norm):
         await _cancel_pending(conn, context.actor_id, pending)
         return OperationResult.success(
             "Tudo bem, não alterei suas preferências.")
 
-    intent = detect_preference_intent(text)
     if not intent:
         return None
 
