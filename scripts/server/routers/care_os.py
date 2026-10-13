@@ -1044,6 +1044,14 @@ dose_router = APIRouter(route_class=DoseContractRoute)
 DOSE_ERRORS = {code: {"model": DoseError} for code in (403, 404, 409, 422, 503)}
 
 
+@dose_router.get('/api/family/patients/{patient_id}/medications/{medication_id}/dose-schedule',
+                 response_model=DoseScheduleResponse, responses=DOSE_ERRORS)
+async def read_dose_schedule(patient_id: str, medication_id: uuid.UUID, uid: str = Depends(firebase_uid)):
+    async with _pool().acquire() as conn:
+        async with conn.transaction():
+            return await dose_service.read_schedule(conn, actor_id=uid, patient_id=patient_id, medication_id=medication_id)
+
+
 @dose_router.put("/api/family/patients/{patient_id}/medications/{medication_id}/dose-schedule",
             response_model=DoseScheduleResponse, responses=DOSE_ERRORS, dependencies=[Depends(require_dose_contract)])
 async def update_dose_schedule(patient_id: str, medication_id: uuid.UUID,

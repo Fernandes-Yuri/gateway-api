@@ -160,6 +160,16 @@ async def groups(conn, *, actor_id, patient_id, day=None):
             'local_date': str(day), 'generated_at': utc_text(datetime.now(timezone.utc)), 'groups': result, 'review_items': review_items}
 
 
+async def read_schedule(conn, *, actor_id, patient_id, medication_id):
+    await authorize(conn, actor_id, patient_id, 'medication:write')
+    med = await conn.fetchrow('SELECT id,schedule_revision FROM medications WHERE id=$1::uuid AND user_id=$2', str(medication_id), patient_id)
+    if not med:
+        fail(404, 'MEDICATION_NOT_FOUND', 'Medicamento não encontrado.')
+    slots = await conn.fetch('SELECT local_time,dose_units,quantity_confirmed FROM medication_dose_schedules WHERE medication_id=$1::uuid AND active ORDER BY local_time', str(medication_id))
+    return {'medication_batch_contract': 1, 'medication_id': str(med['id']),
+            'schedule_revision': med['schedule_revision'], 'slots': [dict(row) for row in slots]}
+
+
 async def update_schedule(conn, *, actor_id, patient_id, medication_id, payload):
     await authorize(conn, actor_id, patient_id, 'medication:write')
     med = await conn.fetchrow('SELECT * FROM medications WHERE id=$1::uuid AND user_id=$2 FOR UPDATE', str(medication_id), patient_id)

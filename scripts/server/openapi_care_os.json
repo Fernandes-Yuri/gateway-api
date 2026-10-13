@@ -1411,6 +1411,97 @@
       }
     },
     "/api/family/patients/{patient_id}/medications/{medication_id}/dose-schedule": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Read Dose Schedule",
+        "operationId": "read_dose_schedule_api_family_patients__patient_id__medications__medication_id__dose_schedule_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "medication_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Medication Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseScheduleResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      },
       "put": {
         "tags": [
           "Care OS"
