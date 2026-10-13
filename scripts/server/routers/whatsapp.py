@@ -947,6 +947,21 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         continue
                     if wa_route["type"] == "vitals" and user_id:
                         _wa_action = _WA_METRIC_TO_ACTION.get(wa_route["metric"])
+                        # Passo 5.4: no autocuidado, "um copo" sem volume
+                        # declarado usa o copo habitual da conta. A
+                        # preferência é do interlocutor: no cuidado
+                        # familiar (actor != patient) ela nunca preenche o
+                        # registro do paciente.
+                        if _wa_action == "REGISTRAR_AGUA" and wa_ctx and wa_ctx.is_self_care:
+                            try:
+                                from services.wa_preferences import resolve_cup_ml
+                                async with db_pool.acquire() as _cup_conn:
+                                    _copo_ml = await resolve_cup_ml(
+                                        _cup_conn, wa_ctx, user_text)
+                                if _copo_ml and wa_route.get("values"):
+                                    wa_route["values"]["quantidade_ml"] = _copo_ml
+                            except Exception as _cup_err:
+                                print(f"[WhatsApp Preferences] Aviso copo habitual: {_cup_err}")
                         _wa_handled = await handle_wa_health_confirmation(
                             sender_phone=sender_phone, user_id=user_id, user_name=user_name,
                             msg_type=msg_type, db=db_pool, action_name=_wa_action,
@@ -962,8 +977,21 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             user_text, user_name)
                         continue
 
-                    # Política compartilhada; dados do usuário não entram no system prompt.
-                    conv_prompt = build_conversation_system("whatsapp")
+                    # Política compartilhada; dados do usuário não entram no
+                    # system prompt. Passo 5.4: as preferências confirmadas
+                    # da conta do INTERLOCUTOR são carregadas como o app faz
+                    # (context_prompt), no mesmo conteúdo persistido.
+                    _wa_prefs = {}
+                    if user_id:
+                        try:
+                            from services.wa_preferences import read_preferences
+                            async with db_pool.acquire() as _pref_conn:
+                                _wa_prefs = await read_preferences(_pref_conn, user_id)
+                        except Exception as _pref_err:
+                            print(f"[WhatsApp Preferences] Aviso ao carregar: {_pref_err}")
+                    conv_prompt = build_conversation_system(
+                        "whatsapp", preferences=_wa_prefs,
+                        self_care=wa_ctx.is_self_care if wa_ctx else True)
 
                     # 4. Resposta com IA Qwen (Groq)
                     headers = {

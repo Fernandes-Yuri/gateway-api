@@ -177,6 +177,12 @@ def _describe(key: str, value: Any) -> str:
             "detailed": "dar respostas mais detalhadas"}[value]
 
 
+# Passo 5.4: aplicação das preferências confirmadas no canal.
+_BARE_CUP_RE = re.compile(
+    r"\b(bebi|tomei|consumi|mais um|outro|um|dei)\b\s+(um|mais um|outro)?\s*"
+    r"(copo|xicara|caneca)\b(\s+(de\s+)?(agua|liquido))?\b")
+
+
 def _question(intent: dict) -> str:
     key = intent.get("key")
     if key == "all":
@@ -201,6 +207,41 @@ async def read_preferences(conn: Any, user_id: str) -> dict:
     if value is None:
         return {}
     return json.loads(value) if isinstance(value, str) else dict(value)
+
+
+# Passo 5.4: limite de "um copo" raso — sem outro número na fala, o copo
+# habitual da preferência é a única fonte do volume.
+_HAS_NUMBER_RE = re.compile(r"\d")
+
+
+async def resolve_cup_ml(conn: Any, context: OperationContext,
+                         text: str) -> Optional[int]:
+    """
+    Passo 5.4: volume de "um copo" no autocuidado.
+
+    Só vale no autocuidado (actor == patient): a preferência de copo é do
+    interlocutor e nunca preenche o registro de outra pessoa. Se a fala
+    traz volume explícito ("300 ml"), ela prevalece sobre a preferência.
+
+    Devolve None quando não é autocuidado, não há preferência de copo ou a
+    fala não é de "um copo" (o pipeline segue com o volume declarado).
+    """
+    if not context or not context.is_self_care or not text:
+        return None
+    norm = _norm(text)
+    if _HAS_NUMBER_RE.search(norm):
+        return None
+    if not _BARE_CUP_RE.search(norm):
+        return None
+    try:
+        prefs = await read_preferences(conn, context.actor_id)
+    except Exception as err:
+        print(f"[WA Preferences] Falha ao ler copo habitual: {err}")
+        return None
+    copo = prefs.get("cup_ml")
+    if isinstance(copo, int) and 50 <= copo <= 2000:
+        return copo
+    return None
 
 
 async def handle_preference(conn: Any, db_pool: Any, *,
