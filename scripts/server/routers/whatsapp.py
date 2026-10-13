@@ -124,6 +124,37 @@ except ImportError:
         return False
 
 try:
+    from services.whatsapp_identity import (
+        STATUS_OK,
+        STATUS_UNAVAILABLE,
+        STATUS_UNLINKED,
+        context_from_identity,
+        is_confirmed,
+        resolve_linked_account,
+    )
+except ImportError:  # pragma: no cover - fallback defensivo do monolito
+    STATUS_OK, STATUS_UNAVAILABLE, STATUS_UNLINKED = "ok", "unavailable", "unlinked"
+
+    def is_confirmed(identity):  # type: ignore
+        return bool(identity) and identity.get("status") == "ok"
+
+    async def resolve_linked_account(conn, sender_phone):  # type: ignore
+        return {"status": STATUS_UNLINKED, "user_id": None, "full_name": None}
+
+    def context_from_identity(identity, **kwargs):  # type: ignore
+        return None
+
+try:
+    from services.whatsapp_dedup import claim_message_receipt, claim_operation_key
+except ImportError:  # pragma: no cover - fallback defensivo do monolito
+
+    async def claim_message_receipt(conn, message_id, user_id=None):  # type: ignore
+        return True
+
+    async def claim_operation_key(conn, *, message_id, kind, actor_id):  # type: ignore
+        return True
+
+try:
     from webhook_security import verify_meta_signature
     HAS_WEBHOOK_SECURITY = True
 except ImportError:
@@ -300,16 +331,25 @@ async def _wa_send_router_text(sender_phone: str, msg_type: str, fala: str,
 async def handle_wa_health_confirmation(*, sender_phone: str, user_id: str, user_name,
                                         msg_type: str, db, action_name: str,
                                         action_params: dict, reply_text: str,
-                                        user_text: str, system_label: str) -> bool:
+                                        user_text: str, system_label: str,
+                                        context=None) -> bool:
     """Fluxo de confirmação com botões (extraído do caminho LLM, Fase 4).
 
     Retorna True quando resolveu (valor inválido avisado ou botões
     enviados); False quando o chamador deve seguir o fluxo normal.
+
+    context (passo 1.3/1.5): OperationContext do canal; carrega actor_id,
+    patient_id, channel e message_id. No autocuidado do WhatsApp, actor e
+    patient são a mesma conta; a pendência é sempre do paciente.
     """
     health_actions = ["REGISTRAR_PRESSAO", "REGISTRAR_GLICEMIA", "REGISTRAR_AGUA",
                       "REGISTRAR_PESO", "REGISTRAR_BATIMENTOS", "REGISTRAR_OXIGENACAO"]
     if action_name not in health_actions or not user_id:
         return False
+    # O registro é feito no contexto de uma operação; sem contexto (caminho
+    # legado), trata-se de autocuidado da própria conta.
+    patient_id = getattr(context, "patient_id", None) or user_id
+    actor_id = getattr(context, "actor_id", None) or user_id
     metric_type_map = {
         "REGISTRAR_PRESSAO": "PRESSAO",
         "REGISTRAR_GLICEMIA": "GLICEMIA",
@@ -328,8 +368,25 @@ async def handle_wa_health_confirmation(*, sender_phone: str, user_id: str, user
             f"Por favor, envie novamente o valor correto."
         )
         return True
+    # Chave de operação persistida (passo 1.4): amarra a pendência à mensagem
+    # que a originou — um reenvio daquela mensagem não cria segunda pendência.
+    _op_message_id = getattr(context, "message_id", None)
+    _op_kind = f"pending:{metric_type}"
+    if db and actor_id:
+        try:
+            async with db.acquire() as _conn:
+                _claimed = await claim_operation_key(
+                    _conn, message_id=_op_message_id, kind=_op_kind, actor_id=actor_id)
+            if not _claimed:
+                print(f"[WhatsApp Confirmation] Operação já pendente: {_op_kind} {_op_message_id}")
+                await send_whatsapp_text(
+                    sender_phone,
+                    "Você já me enviou este valor. Estou aguardando a confirmação nos botões. 💚")
+                return True
+        except Exception as _op_err:
+            print(f"[WhatsApp Confirmation] Aviso ao reservar chave de operação: {_op_err}")
     confirmation_code = await create_pending_confirmation(
-        user_id=user_id,
+        user_id=patient_id,
         metric_type=metric_type,
         value_json=validated_params,
         db_pool=db
@@ -402,6 +459,21 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     if not sender_phone or not user_text:
                         continue
 
+                    # Antiduplicidade (passo 1.4): a Meta reenvia mensagens.
+                    # Registra o recebimento no banco; reenvio = mesma
+                    # mensagem = não reprocessa (nova pendência, novo registro).
+                    # user_id fica em branco aqui: a identidade é resolvida
+                    # depois, no passo 2 do pipeline (vínculo confirmado).
+                    if db_pool and msg_id:
+                        try:
+                            async with db_pool.acquire() as _conn:
+                                _seen = await claim_message_receipt(_conn, msg_id)
+                            if not _seen:
+                                print(f"[WhatsApp Dedup] Reenvio ignorado: {msg_id}")
+                                continue
+                        except Exception as _dedup_err:
+                            print(f"[WhatsApp Dedup] Aviso: {msg_id}: {_dedup_err}")
+
                     wa_tid = trace_llm('whatsapp', 'request', user_text=user_text,
                                        msg_type=msg_type, phone_tail=(sender_phone or '')[-4:])
 
@@ -422,57 +494,30 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         continue
 
                     # 2. Identificação do Usuário no PostgreSQL
-                    # Primária: whatsapp_phone (vínculo verificado por TOTP, new).
-                    # Fallback (transição): busca legada por número completo,
-                    # mantida até as contas existentes migrarem para o vínculo novo.
-                    #
-                    # AUD-G10: o fallback comparava os ÚLTIMOS 8 dígitos contra
-                    # phone/emergency_contact_phone com LIKE '%sufixo%' — o que
-                    # casava QUALQUER aparição do sufixo em QUALQUER posição. Dois
-                    # números diferentes que coincidem nos 8 finais (ou até
-                    # continham o trecho) apontavam para o mesmo paciente, e um
-                    # estranho podia se passar por usuário cadastrado. Agora a
-                    # associação legada exige o número COMPLETO (mesma
-                    # quantidade de dígitos), e logs avisam que o caminho
-                    # ainda está em uso para que a migração seja concluída.
-                    user_id = None
-                    user_name = None
-                    verified_link = False
+                    # Só vale o vínculo confirmado por TOTP (whatsapp_phone).
+                    # O fallback legado por phone / emergency_contact_phone foi
+                    # removido do canal de saúde no passo 1.2: telefone de
+                    # contato e de emergência não autorizam uma conta clínica,
+                    # e um número sem vínculo nunca é identidade.
+                    # Ambiguidade (mais de uma conta no mesmo número) interrompe
+                    # o fluxo e pede regularização — a identidade não vem da
+                    # interpretação do modelo.
+                    identity = {"status": STATUS_UNLINKED, "user_id": None, "full_name": None}
                     if db_pool:
                         try:
-                            _wa_digits = "".join(filter(str.isdigit, sender_phone or ""))
                             async with db_pool.acquire() as conn:
-                                p_row = await conn.fetchrow(
-                                    "SELECT id, full_name, user_role FROM profiles "
-                                    "WHERE regexp_replace(whatsapp_phone, '\\D', '', 'g') = $1",
-                                    _wa_digits
-                                )
-                                verified_link = bool(p_row)
-                                if not p_row and _wa_digits:
-                                    # AUD-G10: match EXATO do número completo
-                                    # (igualdade de dígitos), nunca substring.
-                                    p_row = await conn.fetchrow(
-                                        "SELECT id, full_name, user_role FROM profiles "
-                                        "WHERE regexp_replace(phone, '\\D', '', 'g') = $1",
-                                        _wa_digits
-                                    )
-                                    if not p_row:
-                                        p_row = await conn.fetchrow(
-                                            "SELECT id, full_name, user_role FROM profiles "
-                                            "WHERE regexp_replace(emergency_contact_phone, '\\D', '', 'g') = $1",
-                                            _wa_digits
-                                        )
-                                    if p_row:
-                                        print(
-                                            f"[AUD-G10] Conta {p_row['id']} acessada pelo fallback "
-                                            f"legado (phone completo) — número sem vínculo TOTP. "
-                                            f"Migrar para whatsapp_link."
-                                        )
-                                if p_row:
-                                    user_id = p_row["id"]
-                                    user_name = p_row["full_name"]
+                                identity = await resolve_linked_account(conn, sender_phone)
                         except Exception as db_err:
                             print(f"[WhatsApp DB Lookup Error] {db_err}")
+                            identity = {"status": STATUS_UNAVAILABLE, "user_id": None, "full_name": None}
+                    verified_link = identity.get("status") == STATUS_OK
+                    user_id = identity.get("user_id") if verified_link else None
+                    user_name = identity.get("full_name") if verified_link else None
+
+                    # Passo 1.5: a identidade resolvida vira o contexto de
+                    # operação (actor/patient/channel/message_id) que os
+                    # serviços extraídos consomem. Sem vínculo -> None.
+                    wa_ctx = context_from_identity(identity, channel="whatsapp", message_id=msg_id)
 
                     # 2.5. VÍNCULO TOTP (arquitetura temporária, sem template).
                     # Roda ANTES do portão de conta: é assim que um número sem conta
@@ -497,7 +542,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         try:
                             _blocked = await gate_unregistered(
                                 user_text=user_text,
-                                user_id=user_id,
+                                identity=identity,
                                 send_text=send_whatsapp_text,
                                 sender_phone=sender_phone,
                             )
@@ -567,7 +612,8 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             sender_phone=sender_phone, user_id=user_id, user_name=user_name,
                             msg_type=msg_type, db=db_pool, action_name=_wa_action,
                             action_params=wa_route["values"], reply_text=wa_route["fala"],
-                            user_text=user_text, system_label="ORB router Fase 4 (vitals, sem LLM)"
+                            user_text=user_text, system_label="ORB router Fase 4 (vitals, sem LLM)",
+                            context=wa_ctx
                         )
                         if _wa_handled:
                             continue
@@ -614,7 +660,8 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                 sender_phone=sender_phone, user_id=user_id, user_name=user_name,
                                 msg_type=msg_type, db=db_pool, action_name=action_name,
                                 action_params=action_params, reply_text=reply_text,
-                                user_text=user_text, system_label=conv_prompt
+                                user_text=user_text, system_label=conv_prompt,
+                                context=wa_ctx
                             )
                             if _handled:
                                 return  # Não envia resposta de texto - aguarda confirmação
@@ -680,30 +727,23 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
         except Exception as _e:
             print(f"[Callback] Aviso: não expirou pendências vencidas: {_e}")
 
-        # Buscar usuário pelo telefone
-        # AUD-G10: era LIKE '%' || $1 com os últimos 8 dígitos — correspondência
-        # parcial que podia casar a conta errada. Agora exige o número completo.
+        # Buscar usuário pelo telefone: somente vínculo confirmado (TOTP).
+        # Passo 1.2: fallback por phone / emergency_contact_phone removido —
+        # confirmar um registro de saúde exige a conta vinculada a este número.
         user_id = None
-        _cb_digits = "".join(filter(str.isdigit, sender_phone or ""))
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                SELECT id FROM profiles
-                WHERE regexp_replace(whatsapp_phone, '\\D', '', 'g') = $1
-                   OR regexp_replace(phone, '\\D', '', 'g') = $1
-                LIMIT 1
-            """, _cb_digits)
-            if not row:
-                row = await conn.fetchrow("""
-                    SELECT id FROM profiles
-                    WHERE regexp_replace(emergency_contact_phone, '\\D', '', 'g') = $1
-                    LIMIT 1
-                """, _cb_digits)
-            if row:
-                user_id = row['id']
+            _cb_identity = await resolve_linked_account(conn, sender_phone)
+            if is_confirmed(_cb_identity):
+                user_id = _cb_identity["user_id"]
 
         if not user_id:
-            print(f"[Callback] Usuário não encontrado para telefone: {sender_phone}")
-            await send_whatsapp_text(sender_phone, "Usuário não encontrado. Verifique seu cadastro.")
+            print(f"[Callback] Sem vínculo confirmado para telefone: {sender_phone}")
+            await send_whatsapp_text(
+                sender_phone,
+                "Não encontrei uma conta vinculada a este WhatsApp. "
+                "Vincule seu número no aplicativo Braga Saúde ('Vincular WhatsApp') "
+                "para confirmar registros."
+            )
             return
 
         # Processar ação
