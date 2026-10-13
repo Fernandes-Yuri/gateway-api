@@ -151,6 +151,19 @@ class OperationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('08:00', result.data['scheduled_for'])
         self.assertTrue(result.data['scheduled_for'].endswith('-04:00'))
 
+    async def test_preference_proposal_is_shown_before_buttons(self):
+        from routers import whatsapp
+        conn = connection()
+        proposal = OperationResult.confirmation('Posso guardar o apelido Ana?', 'CODE', data={'key': 'nickname', 'value': 'Ana'})
+        with patch('services.wa_preferences.handle_preference', AsyncMock(return_value=proposal)), \
+             patch.object(whatsapp, 'send_whatsapp_text', AsyncMock()) as send, \
+             patch.object(whatsapp, 'send_confirmation_buttons', AsyncMock()) as buttons, \
+             patch.object(whatsapp, 'log_fine_tuning_sample'):
+            handled = await whatsapp.handle_wa_preference(sender_phone='test', user_id='actor', user_name='Ana', msg_type='text', db=Pool(conn), user_text='me chama de Ana')
+        self.assertTrue(handled)
+        send.assert_awaited_once_with('test', proposal.message)
+        self.assertEqual(buttons.await_args.kwargs['confirmation_code'], 'CODE')
+
     async def test_biometry_rejects_wrong_owner_before_database(self):
         value = BiometrySyncDto(id='00000000-0000-0000-0000-000000000001', userId='other', weight=75, measuredAt='2026-10-13T12:00:00Z')
         with self.assertRaises(HTTPException) as raised:

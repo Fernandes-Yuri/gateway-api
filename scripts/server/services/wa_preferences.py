@@ -378,55 +378,6 @@ async def _cancel_pending(conn: Any, user_id: str, pending: Any) -> None:
         print(f"[WA Preferences] Aviso: pendência não cancelada: {err}")
 
 
-async def _confirm(conn: Any, user_id: str, pending: Any) -> OperationResult:
-    """Passo 5.2/5.3: consome a proposta ativa e grava na conta."""
-    try:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """DELETE FROM assistant_preference_pending
-                   WHERE user_id=$1 AND proposal_id=$2 AND expires_at > NOW()
-                   RETURNING operation""",
-                user_id, pending["proposal_id"])
-            if not row:
-                return OperationResult.missing_data(
-                    "Essa proposta já foi resolvida ou expirou. "
-                    "Diga novamente o que quer guardar ou apagar.")
-            change = json.loads(row["operation"]) if isinstance(row["operation"], str) \
-                else dict(row["operation"])
-            await conn.execute(
-                "INSERT INTO assistant_preferences(user_id) VALUES($1) "
-                "ON CONFLICT DO NOTHING", user_id)
-            prefs = json.loads(await conn.fetchval(
-                "SELECT preferences FROM assistant_preferences "
-                "WHERE user_id=$1 FOR UPDATE", user_id) or "{}")
-            if change.get("key") == "all":
-                prefs = {}
-            elif change.get("value") is None:
-                prefs.pop(change["key"], None)
-            else:
-                prefs[change["key"]] = change["value"]
-            await conn.execute(
-                "UPDATE assistant_preferences SET preferences=$2::jsonb, "
-                "updated_at=NOW() WHERE user_id=$1",
-                user_id, json.dumps(prefs))
-    except Exception as err:
-        print(f"[WA Preferences] Falha ao confirmar preferência: {err}")
-        return OperationResult.unavailable(
-            "Não consegui confirmar a alteração agora. Nada foi gravado — "
-            "tente novamente em instantes.")
-
-    if change.get("value") is None:
-        if change.get("key") == "all":
-            return OperationResult.success(
-                "Pronto, apaguei todas as preferências. Sua conta e seus "
-                "registros de saúde continuam intactos.")
-        return OperationResult.success(
-            "Pronto, apaguei a preferência solicitada.")
-    return OperationResult.success(
-        f"Combinado, guardei a preferência de "
-        f"{_describe(change['key'], change['value'])}.")
-
-
 async def confirm_pending_preference(db_pool: Any, *,
                                      confirmation_code: str,
                                      actor_id: str) -> OperationResult:
