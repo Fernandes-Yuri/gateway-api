@@ -36,7 +36,7 @@ class WhatsAppPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.pool = await asyncpg.create_pool(DSN, min_size=1, max_size=3, setup=setup)
         async with self.pool.acquire() as conn:
             await conn.execute((ROOT / 'scripts/docker/init_schema.sql').read_text())
-            for number in (3, 4, 9, 17, 18, 52, 53):
+            for number in (3, 4, 9, 17, 18, 52, 53, 54):
                 migration = next(p for p in (ROOT / 'migrations').glob(f'{number:03d}_*.sql') if not p.stem.endswith('_rollback'))
                 await conn.execute(migration.read_text(encoding='utf-8-sig'))
             await conn.execute("INSERT INTO profiles(id,full_name,height,whatsapp_phone,timezone) VALUES ('actor','Ana',170,'test-actor','America/Manaus'),('patient','Maria',165,'test-patient','America/Sao_Paulo')")
