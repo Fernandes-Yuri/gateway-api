@@ -369,6 +369,27 @@ _POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
                  sync_router, whatsapp_router, admin_router, care_os_router, catalog_router)
 
 
+async def _care_sender(phone, message, notification_type):
+    if not HAS_WHATSAPP:
+        print("[Care OS] WhatsApp indisponível; entrega não realizada.")
+        return False
+    template_env = {
+        "NIGHTLY_BULLETIN": "WHATSAPP_TEMPLATE_CARE_NIGHTLY",
+        "PATTERN_BREAK": "WHATSAPP_TEMPLATE_CARE_PATTERN_BREAK",
+        "STOCK_OR_PRESCRIPTION": "WHATSAPP_TEMPLATE_CARE_STOCK",
+    }.get(notification_type)
+    template_name = os.getenv(template_env, "") if template_env else ""
+    if template_name:
+        result = await send_whatsapp_template(
+            phone, template_name=template_name, language_code="pt_BR",
+            body_parameters=[message],
+        )
+    else:
+        # Funciona somente se o usuário abriu a janela Meta de 24h.
+        result = await send_whatsapp_text(phone, message)
+    return bool(result.get("success")) if isinstance(result, dict) else bool(result)
+
+
 def _propagate_db_pool():
     """Repassa o pool vivo (ou None) para os routers extraidos.
 
@@ -379,7 +400,7 @@ def _propagate_db_pool():
     """
     for _router in _POOL_ROUTERS:
         _router._state.db_pool = db_pool
-    # Passo 4.4: o sender de cuidado vive no closure do startup; o router do
+    # Sender compartilhado com os workers, disponível também sem scheduler.
     # WhatsApp só o usa no envio pós-confirmação. Sem pool, não há envio.
     if db_pool is not None:
         whatsapp_router._state.send_care_message = _care_sender
@@ -456,26 +477,6 @@ async def startup():
                 purge_expired_blocked_ips, 'interval', minutes=5,
                 id="purge_security_blocked_ips", replace_existing=True, max_instances=1,
             )
-
-            async def _care_sender(phone, message, notification_type):
-                if not HAS_WHATSAPP:
-                    print("[Care OS] WhatsApp indisponível; entrega não realizada.")
-                    return False
-                template_env = {
-                    "NIGHTLY_BULLETIN": "WHATSAPP_TEMPLATE_CARE_NIGHTLY",
-                    "PATTERN_BREAK": "WHATSAPP_TEMPLATE_CARE_PATTERN_BREAK",
-                    "STOCK_OR_PRESCRIPTION": "WHATSAPP_TEMPLATE_CARE_STOCK",
-                }.get(notification_type)
-                template_name = os.getenv(template_env, "") if template_env else ""
-                if template_name:
-                    result = await send_whatsapp_template(
-                        phone, template_name=template_name, language_code="pt_BR",
-                        body_parameters=[message],
-                    )
-                else:
-                    # Funciona somente se o usuário abriu a janela Meta de 24h.
-                    result = await send_whatsapp_text(phone, message)
-                return bool(result.get("success")) if isinstance(result, dict) else bool(result)
 
             async def _nightly_care_job():
                 await send_nightly_bulletins(db_pool, _care_sender)

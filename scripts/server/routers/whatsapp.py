@@ -24,6 +24,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -327,6 +328,31 @@ def match_fast_lane_intent(text: str) -> Optional[str]:
 # MEMÓRIA CURTA + MAPA MÉTRICA->AÇÃO
 # =============================================================
 # Memoria curta de clarificacao do WhatsApp (Fase 4): telefone -> kind.
+_WA_OPERATION_MEMORY: Dict[str, tuple] = {}
+
+
+def _remember_operation(user_id, text, result, kind):
+    if result.status == "clarification":
+        _WA_OPERATION_MEMORY[user_id] = (time.monotonic(), text, result.data or {}, kind)
+    else:
+        _WA_OPERATION_MEMORY.pop(user_id, None)
+
+
+def _operation_followup(user_id, text):
+    pending = _WA_OPERATION_MEMORY.pop(user_id, None)
+    if not pending or time.monotonic() - pending[0] > 300:
+        return text
+    from services.family_target import _norm
+    from services.medication_lookup import detect_hour
+    answer = _norm(text)
+    candidates = pending[2].get("candidates", [])
+    names = [candidate.get("full_name") or candidate.get("name") or "" for candidate in candidates]
+    matches = any(answer and (answer == _norm(name) or answer in _norm(name).split()) for name in names)
+    if matches or (pending[3] == "med_take" and detect_hour(answer)):
+        return pending[1] + " " + ("da " if pending[3] != "med_take" else "") + text
+    return text
+
+
 _WA_MEMORY: Dict[str, tuple] = {}
 # Ultima fala template do WhatsApp (anti-repeticao): telefone -> fala.
 _WA_LASTFALA: Dict[str, str] = {}
@@ -476,6 +502,13 @@ async def handle_wa_medication_take(*, sender_phone: str, user_id: str, user_nam
 
     take_ctx = context or OperationContext(
         actor_id=user_id, patient_id=user_id, channel="whatsapp")
+    if _WA_FAMILY_RESOLVER is not None:
+        async with db.acquire() as conn:
+            take_ctx, error = await _WA_FAMILY_RESOLVER(conn, take_ctx, user_text)
+        if error:
+            _remember_operation(user_id, user_text, error, "med_take")
+            await send_whatsapp_text(sender_phone, error.message)
+            return True
     _op_message_id = getattr(take_ctx, "message_id", None)
 
     # Chave de operação persistida (passo 1.4): mesma mensagem não cria duas
@@ -504,8 +537,10 @@ async def handle_wa_medication_take(*, sender_phone: str, user_id: str, user_nam
         return False
     if take_result is None or not take_result.message:
         return False
+    _remember_operation(user_id, user_text, take_result, "med_take")
 
     if take_result.is_confirmation and take_result.pending_op_id:
+        await send_whatsapp_text(sender_phone, take_result.message)
         await send_confirmation_buttons(
             to_number=sender_phone,
             metric_type="MED_TOMADA",
@@ -563,7 +598,8 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
 
     # Familiar mencionado? O alvo é o paciente do vínculo (passo 4.1).
     if _WA_FAMILY_RESOLVER is not None:
-        care_ctx, _fam_err = await _WA_FAMILY_RESOLVER(db, care_ctx, user_text)
+        async with db.acquire() as conn:
+            care_ctx, _fam_err = await _WA_FAMILY_RESOLVER(conn, care_ctx, user_text)
         if _fam_err is not None and _fam_err.message:
             await send_whatsapp_text(sender_phone, _fam_err.message)
             return True
@@ -580,6 +616,7 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
         return False
 
     if care_result.is_confirmation and care_result.pending_op_id:
+        await send_whatsapp_text(sender_phone, care_result.message)
         await send_confirmation_buttons(
             to_number=sender_phone,
             metric_type="CARE_MESSAGE",
@@ -648,6 +685,7 @@ async def handle_wa_preference(*, sender_phone: str, user_id: str, user_name,
         return False
 
     if pref_result.is_confirmation and pref_result.pending_op_id:
+        await send_whatsapp_text(sender_phone, pref_result.message)
         await send_confirmation_buttons(
             to_number=sender_phone,
             metric_type="PREFERENCE",
@@ -821,6 +859,9 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         await send_whatsapp_text(sender_phone, identity_text)
                         continue
 
+                    if user_id:
+                        user_text = _operation_followup(user_id, user_text)
+
                     # 2.7. Respostas rápidas em texto
                     # (somente após portão de conta: anônimo já respondeu antes)
                     fast_intent = match_fast_lane_intent(user_text)
@@ -860,6 +901,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                     _q_ctx, _fam_err = await _WA_FAMILY_RESOLVER(
                                         _q_conn, _q_ctx, user_text)
                                     if _fam_err is not None and _fam_err.message:
+                                        _remember_operation(user_id, user_text, _fam_err, wa_kind)
                                         await send_whatsapp_text(sender_phone, _fam_err.message)
                                         continue
                                 if _q_ctx is not None:
@@ -881,8 +923,13 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                                    "self_care": _q_ctx is not None and _q_ctx.is_self_care})
                             except Exception:
                                 pass
+                            _remember_operation(user_id, user_text, _q_result, wa_kind)
                             await send_whatsapp_text(sender_phone, _q_result.message)
                             continue
+
+                        await send_whatsapp_text(sender_phone,
+                            "Não consegui consultar seus registros agora. Tente novamente em instantes.")
+                        continue
 
                     # 2.8b. Tomada de medicação (PR3, passo 3.3): identifica o
                     # remédio cadastrado e o horário programado, cria a
@@ -934,6 +981,16 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         trace_llm('whatsapp', 'followup_hit', wa_tid, fala=wa_follow["fala"])
                         await _wa_send_router_text(sender_phone, msg_type, wa_follow["fala"], user_text, user_name)
                         continue
+                    # Registros de terceiros precisam de executor próprio; nunca
+                    # gravar na conta do interlocutor como se fossem autocuidado.
+                    if wa_kind in ("bp", "glucose", "hydration", "hr", "spo2", "weight") and wa_ctx:
+                        async with db_pool.acquire() as conn:
+                            target, error = await _WA_FAMILY_RESOLVER(conn, wa_ctx, user_text)
+                        if error or (target and not target.is_self_care):
+                            await send_whatsapp_text(sender_phone, error.message if error else
+                                "Para registrar essa medição do familiar, use o aplicativo. "
+                                "Aqui posso consultar os dados dele e registrar medicamentos com confirmação.")
+                            continue
                     wa_route = whatsapp_next(user_text, bool(user_id))
                     trace_llm('whatsapp', 'router_hit', wa_tid, route={k: (str(v)[:200]) for k, v in wa_route.items()})
                     if wa_route["type"] == "text":
@@ -1233,12 +1290,13 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
             async with db_pool.acquire() as conn:
                 row = await conn.fetchrow("""
                     SELECT metric_type FROM pending_confirmations
-                    WHERE confirmation_code = $1 AND status = 'pending'
-                """, confirmation_code)
+                    WHERE confirmation_code = $1 AND user_id = $2 AND status = 'pending'
+                """, confirmation_code, user_id)
 
                 if row:
                     metric_type = row['metric_type']
                     await cancel_pending_confirmation(confirmation_code, user_id, db_pool)
+                    await conn.execute("DELETE FROM assistant_preference_pending WHERE user_id=$1 AND proposal_id IN (SELECT COALESCE(value_json->>'proposal_id', confirmation_code) FROM pending_confirmations WHERE user_id=$1 AND confirmation_code=$2)", user_id, confirmation_code)
 
                     if metric_type == "PRESSAO":
                         await send_whatsapp_text(sender_phone,
@@ -1278,6 +1336,8 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
         elif action == "cancel":
             success = await cancel_pending_confirmation(confirmation_code, user_id, db_pool)
             if success:
+                async with db_pool.acquire() as conn:
+                    await conn.execute("DELETE FROM assistant_preference_pending WHERE user_id=$1 AND proposal_id IN (SELECT COALESCE(value_json->>'proposal_id', confirmation_code) FROM pending_confirmations WHERE user_id=$1 AND confirmation_code=$2)", user_id, confirmation_code)
                 await send_whatsapp_text(sender_phone,
                     "❌ *Registro cancelado.*\n\n"
                     "Seus dados não foram salvos.\n"

@@ -85,7 +85,7 @@ async def _owner_first_name(conn: Any, context: OperationContext) -> Optional[st
     except Exception as err:
         print(f"[Health Queries] Aviso: nome do paciente não lido: {err}")
         nome = None
-    return (nome or "").split()[0] or None
+    return (nome or "").split()[0] if (nome or "").strip() else "seu familiar"
 
 
 def _last_reading_message(owner: Optional[str], label: str, value: str,

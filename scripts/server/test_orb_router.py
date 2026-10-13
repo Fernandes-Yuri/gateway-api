@@ -101,7 +101,7 @@ class RouterTests(unittest.TestCase):
         self.assertAction("quero ver meus exames", "EXAMES")
 
     def test_med_topic(self):
-        self.assertAction("tomei meu remédio da pressão", "CONVERSA")
+        self.assertEqual(detect_all("tomei meu remédio da pressão")["kind"], "med_take")
 
     # ---- Nutrição sem fantasma ----
     def test_meal_mention(self):

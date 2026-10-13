@@ -35,7 +35,7 @@ _QUERY_METRICAS = (
     ("query_spo2", r"\bsaturacao|\boxigenacao|\boxigenio"),
     ("query_weight", r"\bpeso\b"),
     ("query_water", r"\bagua\b|\bhidratacao|\bhidrata"),
-    ("query_summary", r"\bresumo\b|\bcomo (eu )?(estou|to)\b|\bmeu dia\b|\bcomo ando\b"),
+    ("query_summary", r"\bresumo\b|\bcomo (eu )?(estou|to)\b|\bmeu dia\b|\bcomo ando\b|\bcomo (esta|vai|ta)\b"),
 )
 
 # Menção genérica a dados de saúde sem métrica específica: ambíguo.
@@ -93,7 +93,10 @@ def detect_med_take(norm: str) -> bool:
     if _MED_CONTEXT.search(norm):
         return True
     from services.medication_lookup import detect_hour
-    return detect_hour(norm) is not None
+    if detect_hour(norm) is not None:
+        return True
+    return bool(re.search(r"\b(?:tomei|tomou|acabei de tomar)\b", norm)
+                and not re.search(r"\b(?:agua|cafe|cha|suco|leite|cerveja|banho|copo|xicara|caneca)\b", norm))
 
 
 # ------------------------------------------------------------------
@@ -353,6 +356,16 @@ def detect_all(raw: str) -> dict:
         return {"kind": "time"}
     if _DATE_RE.search(norm):
         return {"kind": "date"}
+    # Passo 3.3: tomada de dose é reconhecida ANTES da consulta — "tomei o
+    # remédio da pressão das 8" carrega a palavra da métrica, mas é registro,
+    # não pergunta. Sem verbo de tomada, a consulta segue valendo.
+    if detect_med_take(norm):
+        return {"kind": "med_take"}
+    # Passo 2.3: consulta (pergunta sem valor) é respondida pelo serviço de
+    # consultas, antes de qualquer conversa aberta.
+    query = detect_query(norm)
+    if query:
+        return {"kind": query}
     bp = detect_bp(norm)
     if bp:
         return {"kind": "bp", "sys": bp[0], "dia": bp[1]}
@@ -371,16 +384,6 @@ def detect_all(raw: str) -> dict:
     peso = detect_weight(norm)
     if peso:
         return {"kind": "weight", "peso_kg": peso}
-    # Passo 3.3: tomada de dose é reconhecida ANTES da consulta — "tomei o
-    # remédio da pressão das 8" carrega a palavra da métrica, mas é registro,
-    # não pergunta. Sem verbo de tomada, a consulta segue valendo.
-    if detect_med_take(norm):
-        return {"kind": "med_take"}
-    # Passo 2.3: consulta (pergunta sem valor) é respondida pelo serviço de
-    # consultas, antes de qualquer conversa aberta.
-    query = detect_query(norm)
-    if query:
-        return {"kind": query}
     if re.search(r"\blembrete|\bme lembra|\bme avisa", norm):
         return {"kind": "reminder"}
     if re.search(r"\bexame", norm):

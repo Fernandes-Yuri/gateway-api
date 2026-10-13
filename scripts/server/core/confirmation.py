@@ -16,7 +16,7 @@ leitura vinda do app faria.
 """
 import json
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 
@@ -111,7 +111,7 @@ async def create_pending_confirmation(
         return None
 
     confirmation_code = generate_confirmation_code()
-    expires_at = datetime.utcnow() + timedelta(minutes=5)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
 
     try:
         async with db_pool.acquire() as conn:

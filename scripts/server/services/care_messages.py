@@ -90,10 +90,11 @@ async def prepare_care_message(conn: Any, db_pool: Any, *,
 
     from core.confirmation import create_pending_confirmation
     code = await create_pending_confirmation(
-        user_id=context.patient_id,
+        user_id=context.actor_id,
         metric_type=_METRIC_TYPE,
         value_json={"body": corpo,
-                    "recipient_kind": "self" if context.is_self_care else "caregiver",
+                    "recipient_kind": "self" if context.is_self_care else "patient",
+                    "patient_id": context.patient_id,
                     "actor_id": context.actor_id},
         db_pool=db_pool,
     )
@@ -148,7 +149,6 @@ async def confirm_pending_care_message(db_pool: Any, sender: Any, *,
         send_ctx = OperationContext(actor_id=actor_id, patient_id=patient_id,
                                     channel="whatsapp")
 
-        outcome: Optional[OperationResult] = None
         try:
             async with conn.transaction():
                 consumed = await conn.execute(
@@ -169,13 +169,7 @@ async def confirm_pending_care_message(db_pool: Any, sender: Any, *,
                     # Destinatário do vínculo de cuidado, nunca um contato
                     # arbitrário informado na fala.
                     phone = await conn.fetchval(
-                        """SELECT c.whatsapp_phone FROM family_bindings b
-                           JOIN profiles c ON c.id = b.caregiver_id
-                           WHERE b.patient_id = $1 AND b.status = 'ACTIVE'
-                             AND c.whatsapp_phone IS NOT NULL
-                           ORDER BY b.updated_at DESC LIMIT 1""",
-                        patient_id,
-                    )
+                        "SELECT whatsapp_phone FROM profiles WHERE id=$1", patient_id)
                 if not phone:
                     raise _NoRecipient(
                         "Não encontrei um número de WhatsApp vinculado para "
@@ -219,9 +213,8 @@ async def confirm_pending_care_message(db_pool: Any, sender: Any, *,
     )
     if not delivered:
         return OperationResult.unavailable(
-            "Não consegui entregar a mensagem agora. Ela ficou registrada "
-            "para nova tentativa; só diga que foi enviada quando a entrega "
-            "for confirmada.")
+            "Não consegui entregar a mensagem. Escreva novamente o pedido "
+            "para preparar uma nova tentativa.")
     return OperationResult.success(
         "💌 Mensagem de cuidado entregue!",
         data={"phone_tail": str(phone)[-4:],
