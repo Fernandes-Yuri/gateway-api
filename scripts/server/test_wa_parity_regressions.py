@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 from orb_router import detect_all
 from services.operations import OperationContext, OperationResult
-from services.family_target import resolve_target_context
+from services.family_target import _explicit_person_name, resolve_target_context
 from services.wa_preferences import detect_preference_intent, confirm_pending_preference
 from services.medication_lookup import detect_hour
 from services.medication_take import resolve_scheduled_for, prepare_medication_take
@@ -75,6 +75,18 @@ class OperationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(error)
             self.assertEqual(ctx.patient_id, 'mother')
             self.assertEqual(ctx.actor_id, 'child')
+
+    async def test_name_with_article_in_medication_query_resolves_family(self):
+        conn = connection()
+        conn.fetch.return_value = [{'patient_id': 'yuri-id', 'full_name': 'Yuri Silva', 'caregiver_role': 'ADMIN_CHILD'}]
+        text = 'Quero saber se o Yuri tomou o remédio hoje de manhã'
+        ctx, error = await resolve_target_context(
+            conn, OperationContext(actor_id='caregiver', patient_id='caregiver'), text)
+        self.assertIsNone(error)
+        self.assertEqual(ctx.patient_id, 'yuri-id')
+        self.assertEqual(ctx.actor_id, 'caregiver')
+        self.assertIsNone(_explicit_person_name('qual a última pressão?'))
+        self.assertIsNone(_explicit_person_name('tomei remédio hoje de manhã?'))
 
     async def test_unknown_named_relative_does_not_select_another_person(self):
         conn = connection()

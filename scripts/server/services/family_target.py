@@ -41,14 +41,21 @@ def _norm(text: str) -> str:
 
 
 def _explicit_person_name(text: str) -> Optional[str]:
-    match = re.search(r"\b(?:do|da|de|para|pra)\s+(?:dona\s+|seu\s+)?([a-z]+)\b", _norm(text))
+    match = re.search(r"\b(?:do|da|de|para|pra|o|a)\s+(?:dona\s+|seu\s+)?([a-z]+)\b", _norm(text))
     if not match:
         return None
     name = match.group(1)
     if name in {"hoje", "ontem", "amanha", "dia", "semana", "mes", "ano", "mim", "voce",
+                "que", "qual", "quais", "quando", "como", "quanto", "quantos", "quantas",
+                "ultima", "ultimo", "ultimas", "ultimos", "primeira", "primeiro",
+                "manha", "tarde", "noite", "madrugada", "hora", "horas",
                 "agua", "pressao", "glicose", "glicemia", "sangue", "peso", "copo", "remedio",
-                "medicamento", "conta", "perfil", "saude", "beber", "tomar", "comer", "um",
-                "uma", "minha", "meu", "mamae", "papai", "mae", "pai", "familiar", "paciente"}:
+                "medicamento", "medicamentos", "comprimido", "comprimidos", "dose", "doses",
+                "horario", "horarios", "medicacao", "medicao", "medicoes", "registro", "registros",
+                "valor", "dado", "dados", "esposa", "marido", "filho", "filha", "conta", "perfil",
+                "saude", "beber", "tomar", "tomou", "comer", "um", "uma", "minha", "meu",
+                "sua", "seu", "seus", "suas",
+                "mamae", "papai", "mae", "pai", "familiar", "paciente", "senhor", "senhora"}:
         return None
     return name
 

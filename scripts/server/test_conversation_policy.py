@@ -16,6 +16,12 @@ class PolicyTests(unittest.TestCase):
         self.assertIn('Nunca diga que abriu uma tela', prompt)
         self.assertIn('mensagens ou botões', prompt)
 
+    def test_never_invents_medication_schedule_or_denies_visible_history(self):
+        for channel in ('chat', 'whatsapp'):
+            prompt = build_conversation_system(channel)
+            self.assertIn('Nunca invente ou sugira medicamento, dose ou horário', prompt)
+            self.assertIn('reconheça o que você escreveu', prompt)
+
     def test_app_policy_and_preferences_preserved(self):
         self.assertEqual(SPEAK_SYSTEM, APP_SYSTEM)
         payload = build_speak_payload('m', [], .1, 100, {'cup_ml': 300})

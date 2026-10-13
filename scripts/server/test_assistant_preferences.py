@@ -115,6 +115,69 @@ class ApiTests(unittest.TestCase):
 
 
 class RestWireTests(unittest.IsolatedAsyncioTestCase):
+    async def test_family_health_query_uses_resolved_patient_id(self):
+        from routers import chat as chat_router
+        from services.operations import OperationResult
+
+        class Connection:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return False
+
+        class Pool:
+            def acquire(self):
+                return Connection()
+
+        req = chat_router.ChatCompletionRequest(userId="caregiver", acting_as="caregiver",
+            messages=[chat_router.Message(role="user", content="Quando deu a pressão do meu familiar hoje?")])
+        captured = {}
+        async def resolve(_conn, context, _text):
+            captured["actor_id"] = context.actor_id
+            return context.model_copy(update={"patient_id": "yuri-patient"}), None
+        async def query(_conn, context):
+            captured["patient_id"] = context.patient_id
+            return OperationResult.success("A última pressão de Yuri foi 120 x 80 mmHg.")
+
+        with patch("services.family_target.resolve_target_context", resolve), \
+             patch("services.health_queries.last_blood_pressure", query):
+            result = await chat_router._query_health_service(
+                Pool(), actor_id="caregiver", request=req, kind="query_bp",
+                text=req.messages[0].content)
+        self.assertEqual(captured, {"actor_id": "caregiver", "patient_id": "yuri-patient"})
+        self.assertEqual(result.message, "A última pressão de Yuri foi 120 x 80 mmHg.")
+
+    async def test_explicit_code_request_skips_memory_and_llm(self):
+        from routers import chat as chat_router
+        req = chat_router.ChatCompletionRequest(
+            userId="owner", messages=[chat_router.Message(role="user", content="escreva um hello world em Python")])
+        handler = AsyncMock(return_value=(None, {}))
+        with patch.object(chat_router, "firebase_uid", AsyncMock(return_value="owner")), \
+             patch.object(chat_router._state, "assistant_memory", handler), \
+             patch.object(chat_router._state, "model_rest", "qwen-test"), \
+             patch.object(chat_router._state, "log_fine_tuning_sample", lambda **_: None):
+            response = await chat_router.chat_completions(
+                req, SimpleNamespace(headers={"authorization": "Bearer test"}))
+        result = json.loads(response["choices"][0]["message"]["content"])
+        self.assertIn("programação", result["fala"])
+        handler.assert_not_awaited()
+
+    async def test_affirmative_after_record_offer_does_not_claim_saved(self):
+        from routers import chat as chat_router
+        req = chat_router.ChatCompletionRequest(userId="owner", messages=[
+            chat_router.Message(role="user", content="MINHA PRESSÃO DEU 12X8"),
+            chat_router.Message(role="assistant", content="12 por 8 está normal. Quer que eu registre essa medição?"),
+            chat_router.Message(role="user", content="SIM"),
+        ])
+        handler = AsyncMock(return_value=(None, {}))
+        with patch.object(chat_router, "firebase_uid", AsyncMock(return_value="owner")), \
+             patch.object(chat_router._state, "assistant_memory", handler):
+            response = await chat_router.chat_completions(
+                req, SimpleNamespace(headers={"authorization": "Bearer test"}))
+        result = json.loads(response["choices"][0]["message"]["content"])
+        self.assertIn("Ainda não registrei", result["fala"])
+        handler.assert_not_awaited()
+
     async def test_authenticated_rest_routes_memory_without_executing_action(self):
         from routers import chat as chat_router
         req = chat_router.ChatCompletionRequest(messages=[chat_router.Message(role='user', content='Pode me chamar de Léo')])

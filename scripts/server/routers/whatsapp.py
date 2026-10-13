@@ -158,6 +158,7 @@ except ImportError:  # pragma: no cover - fallback defensivo do monolito
 
 try:
     from services.health_queries import (
+        blood_pressure_today,
         day_summary,
         last_blood_pressure,
         last_glucose,
@@ -867,9 +868,15 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     if user_id:
                         user_text = _operation_followup(user_id, user_text)
 
+                    wa_kind = detect_all(user_text).get("kind")
+
                     # 2.7. Respostas rápidas em texto
                     # (somente após portão de conta: anônimo já respondeu antes)
-                    fast_intent = match_fast_lane_intent(user_text)
+                    fast_intent = (match_fast_lane_intent(user_text)
+                                   if wa_kind in ("open", "smalltalk", "greeting",
+                                                  "greeting_morning", "greeting_afternoon",
+                                                  "greeting_evening", "gratitude", "app")
+                                   else None)
                     if fast_intent:
                         reply_text = FAST_LANE_INTENTS[fast_intent]["text"]
 
@@ -896,8 +903,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     # PR4 (4.1/4.2): se a fala menciona outro pessoa, o alvo
                     # é o familiar do vínculo ativo (actor != patient), com
                     # permissão revalidada no próprio serviço.
-                    wa_kind = detect_all(user_text).get("kind")
-                    if user_id and wa_kind in _WA_QUERY_HANDLERS:
+                    if user_id and (wa_kind in _WA_QUERY_HANDLERS or wa_kind == "query_medication"):
                         _q_ctx = wa_ctx or context_from_identity(identity, message_id=msg_id)
                         _q_result = None
                         try:
@@ -910,7 +916,14 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                         await send_whatsapp_text(sender_phone, _fam_err.message)
                                         continue
                                 if _q_ctx is not None:
-                                    _q_result = await _WA_QUERY_HANDLERS[wa_kind](_q_conn, _q_ctx)
+                                    if wa_kind == "query_medication":
+                                        from services.medication_queries import medication_take_history
+                                        _q_result = await medication_take_history(
+                                            _q_conn, _q_ctx, user_text)
+                                    elif wa_kind == "query_bp" and re.search(r"\bhoje\b", user_text.lower()):
+                                        _q_result = await blood_pressure_today(_q_conn, _q_ctx)
+                                    else:
+                                        _q_result = await _WA_QUERY_HANDLERS[wa_kind](_q_conn, _q_ctx)
                         except Exception as _q_err:
                             print(f"[WhatsApp Queries] Falha na consulta {wa_kind}: {_q_err}")
                             _q_result = None
@@ -996,7 +1009,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                 "Para registrar essa medição do familiar, use o aplicativo. "
                                 "Aqui posso consultar os dados dele e registrar medicamentos com confirmação.")
                             continue
-                    wa_route = whatsapp_next(user_text, bool(user_id))
+                    wa_route = whatsapp_next(user_text, bool(user_id), model_name=MODEL_WHATSAPP)
                     trace_llm('whatsapp', 'router_hit', wa_tid, route={k: (str(v)[:200]) for k, v in wa_route.items()})
                     if wa_route["type"] == "text":
                         if wa_kind == "nutrition":

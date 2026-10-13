@@ -24,7 +24,8 @@ import unicodedata
 # ------------------------------------------------------------------
 _QUERY_MARKERS = re.compile(
     r"\?|^(qual|quais|como|quando|quanto|quanta|quantos|quantas|onde|o que|"
-    r"me diz|me fale|me fala|mostra|mostre|ver|consulte|consultar|consulta|"
+    r"me diz|me fale|me fala|me mostra|me mostre|mostra|mostre|quero ver|queria ver|"
+    r"gostaria de ver|ver|consulte|consultar|consulta|"
     r"ultima|ultimo|ultimos|ultimas|resumo|hoje)\b"
 )
 
@@ -42,6 +43,34 @@ _QUERY_METRICAS = (
 _QUERY_AMBIGUOUS = re.compile(
     r"\bmeus (dados|registros|metricas|resultados|exames)\b|"
     r"\bminhas (metricas|medicoes|leituras)\b|\bmeu historico\b"
+)
+
+_MEDICATION_QUERY = re.compile(
+    r"\b(remedio|remedios|medicamento|medicamentos|comprimido|comprimidos|dose|doses|tomada|tomadas)\b"
+)
+_MEDICATION_HISTORY_ACTION = re.compile(
+    r"\b(tomei|tomou|tomado|tomados|tomada|tomadas|registr\w*|ultima|ultimo|ultimas|ultimos)\b"
+)
+_MEDICATION_QUERY_CUE = re.compile(
+    r"\?|^(quem|qual|quais|quando|se)\b|"
+    r"\b(quero saber|me diz|me fale|me fala|saber se)\b|"
+    r"\b(ele|ela|dele|dela)\s+(ja\s+)?tomou\b|"
+    r"\b(ultima|ultimo|ultimas|ultimos)\b"
+)
+_CODE_REQUEST = re.compile(
+    r"\b(escrev\w*|crie?\w*|faca\w*|gere?\w*|implemente\w*|monte\w*|"
+    r"programe?\w*|codifique\w*)\b.{0,100}\b(codigo|programa|script|"
+    r"python|javascript|java|calculadora|hello\s+world)\b"
+    r"|\bhello\s+world\b.{0,60}\b(python|javascript|java|codigo|programa)\b"
+)
+_LONG_OUTPUT_REQUEST = re.compile(
+    r"\b(cont\w*|enumere\w*)\b.{0,60}\b(\d{3,}|mil|milhao|milhoes)\b"
+    r"|\bescrev\w*\s+(?:um\s+)?(?:livro|poema gigante)\b"
+    r"|\brepita\s+isso\s+100\b|\bgere\s+um\s+texto\s+de\s+\d+\s+linhas\b"
+)
+_MODEL_QUESTION = re.compile(
+    r"\b(qual|quais)\b.{0,45}\b(modelo|ia|inteligencia artificial|llm)\b"
+    r"|\b(modelo|ia|inteligencia artificial)\b.{0,45}\b(voce|braga)\b"
 )
 
 QUERY_KINDS = tuple(k for k, _ in _QUERY_METRICAS) + ("query_ambiguous",)
@@ -64,6 +93,19 @@ def detect_query(norm: str):
     if _QUERY_AMBIGUOUS.search(norm):
         return "query_ambiguous"
     return None
+
+
+def detect_medication_query(norm: str) -> bool:
+    """Pergunta sobre registro de tomada, distinta de declarar uma tomada."""
+    if not _MEDICATION_QUERY.search(norm) or not _MEDICATION_HISTORY_ACTION.search(norm):
+        return False
+    if not _MEDICATION_QUERY_CUE.search(norm):
+        return False
+    # Um relato próprio no passado continua sendo intenção de registro, mesmo
+    # que mencione hoje; uma pergunta explícita segue para consulta.
+    if "?" not in norm and re.search(r"\b(tomei|acabei de tomar)\b", norm):
+        return False
+    return True
 
 
 # ------------------------------------------------------------------
@@ -168,7 +210,7 @@ def classify_glucose(val: int) -> str:
 # ------------------------------------------------------------------
 
 _BP_RE = re.compile(
-    r"(\d{1,3}(?:[.,]\d+)?)\s*(?:por|/|\bx\b|-)\s*(\d{1,3}(?:[.,]\d+)?)"
+    r"(\d{1,3}(?:[.,]\d+)?)\s*(?:por|/|x|-)\s*(\d{1,3}(?:[.,]\d+)?)"
     r"(?:\s*e\s*(meio|meia|\d+))?"
 )
 
@@ -356,8 +398,12 @@ def detect_all(raw: str) -> dict:
         return {"kind": "time"}
     if _DATE_RE.search(norm):
         return {"kind": "date"}
+    if _CODE_REQUEST.search(norm) or _LONG_OUTPUT_REQUEST.search(norm):
+        return {"kind": "out_of_scope"}
     if re.search(r"\blembrete|\bme lembra|\bme avisa", norm):
         return {"kind": "reminder"}
+    if detect_medication_query(norm):
+        return {"kind": "query_medication"}
     # Passo 3.3: tomada de dose é reconhecida ANTES da consulta — "tomei o
     # remédio da pressão das 8" carrega a palavra da métrica, mas é registro,
     # não pergunta. Sem verbo de tomada, a consulta segue valendo.
@@ -412,6 +458,8 @@ def detect_all(raw: str) -> dict:
         return {"kind": "gratitude"}
     if re.search(r"\bplay store\b|\blink do app\b|\blink do aplicativo\b|\bbaixar o app\b|\bonde baixo\b|\binstalar o app\b|\bdownload do app\b", norm):
         return {"kind": "app"}
+    if _MODEL_QUESTION.search(norm):
+        return {"kind": "model_identity"}
     if re.search(r"qual (e|o) seu nome|quem e voce|voce e quem|o que voce (faz|sabe|pode)|o que voce consegue|capaz de fazer|do que voce e capaz", norm):
         return {"kind": "identity"}
     if _BOT_RE.search(norm):
@@ -464,7 +512,7 @@ def symptom_repeat(memory: dict, key: str, kind: str, ttl: int = 600, now: float
     return n
 
 
-def route_chat(raw: str):
+def route_chat(raw: str, model_name: str = None):
     """Roteia a mensagem do chat.
 
     Retorna dict {fala, acao, parametros} pronto para o cliente,
@@ -486,6 +534,11 @@ def route_chat(raw: str):
             "acao": "EMERGENCIA",
             "parametros": {},
         }
+    if kind == "out_of_scope":
+        return _conversa("Posso ajudar com recursos de saúde e rotina do Braga Saúde. Para programação ou tarefas gerais, use um assistente apropriado.")
+    if kind == "model_identity":
+        suffix = f" Neste canal, o modelo configurado é {model_name}." if model_name else ""
+        return _conversa("Sou o Braga, assistente virtual do Braga Saúde." + suffix)
     if kind == "time":
         import time as t_mod
         lt = t_mod.localtime()
@@ -673,7 +726,7 @@ _WA_VITALS = {
 }
 
 
-def whatsapp_next(raw: str, is_registered: bool) -> dict:
+def whatsapp_next(raw: str, is_registered: bool, model_name: str = None) -> dict:
     """Decide o WhatsApp antes do LLM.
 
     Retorna {'type': 'llm'} (segue fluxo atual),
@@ -689,6 +742,11 @@ def whatsapp_next(raw: str, is_registered: bool) -> dict:
         return {"type": "llm"}
     if kind == "emergency":
         return {"type": "text", "fala": _SAMU_FALA}
+    if kind == "out_of_scope":
+        return {"type": "text", "fala": "Posso ajudar com recursos de saúde e rotina do Braga Saúde. Para programação ou tarefas gerais, use um assistente apropriado."}
+    if kind == "model_identity":
+        suffix = f" Neste canal, o modelo configurado é {model_name}." if model_name else ""
+        return {"type": "text", "fala": "Sou o Braga, assistente virtual do Braga Saúde." + suffix}
     if kind in _WA_VITALS:
         metric, to_values = _WA_VITALS[kind]
         values = to_values(det)

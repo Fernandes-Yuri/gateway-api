@@ -18,8 +18,6 @@ INJECTION_PATTERNS = [
     re.compile(r"(?i)(modo\s+desenvolvedor|developer\s+mode|dan\s+mode|jailbreak|root\s+access|system\s+override|admin\s+override)"),
     re.compile(r"(?i)(aja\s+como|haja\s+como|finja\s+ser|você\s+agora\s+é|act\s+as|pretend\s+to\s+be|roleplay\s+as)\s+(um\s+|uma\s+)?(médico|doutor|cardiologista|especialista|hacker|administrador|unfiltered|god\s+mode)"),
     re.compile(r"(?i)(qual\s+é\s+o\s+seu\s+prompt|mostre\s+o\s+seu\s+prompt|repita\s+as\s+instruções|system\s+prompt|reveal\s+your\s+prompt|output\s+your\s+initial\s+instructions)"),
-    re.compile(r"(?i)(receite\s+um\s+remédio|qual\s+remédio\s+tomar|prescreva\s+|qual\s+dosagem\s+de\s+|me\s+dê\s+uma\s+receita)"),
-    re.compile(r"(?i)(cont[ea](r)?\s+(de\s+\d+\s+)?(at[ée]|a)\s+\d+|cont[ea](r)?\s+at[ée]\s+\d+|escreva\s+um\s+livro|escreva\s+um\s+poema\s+gigante|repita\s+isso\s+100|gere\s+um\s+texto\s+de\s+[0-9]+\s+linhas)"),
     re.compile(r"(?i)(<\|im_start\|>|<\|im_end\|>|<\|system\|>|\[SYSTEM\]|\[INST\]|\[/INST\]|<<SYS>>|system_prompt)"),
 ]
 

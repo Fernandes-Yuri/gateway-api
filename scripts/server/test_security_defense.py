@@ -18,6 +18,8 @@ async def test_prompt_injection_detection():
     assert not is_prompt_injection("Bom dia pai, já tomou seu remédio hoje?")
     assert not is_prompt_injection("Pressão medida 120 por 80 às 14h")
     assert not is_prompt_injection("Amor, chego em casa às 19h")
+    assert not is_prompt_injection("Você pode contar de 1 até 1000?")
+    assert not is_prompt_injection("Qual remédio devo tomar para dor de cabeça?")
     print("[PASS] test_prompt_injection_detection")
 
 async def test_zero_trust_sanitization():
