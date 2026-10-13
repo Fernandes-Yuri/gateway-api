@@ -87,7 +87,7 @@ async def medication_take_history(conn: Any, context: OperationContext,
         period = f" {period_label}" if period_label else " no histórico"
         return OperationResult.missing_data(
             f"Não encontrei registro de tomada de medicamento para {who}{period}. "
-            "Isso não confirma que a pessoa não tomou; só indica que não há registro nesse período.",
+            "A ausência de registro não permite concluir se a pessoa tomou ou não nesse período.",
             data={"kind": "medication_take", "found": False})
 
     def describe(row):

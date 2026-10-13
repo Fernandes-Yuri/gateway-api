@@ -140,7 +140,7 @@ class RestWireTests(unittest.IsolatedAsyncioTestCase):
             return OperationResult.success("A última pressão de Yuri foi 120 x 80 mmHg.")
 
         with patch("services.family_target.resolve_target_context", resolve), \
-             patch("services.health_queries.last_blood_pressure", query):
+             patch("services.health_queries.blood_pressure_today", query):
             result = await chat_router._query_health_service(
                 Pool(), actor_id="caregiver", request=req, kind="query_bp",
                 text=req.messages[0].content)

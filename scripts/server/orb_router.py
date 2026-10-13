@@ -24,8 +24,7 @@ import unicodedata
 # ------------------------------------------------------------------
 _QUERY_MARKERS = re.compile(
     r"\?|^(qual|quais|como|quando|quanto|quanta|quantos|quantas|onde|o que|"
-    r"me diz|me fale|me fala|me mostra|me mostre|mostra|mostre|quero ver|queria ver|"
-    r"gostaria de ver|ver|consulte|consultar|consulta|"
+    r"me diz|me fale|me fala|me mostra|me mostre|mostra|mostre|ver|consulte|consultar|consulta|"
     r"ultima|ultimo|ultimos|ultimas|resumo|hoje)\b"
 )
 
@@ -65,7 +64,7 @@ _CODE_REQUEST = re.compile(
 )
 _LONG_OUTPUT_REQUEST = re.compile(
     r"\b(cont\w*|enumere\w*)\b.{0,60}\b(\d{3,}|mil|milhao|milhoes)\b"
-    r"|\bescrev\w*\s+(?:um\s+)?(?:livro|poema gigante)\b"
+    r"|\bescrev\w*\s+(?:(?:um|1)\s+)?(?:livro|poema gigante)\b"
     r"|\brepita\s+isso\s+100\b|\bgere\s+um\s+texto\s+de\s+\d+\s+linhas\b"
 )
 _MODEL_QUESTION = re.compile(

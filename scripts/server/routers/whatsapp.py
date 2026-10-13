@@ -873,9 +873,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     # 2.7. Respostas rápidas em texto
                     # (somente após portão de conta: anônimo já respondeu antes)
                     fast_intent = (match_fast_lane_intent(user_text)
-                                   if wa_kind in ("open", "smalltalk", "greeting",
-                                                  "greeting_morning", "greeting_afternoon",
-                                                  "greeting_evening", "gratitude", "app")
+                                   if wa_kind != "out_of_scope" and wa_kind != "model_identity"
                                    else None)
                     if fast_intent:
                         reply_text = FAST_LANE_INTENTS[fast_intent]["text"]

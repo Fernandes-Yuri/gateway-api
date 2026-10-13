@@ -118,7 +118,8 @@ async def _query_health_service(db_pool, *, actor_id: str, request: ChatCompleti
     if kind not in handlers and kind != "query_medication":
         return OperationResult.clarification(
             "Qual dado de saúde você quer consultar: pressão, glicemia, batimentos, saturação, peso, água ou tomadas de remédio?")
-    self_care_words = re.search(r"\b(eu|me|minha|minhas|meu|meus|tomei|comigo)\b", text.lower())
+    self_care_words = (re.search(r"\b(eu|me|minha|minhas|meu|meus|tomei|comigo)\b", text.lower())
+                       and not re.search(r"\b(meu|minha)\s+(familiar|parente|mae|pai|filho|filha)\b", text.lower()))
     patient_id = actor_id
     if request.acting_as == "caregiver" and request.patient_id and not self_care_words:
         patient_id = request.patient_id
