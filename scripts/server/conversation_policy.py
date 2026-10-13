@@ -11,7 +11,7 @@ APP_SYSTEM = PERSONA + '\n' + (
 )
 
 
-def build_conversation_system(channel='chat', preferences=None):
+def build_conversation_system(channel='chat', preferences=None, *, self_care=True):
     from assistant_preferences import context_prompt
     if channel in ('chat', 'voice'):
         base = APP_SYSTEM
@@ -27,6 +27,15 @@ def build_conversation_system(channel='chat', preferences=None):
             'Em emergência, oriente acionar o SAMU 192 ou procurar atendimento imediato. '
             'Use links apenas em texto, nunca soletre URLs na fala.'
         )
+        # Passo 5.4: as preferências são do interlocutor; no cuidado
+        # familiar elas nunca viram dado do paciente.
+        if not self_care:
+            base += (
+                'As preferências fornecidas pertencem a quem fala com você '
+                '(interlocutor), não ao paciente. Nunca as transforme em dado, '
+                'medição ou registro do paciente; o volume do copo do '
+                'interlocutor não preenche a hidratação de outra pessoa. '
+            )
     else:
         raise ValueError('Canal desconhecido')
     return base + context_prompt(preferences)
