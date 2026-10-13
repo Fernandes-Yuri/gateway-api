@@ -18,6 +18,7 @@ class DoseContractTests(unittest.TestCase):
         a = datetime.fromisoformat('2026-10-13T08:00:00-03:00')
         b = datetime.fromisoformat('2026-10-13T11:00:00+00:00')
         self.assertEqual(occurrence_id('p', mid, a), occurrence_id('p', mid, b))
+        self.assertEqual(occurrence_id('p', str(mid).upper(), a), occurrence_id('p', mid, a))
 
     def test_quantities_require_explicit_integer_stock_units_and_unique_times(self):
         for slots in ([{'local_time':'08:00','quantity_confirmed':True}],

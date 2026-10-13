@@ -6,7 +6,7 @@ Os locks de medicamentos ordenados serializam a baixa individual e coletiva.
 import hashlib
 import json
 from datetime import date, datetime, timezone
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
@@ -34,7 +34,8 @@ def utc_text(instant):
 
 
 def occurrence_id(patient_id, medication_id, instant):
-    return str(uuid5(NAMESPACE_URL, f'{patient_id}/{medication_id}/{utc_text(instant)}'))
+    canonical_medication = str(UUID(str(medication_id)))
+    return str(uuid5(NAMESPACE_URL, f'{patient_id}/{canonical_medication}/{utc_text(instant)}'))
 
 
 async def patient_profile(conn, patient_id, *, lock=False):

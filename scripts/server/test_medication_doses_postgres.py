@@ -114,7 +114,7 @@ class DosePostgresTests(unittest.IsolatedAsyncioTestCase):
         async def individual():
             async with self.pool.acquire() as conn:
                 async with conn.transaction():
-                    return await take_medication(conn, medication_id=str(mid), actor_id='patient',
+                    return await take_medication(conn, medication_id=str(mid).upper(), actor_id='patient',
                         scheduled_for=datetime.fromisoformat('2026-10-13T08:00:00-03:00'), units_taken=1, idempotency_key='individual-123')
         results = await asyncio.gather(self.confirm(batch), self.confirm(other_batch, actor='patient'), individual())
         self.assertEqual(await self.stock(mid), 0)
