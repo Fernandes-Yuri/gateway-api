@@ -37,7 +37,8 @@ _DAY_HINTS = (
 
 async def take_medication(conn: Any, *, medication_id: str, actor_id: str,
                           scheduled_for: datetime, units_taken: int,
-                          idempotency_key: str) -> dict:
+                          idempotency_key: str, declared_taken_at: datetime | None = None,
+                          channel: str | None = None) -> dict:
     """
     Registra a tomada de uma dose.
 
@@ -60,35 +61,50 @@ async def take_medication(conn: Any, *, medication_id: str, actor_id: str,
     # Propriedade/permissão: autocuidado ou vínculo ativo com medication:take.
     await require_patient_permission(conn, actor_id, patient_id, "medication:take")
 
-    # Ocorrência (idempotência): reenvio da mesma tomada não duplica.
-    existing = await conn.fetchrow(
-        "SELECT id,taken_at FROM medication_logs WHERE user_id=$1 AND idempotency_key=$2",
-        patient_id, idempotency_key,
-    )
+    from services.medication_doses import (occurrence_log, patient_profile,
+                                           reserve_occurrence, fail)
+    _, zone, _ = await patient_profile(conn, patient_id)
+    # A ocorrência é conferida antes do saldo e independe do offset do cliente.
+    existing = await occurrence_log(conn, patient_id, medication_id, scheduled_for)
     if existing:
         return {"status": "already_recorded", "log_id": str(existing["id"]),
-                "stock_decremented": False}
-
-    # Estoque: dose sem saldo não pode ser registrada.
+                "stock_decremented": False, "recorded_units": existing["units_taken"],
+                "historical_conflict": existing["historical_conflict"]}
+    keyed = await conn.fetchrow(
+        "SELECT id,medication_id,scheduled_for,units_taken FROM medication_logs WHERE user_id=$1 AND idempotency_key=$2",
+        patient_id, idempotency_key)
+    if keyed:
+        try:
+            same = (str(keyed["medication_id"]) == str(medication_id)
+                    and datetime.fromisoformat(keyed["scheduled_for"]) == scheduled_for
+                    and keyed["units_taken"] == units_taken)
+        except (TypeError, ValueError):
+            same = False
+        if not same:
+            fail(409, 'IDEMPOTENCY_CONFLICT', 'Chave reutilizada para uma dose diferente.')
+        return {"status": "already_recorded", "log_id": str(keyed["id"]),
+                "stock_decremented": False, "recorded_units": keyed["units_taken"]}
+    unresolved = await conn.fetchval("""SELECT EXISTS(SELECT 1 FROM medication_dose_migration_issues i
+        JOIN medication_logs l ON l.id=i.log_id WHERE l.medication_id=$1::uuid AND
+        (left(l.scheduled_for,16)=$2 OR (l.scheduled_for IS NULL AND
+        (l.taken_at AT TIME ZONE $3)::date=$4)))""", medication_id,
+        scheduled_for.astimezone(zone).strftime('%Y-%m-%dT%H:%M'), zone.key,
+        scheduled_for.astimezone(zone).date())
+    if unresolved:
+        fail(409, 'REVIEW_REQUIRED', 'Há um registro histórico desta dose que exige revisão.')
     if (med.get("current_units") or 0) < units_taken:
-        raise HTTPException(409, "Estoque insuficiente para registrar esta dose.")
-
-    # Dose do mesmo horário já confirmada (outro cuidador ou outra via).
-    duplicate = await conn.fetchval(
-        """SELECT EXISTS(SELECT 1 FROM medication_logs
-           WHERE medication_id=$1::uuid AND scheduled_for=$2)""",
-        medication_id, scheduled_for.isoformat(),
-    )
-    if duplicate:
-        raise HTTPException(409, "Esta dose já foi confirmada por outro cuidador.")
-
+        fail(409, 'INSUFFICIENT_STOCK', 'Estoque insuficiente para registrar esta dose.')
+    oid = await reserve_occurrence(conn, patient_id=patient_id, medication_id=medication_id,
+                                   instant=scheduled_for, zone=zone)
     log = await conn.fetchrow(
         """INSERT INTO medication_logs
-               (user_id,medication_id,taken_at,scheduled_for,actor_id,units_taken,idempotency_key)
-           VALUES ($1,$2::uuid,now(),$3,$4,$5,$6) RETURNING id,taken_at""",
+               (user_id,medication_id,taken_at,scheduled_for,actor_id,units_taken,idempotency_key,
+                occurrence_id,declared_taken_at,channel,canonical_guard)
+           VALUES ($1,$2::uuid,now(),$3,$4,$5,$6,$7::uuid,$8,$9,true) RETURNING id,taken_at""",
         patient_id, medication_id, scheduled_for.isoformat(), actor_id,
-        units_taken, idempotency_key,
+        units_taken, idempotency_key, oid, declared_taken_at, channel,
     )
+    await conn.execute('UPDATE medication_dose_occurrences SET log_id=$2 WHERE id=$1::uuid', oid, log['id'])
     remaining = await conn.fetchval(
         "UPDATE medications SET current_units=current_units-$2,updated_at=now() "
         "WHERE id=$1::uuid RETURNING current_units",
@@ -235,6 +251,7 @@ async def confirm_medication_take(conn: Any, *, user_id: str,
         scheduled_for=scheduled_for,
         units_taken=int(value_json.get("units_taken") or 1),
         idempotency_key=f"wa:{value_json['medication_id']}:{scheduled_raw}",
+        channel="whatsapp",
     )
 
 
@@ -312,6 +329,8 @@ async def confirm_pending_medication_take(db_pool: Any, *,
             # Rollback automático: a pendência volta a 'pending' e nada foi
             # gravado. O detalhe do serviço vira texto — nunca "tomada feita".
             detail = getattr(err, "detail", None) or str(err)
+            if isinstance(detail, dict):
+                detail = detail.get("message")
             if not isinstance(detail, str) or not detail.strip():
                 detail = "Não foi possível registrar a tomada agora."
             if err.status_code == 403:

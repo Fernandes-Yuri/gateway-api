@@ -140,6 +140,7 @@ class MedicationLogSyncDto(BaseModel):
     medicationId: str
     takenAt: str
     scheduledFor: Optional[str] = None
+    unitsTaken: int = Field(default=1, ge=1, le=20)
 
 
 class DailyMetricSyncDto(BaseModel):
@@ -1024,11 +1025,6 @@ async def sync_medication(m: MedicationSyncDto, uid: str = Depends(firebase_uid)
 @router.post("/api/sync/medication-log")
 async def sync_medication_log(l: MedicationLogSyncDto, uid: str = Depends(firebase_uid)):
     require_owner(uid, l.userId)
-    if l.scheduledFor is not None:
-        try:
-            datetime.strptime(l.scheduledFor, "%Y-%m-%dT%H:%M")
-        except ValueError:
-            raise HTTPException(422, "Identificador de dose inválido.")
     db_pool = _state.db_pool
     if not db_pool:
         return {"status": "offline_mode"}
@@ -1047,6 +1043,24 @@ async def sync_medication_log(l: MedicationLogSyncDto, uid: str = Depends(fireba
         owned = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM medications WHERE id=$1::uuid AND user_id=$2)", l.medicationId, uid)
         if not owned:
             raise HTTPException(403, "Medicamento indisponível.")
+        if l.scheduledFor is not None:
+            from services.medication_doses import patient_profile, instant_for
+            from services.medication_take import take_medication
+            try:
+                scheduled = datetime.fromisoformat(l.scheduledFor.replace('Z', '+00:00'))
+            except ValueError:
+                raise HTTPException(422, "Identificador de dose inválido.")
+            if scheduled.tzinfo is None:
+                if not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}', l.scheduledFor):
+                    raise HTTPException(422, "Identificador de dose inválido.")
+                _, zone, _ = await patient_profile(conn, uid)
+                scheduled = instant_for(scheduled.date(), scheduled.strftime('%H:%M'), zone)
+            async with conn.transaction():
+                result = await take_medication(conn, medication_id=l.medicationId, actor_id=uid,
+                    scheduled_for=scheduled, units_taken=l.unitsTaken,
+                    idempotency_key=f'sync:{log_id}', channel='app')
+            return {"status": "success", "id": result['log_id'], "medicationContract": 2,
+                    "medication_batch_contract": 1, "dose_status": result['status']}
         row = await conn.fetchrow(query, log_id, l.userId, l.medicationId, t_at, l.scheduledFor)
     return {"status": "success", "id": str(row["id"]) if row else log_id, "medicationContract": 2}
 
