@@ -68,6 +68,6 @@ def identity_reply(question, *, verified_link, full_name):
     if not verified_link:
         return 'Para confirmar sua identidade, vincule seu WhatsApp à sua conta pelo aplicativo Braga Saúde.'
     if isinstance(full_name, str) and full_name.strip():
-        return f'Você é {full_name.strip()}. Seu WhatsApp está vinculado à sua conta do Braga Saúde.'
+        return f'Você é {full_name.split()[0]}. Seu WhatsApp está vinculado à sua conta do Braga Saúde.'
     return ('Seu WhatsApp está vinculado à sua conta do Braga Saúde, mas não encontrei '
             'seu nome no perfil. Você pode conferi-lo no aplicativo.')

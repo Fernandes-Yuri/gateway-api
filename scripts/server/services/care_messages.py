@@ -20,11 +20,14 @@ Regras do plano (§4.3/§4.4):
 - Autorização revalidada no envio; falha de entrega nunca vira "enviado".
 """
 import json
+import re
+import unicodedata
 from datetime import datetime
 from typing import Any, Optional
 
 from services.care_automations import _claim, _deliver_or_release
 from services.operations import OperationContext, OperationResult, validate_actor
+from services.medication_lookup import detect_hour
 
 NOTIFICATION_TYPE = "CARE_MESSAGE"
 _METRIC_TYPE = "CARE_MESSAGE"
@@ -70,6 +73,12 @@ async def prepare_care_message(conn: Any, db_pool: Any, *,
     denied = await validate_actor(conn, context, "care:read")
     if denied:
         return denied
+
+    normalized = ''.join(c for c in unicodedata.normalize('NFD', (text or '').lower()) if not unicodedata.combining(c))
+    if detect_hour(text or '') or re.search(r'\b(?:amanha|depois|daqui|diariamente|todo dia|todos os dias)\b|\b(?:as|das)\s+\d|\b\d{1,2}:\d{2}\b', normalized):
+        return OperationResult.clarification(
+            "Aqui posso preparar uma mensagem de cuidado para enviar agora, após sua confirmação. "
+            "Para um lembrete em horário futuro, configure o lembrete no aplicativo.")
 
     corpo = _validate_content(text)
     if not corpo:
