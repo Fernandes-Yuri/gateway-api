@@ -13,6 +13,7 @@ Seguranca (fail-closed):
   * so age sobre arquivos .apk dentro de RELEASES_DIR.
 """
 import os
+from release_publisher import RELEASE_LOCK
 
 KEEP_RELEASES = 3
 
@@ -63,33 +64,36 @@ async def purge_old_releases(pool, releases_dir: str, keep: int = KEEP_RELEASES)
         return resultado  # nada a fazer abaixo do limite
 
     async with pool.acquire() as conn:
-        protegidos = await _releases_protegidos(conn)
+        async with conn.transaction():
+            await conn.execute('SELECT pg_advisory_xact_lock($1)', RELEASE_LOCK)
+            apks = _listar_apks(releases_dir)
+            protegidos = await _releases_protegidos(conn)
 
-        # Mais recentes primeiro
-        apks.sort(key=lambda par: par[1], reverse=True)
+            # Mais recentes primeiro
+            apks.sort(key=lambda par: par[1], reverse=True)
 
-        apagados_ids = []
-        for i, (caminho, _mtime) in enumerate(apks):
-            nome = os.path.basename(caminho).lower()
-            if i < keep or nome in protegidos:
-                resultado["mantidos"].append(os.path.basename(caminho))
-                continue
-            # Exclui o arquivo e a linha correspondente no banco
-            versao = await conn.fetchval(
-                "SELECT id FROM app_releases WHERE lower(filename) = $1", nome)
-            try:
-                os.remove(caminho)
-                resultado["apagados"].append(os.path.basename(caminho))
-                if versao:
-                    apagados_ids.append(versao)
-            except OSError:
-                # Sem permicao ou ocupado: nao aborta a limpeza dos outros.
-                continue
+            apagados_ids = []
+            for i, (caminho, _mtime) in enumerate(apks):
+                nome = os.path.basename(caminho).lower()
+                if i < keep or nome in protegidos:
+                    resultado["mantidos"].append(os.path.basename(caminho))
+                    continue
+                # Exclui o arquivo e a linha correspondente no banco
+                versao = await conn.fetchval(
+                    "SELECT id FROM app_releases WHERE lower(filename) = $1", nome)
+                try:
+                    os.remove(caminho)
+                    resultado["apagados"].append(os.path.basename(caminho))
+                    if versao:
+                        apagados_ids.append(versao)
+                except OSError:
+                    # Sem permicao ou ocupado: nao aborta a limpeza dos outros.
+                    continue
 
-        if apagados_ids:
-            placeholders = ",".join(f"${i + 1}" for i in range(len(apagados_ids)))
-            await conn.execute(
-                f"DELETE FROM app_releases WHERE id IN ({placeholders}) "
-                f"AND is_active = FALSE", *apagados_ids)
+            if apagados_ids:
+                placeholders = ",".join(f"${i + 1}" for i in range(len(apagados_ids)))
+                await conn.execute(
+                    f"DELETE FROM app_releases WHERE id IN ({placeholders}) "
+                    f"AND is_active = FALSE", *apagados_ids)
 
     return resultado

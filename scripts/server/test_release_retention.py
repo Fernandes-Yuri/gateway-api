@@ -33,6 +33,8 @@ class _FakeConn:
     def __init__(self, ativo):
         self.ativo = ativo
         self.executed = []
+    def transaction(self):
+        return _FakePool._Ctx(self)
     async def fetchval(self, *args, **kwargs):
         return self.ativo
     async def execute(self, *args, **kwargs):
