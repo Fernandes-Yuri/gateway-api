@@ -237,7 +237,7 @@ class WhatsAppPostgresTests(unittest.IsolatedAsyncioTestCase):
                 context=OperationContext(actor_id='actor', patient_id='patient'), text='Lembre de beber água')
         sender = AsyncMock(return_value=True)
         with patch.object(wa._state, 'send_care_message', sender):
-            self.assertIn('entregue', await self.deliver_button(proposal.pending_op_id))
+            self.assertIn('enviada ao WhatsApp', await self.deliver_button(proposal.pending_op_id))
             self.assertIn('já foi confirmada', await self.deliver_button(proposal.pending_op_id))
         sender.assert_awaited_once_with('test-patient', 'Lembre de beber água', 'CARE_MESSAGE')
 

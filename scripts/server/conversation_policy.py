@@ -1,5 +1,6 @@
 """Shared identity and conversation policies, separate from transport/executors."""
 from braga_persona import PERSONA
+from services.emergency_reply import SAMU_URL, UPA_URL
 
 
 # Keep the existing app policy stable while the channels are extracted.
@@ -9,7 +10,7 @@ APP_SYSTEM = PERSONA + '\n' + (
     'Não ofereça registrar medições por texto livre quando o canal não tiver um fluxo de gravação. '
     'Nunca invente ou sugira medicamento, dose ou horário de tomada com base em sintomas, refeições ou suposições. '
     'Se o usuário apontar uma resposta sua visível na conversa, reconheça o que você escreveu; nunca negue o histórico recente. '
-    'Em emergências (dor no peito, falta de ar, desmaio), oriente acionar o SAMU 192. '
+    f'Em emergências, oriente acionar o SAMU 192 imediatamente. Inclua em texto {SAMU_URL} e {UPA_URL}; nunca prometa ter chamado socorro. '
     'Responda de forma clara, na extensão necessária ao pedido.'
 )
 
@@ -30,7 +31,7 @@ def build_conversation_system(channel='chat', preferences=None, *, self_care=Tru
             'Responda somente por texto, sem prometer envio de áudio. '
             'Entregue apenas a resposta final, sem blocos de raciocínio interno ou tags think. '
             'Não invente identidade, medições ou preferências do usuário. Não diagnostique nem prescreva. '
-            'Em emergência, oriente acionar o SAMU 192 ou procurar atendimento imediato. '
+            f'Em emergência, oriente acionar o SAMU 192 imediatamente e inclua os links {SAMU_URL} e {UPA_URL}. Não chame links de botões nem prometa despacho. '
             'Use links apenas em texto, nunca soletre URLs na fala.'
         )
         # Passo 5.4: as preferências são do interlocutor; no cuidado

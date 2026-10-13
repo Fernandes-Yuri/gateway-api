@@ -225,7 +225,7 @@ async def confirm_pending_care_message(db_pool: Any, sender: Any, *,
             "Não consegui entregar a mensagem. Escreva novamente o pedido "
             "para preparar uma nova tentativa.")
     return OperationResult.success(
-        "💌 Mensagem de cuidado entregue!",
+        "💌 Mensagem de cuidado enviada ao WhatsApp. A confirmação de recebimento depende do destinatário.",
         data={"phone_tail": str(phone)[-4:],
               "delivered_at": datetime.utcnow().isoformat()})
 

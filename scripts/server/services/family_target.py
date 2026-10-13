@@ -53,6 +53,8 @@ def _explicit_person_name(text: str) -> Optional[str]:
                 "valor", "dado", "dados", "esposa", "marido", "filho", "filha", "conta", "perfil",
                 "saude", "beber", "tomar", "tomou", "comer", "um", "uma", "minha", "meu",
                 "sua", "seu", "seus", "suas",
+                "avisar", "avisa", "enviar", "envia", "mandar", "manda", "registrar", "anotar",
+                "consultar", "lembrar", "confirmar", "cuidado", "mensagem",
                 "mamae", "papai", "mae", "pai", "familiar", "paciente", "senhor", "senhora"}
     for match in re.finditer(r"\b(?:do|da|de|para|pra|o|a)\s+(?:dona\s+|seu\s+)?([a-z]+)\b", _norm(text)):
         name = match.group(1)
@@ -123,20 +125,17 @@ async def resolve_family_target(conn: Any, context: OperationContext,
         if len(by_name) > 1:
             return _choose_between(by_name)
 
-    if _explicit_person_name(text):
-        return OperationResult.clarification(
-            "Não encontrei esse nome nos seus vínculos ativos. "
-            "Qual familiar você quer consultar?", data={"candidates": [
-                {"patient_id": str(r["patient_id"]), "full_name": r["full_name"]} for r in rows]})
-
-    # caregiver_role representa permissão; caregiver_relation descreve o ator,
-    # não o parentesco do paciente. Nenhum deles prova quem é "mamãe"/"pai".
-    # Mesmo um único vínculo não autoriza substituir o sujeito mencionado.
-    if _OTHER_HINT.search(re.sub(r"\b(?:familiar|paciente)\b", "", norm)):
-        return OperationResult.clarification(
-            "Preciso confirmar de quem você está falando. Qual é o nome do familiar?",
-            data={"candidates": [
-                {"patient_id": str(r["patient_id"]), "full_name": r["full_name"]} for r in rows]})
+    # Parentesco não prova a identidade, mesmo com um único vínculo.
+    # Mostrar opções permite escolher sem assumir quem é mamãe/papai.
+    if _explicit_person_name(text) or _OTHER_HINT.search(re.sub(r"\b(?:familiar|paciente)\b", "", norm)):
+        if len(rows) == 1:
+            result = _choose_between(rows)
+            result.message = (
+                f"Você acompanha apenas {first_name(rows[0]['full_name'])} pelo WhatsApp. "
+                "É dessa pessoa que você está falando? Responda com o nome ou com 1. "
+                "Se for outra pessoa, convide-a em 'Vínculos de cuidado' no aplicativo.")
+            return result
+        return _choose_between(rows)
 
     # Sem nome: vínculo único resolve; vários pedem.
     if len(rows) == 1:

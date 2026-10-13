@@ -339,6 +339,13 @@ def _remember_operation(user_id, text, result, kind):
         _WA_OPERATION_MEMORY.pop(user_id, None)
 
 
+async def _send_family_clarification(phone, result):
+    key = "".join(filter(str.isdigit, phone or "")) or phone
+    message = result.message
+    alternative = "Para continuar com segurança, escolha pelo nome ou número. " + message
+    await send_whatsapp_text(phone, dedupe_fala(_WA_LASTFALA, key, message, alternative))
+
+
 def _operation_followup(user_id, text):
     pending = _WA_OPERATION_MEMORY.pop(user_id, None)
     if not pending or time.monotonic() - pending[0] > 300:
@@ -594,6 +601,9 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
     Retorna True quando respondeu (proposta com botões ou esclarecimento do
     serviço); False caso contrário, e o pipeline segue.
     """
+    from services.care_intent import is_care_request
+    if not is_care_request(user_text):
+        return False
     if not user_id:
         return False
     try:
@@ -612,7 +622,7 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
             care_ctx, _fam_err = await _WA_FAMILY_RESOLVER(conn, care_ctx, user_text)
         if _fam_err is not None and _fam_err.message:
             _remember_operation(user_id, user_text, _fam_err, "reminder")
-            await send_whatsapp_text(sender_phone, _fam_err.message)
+            await _send_family_clarification(sender_phone, _fam_err)
             return True
 
     care_result = None
@@ -882,7 +892,10 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                     zone = await conn.fetchval("SELECT timezone FROM profiles WHERE id=$1", user_id)
                             except Exception:
                                 pass
-                        await send_whatsapp_text(sender_phone, calendar_reply(user_text, wa_kind, zone))
+                        key = "".join(filter(str.isdigit, sender_phone or "")) or sender_phone
+                        reply = calendar_reply(user_text, wa_kind, zone)
+                        alternative = calendar_reply(user_text, wa_kind, zone, alternate=True) if wa_kind == "time" else None
+                        await send_whatsapp_text(sender_phone, dedupe_fala(_WA_LASTFALA, key, reply, alternative))
                         continue
 
                     # 2.7. Respostas rápidas em texto
@@ -926,7 +939,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                         _q_conn, _q_ctx, user_text)
                                     if _fam_err is not None and _fam_err.message:
                                         _remember_operation(user_id, user_text, _fam_err, wa_kind)
-                                        await send_whatsapp_text(sender_phone, _fam_err.message)
+                                        await _send_family_clarification(sender_phone, _fam_err)
                                         continue
                                 if _q_ctx is not None:
                                     if wa_kind == "query_medication":
@@ -1251,6 +1264,7 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
             if _mt_metric == "CARE_MESSAGE":
                 try:
                     from services.care_messages import confirm_pending_care_message
+                    await send_whatsapp_text(sender_phone, "Envio da mensagem de cuidado em andamento. Vou informar o resultado aqui.")
                     _cm_result = await confirm_pending_care_message(
                         db_pool, _state.send_care_message,
                         confirmation_code=confirmation_code, actor_id=user_id)
@@ -1303,23 +1317,21 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
                         metric_type = row['metric_type']
                         values = json.loads(row['value_json'])
 
-                        # Formatar mensagem de sucesso
-                        if metric_type == "PRESSAO":
-                            value_display = f"{values.get('sistolica')} x {values.get('diastolica')} mmHg"
-                        elif metric_type == "GLICEMIA":
-                            value_display = f"{values.get('glicemia')} mg/dL"
-                        elif metric_type == "AGUA":
-                            value_display = f"{values.get('quantidade_ml')} ml"
-                        elif metric_type == "PESO":
-                            value_display = f"{values.get('peso_kg')} kg"
-                        else:
-                            value_display = str(values)
+                        from core.confirmation import format_confirmation_value
+                        from services.health_queries import patient_timezone, zone_of
+                        from datetime import timezone
+                        icon, value_display = format_confirmation_value(metric_type, values)
+                        zone = zone_of(await patient_timezone(conn, user_id))
+                        confirmed_at = row['confirmed_at'] or datetime.now(timezone.utc)
+                        if confirmed_at.tzinfo is None:
+                            confirmed_at = confirmed_at.replace(tzinfo=timezone.utc)
+                        local_time = confirmed_at.astimezone(zone).strftime('%d/%m/%Y %H:%M')
 
                         await send_whatsapp_text(sender_phone,
                             f"✅ *Registro confirmado por você!*\n\n"
                             f"📋 Código: `{confirmation_code}`\n"
-                            f"🩺 {metric_type}: {value_display}\n"
-                            f"🕐 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+                            f"{icon} {metric_type}: {value_display}\n"
+                            f"🕐 Data: {local_time}\n\n"
                             f"Este registro foi autenticado por você e pode ser consultado no aplicativo."
                         )
             else:

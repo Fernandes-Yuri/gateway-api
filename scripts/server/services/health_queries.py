@@ -49,7 +49,7 @@ def zone_of(name: Optional[str]) -> ZoneInfo:
     """Fuso do perfil, ou America/Sao_Paulo. Nunca usa o relógio da EC2."""
     try:
         return ZoneInfo(name or DEFAULT_ZONE)
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, TypeError, ValueError):
         return ZoneInfo(DEFAULT_ZONE)
 
 
@@ -92,8 +92,8 @@ def _last_reading_message(owner: Optional[str], label: str, value: str,
                           unit: str, when: str) -> str:
     """Última leitura nomeando o dono do dado (passo 4.2)."""
     if owner is None:
-        return f"Sua última {label} foi {value} {unit}, registrada {when}."
-    return (f"A última {label} de {owner} foi {value} {unit}, "
+        return f"Sua última medição de {label} foi {value} {unit}, registrada {when}."
+    return (f"A última medição de {label} de {owner} foi {value} {unit}, "
             f"registrada {when}.")
 
 

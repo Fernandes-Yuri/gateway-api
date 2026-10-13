@@ -54,7 +54,7 @@ ACTION_CATALOG = {
         "channels": ("chat", "voice", "whatsapp"),
         "needs_confirmation": False,
         "slots": (),
-        "closing": "Opções de socorro na tela.",
+        "closing": "Acione o SAMU 192. Os links de socorro estão na resposta.",
     },
 }
 

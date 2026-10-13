@@ -278,10 +278,8 @@ async def cancel_pending_confirmation(confirmation_code: str, user_id: str, db_p
 # =============================================================
 # MENSAGEM INTERATIVA (botes do WhatsApp)
 # =============================================================
-def build_confirmation_message(metric_type: str, values: dict, confirmation_code: str, user_name: str = "") -> str:
-    """Constroi a mensagem de confirmacao formatada."""
-    display_name = user_name.split()[0] if user_name else "Usuário"
-
+def format_confirmation_value(metric_type: str, values: dict) -> tuple[str, str]:
+    """Uma apresentação para o cartão e para o resultado do clique."""
     if metric_type == "PRESSAO":
         value_display = f"{values.get('sistolica')} x {values.get('diastolica')} mmHg"
         icon = "🩺"
@@ -325,8 +323,17 @@ def build_confirmation_message(metric_type: str, values: dict, confirmation_code
         value_display = "preferência da sua conta"
         icon = "🧠"
     else:
-        value_display = str(values)
+        value_display = "valor confirmado"
         icon = "📋"
+
+    return icon, value_display
+
+
+def build_confirmation_message(metric_type: str, values: dict, confirmation_code: str, user_name: str = "") -> str:
+    """Constroi a mensagem de confirmacao formatada."""
+    display_name = user_name.split()[0] if user_name else "Usuário"
+
+    icon, value_display = format_confirmation_value(metric_type, values)
 
     return f"""{icon} *Confirmação de Registro*
 

@@ -28,10 +28,7 @@ from services.whatsapp_identity import (
 )
 
 # Resposta de emergencia deterministica (sem LLM) para qualquer remetente.
-_MSG_EMERGENCIA = (
-    "Isso parece urgente. Acione o SAMU 192 ou vá a UPA/pronto-socorro mais "
-    "próximo agora."
-)
+from services.emergency_reply import emergency_reply
 
 
 async def sender_has_linked_account(db_pool: Any, sender_phone: str) -> Optional[str]:
@@ -72,7 +69,7 @@ async def gate_unregistered(
     if status == STATUS_OK:
         return False
     if is_emergency(user_text):
-        await send_text(sender_phone, _MSG_EMERGENCIA)
+        await send_text(sender_phone, emergency_reply())
         return True
     # Mensagem do estado do vinculo (sem vinculo / ambiguo / indisponivel),
     # sempre da fonte unica do servico de identidade.
