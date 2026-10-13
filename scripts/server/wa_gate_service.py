@@ -1,32 +1,30 @@
 """Portao de conta vinculada no WhatsApp.
 
-Regra do usuario: quem nao tem conta vinculada so recebe mensagem institucional
-(em tom de convite para o app), MANTENDO a triagem de emergencia ativa, porque
-uma pessoa com dor no peito nao pode ser abandonada por falta de cadastro.
+Regra do usuario: quem nao tem vinculo confirmado so recebe mensagem
+institucional (em tom de convite para o app), MANTENDO a triagem de emergencia
+ativa, porque uma pessoa com dor no peito nao pode ser abandonada por falta de
+cadastro. Ambiguidade (mais de uma conta no mesmo numero) interrompe e pede
+regularizacao; indisponibilidade do banco nunca vira "sem conta".
+
+A identidade e resolvida por services.whatsapp_identity (passo 1.2): so vale o
+vinculo confirmado por TOTP. Fallback por phone / emergency_contact_phone foi
+removido do canal de saude.
 
 Ordem do webhook (importante!):
   1. prompt-injection guard
   2. tentativa de vinculo TOTP          <- anotima permitida; e assim que se conquista a conta
   3. emergencia (deterministica)        <- anotima permitida; salva vida
-  4. portao de conta vinculada         <- sem conta: institucional, para tudo
-  5. fast-lane / router / LLM          <- so quem tem conta
+  4. portao de conta vinculada         <- sem vinculo/ambiguo: institucional, para tudo
+  5. fast-lane / router / LLM          <- so quem tem vinculo confirmado
 """
 from typing import Any, Awaitable, Callable, Optional
 
 from orb_router import detect_all
-
-# Mensagem institucional: acolhedora, honesta e convite claro para o app.
-# Nao promete atendimento que nao existe; deixa a rede de seguranca clinica visivel.
-_MSG_INSTITUCIONAL = (
-    "Olá! Aqui e o Braga Saúde. 💚\n\n"
-    "Nosso assistente atende apenas pessoas com conta vinculada no aplicativo - "
-    "assim cuidamos do seu historico e da sua familia com toda a seguranca e "
-    "privacidade.\n\n"
-    "Para conversar comigo aqui no WhatsApp, e so baixar o app Braga Saúde e tocar "
-    "em 'Vincular WhatsApp'. Se precisar de ajuda, escreva para "
-    "contato@bragasaude.online.\n\n"
-    "Se for uma emergencia (falta de ar, dor forte no peito, desmaio), chame o "
-    "SAMU 192 ou va a UPA mais proxima agora."
+from services.whatsapp_identity import (
+    STATUS_OK,
+    is_confirmed,
+    reply_for_status,
+    resolve_linked_account,
 )
 
 # Resposta de emergencia deterministica (sem LLM) para qualquer remetente.
@@ -38,22 +36,15 @@ _MSG_EMERGENCIA = (
 
 async def sender_has_linked_account(db_pool: Any, sender_phone: str) -> Optional[str]:
     """
-    Retorna o user_id vinculado ao numero, ou None. Busca exata pelo numero
-    normalizado: substitui a busca legada por sufixo de 8 digitos (fraqueza
-    conhecida do doc 37), que esta sendo descontinuada junto deste portao.
+    Retorna o user_id vinculado ao numero, ou None. Delega para a resolucao
+    de identidade: so vale o vinculo confirmado (TOTP), nunca phone /
+    emergency_contact_phone.
     """
     if db_pool is None:
         return None
-    digits = "".join(ch for ch in sender_phone or "" if ch.isdigit())
-    if not digits:
-        return None
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT id FROM profiles "
-            "WHERE regexp_replace(whatsapp_phone, '\\D', '', 'g') = $1",
-            digits,
-        )
-        return row["id"] if row else None
+        identity = await resolve_linked_account(conn, sender_phone)
+    return identity["user_id"] if is_confirmed(identity) else None
 
 
 def is_emergency(text: str) -> bool:
@@ -66,7 +57,7 @@ def is_emergency(text: str) -> bool:
 
 async def gate_unregistered(
     user_text: str,
-    user_id: Optional[str],
+    identity: Optional[dict],
     send_text: Callable[[str, str], Awaitable[Any]],
     sender_phone: str,
 ) -> bool:
@@ -74,13 +65,16 @@ async def gate_unregistered(
     True se consumiu a mensagem (respondeu e o webhook para por aqui).
 
     - emergencia -> responde SAMU e para (salva vida, mesmo sem conta)
-    - sem conta  -> responde institucional e para
-    - com conta  -> retorna False (segue fluxo normal)
+    - vinculo confirmado -> retorna False (segue fluxo normal)
+    - sem vinculo / ambiguo / indisponivel -> mensagem do estado e para
     """
-    if user_id is not None:
+    status = (identity or {}).get("status")
+    if status == STATUS_OK:
         return False
     if is_emergency(user_text):
         await send_text(sender_phone, _MSG_EMERGENCIA)
         return True
-    await send_text(sender_phone, _MSG_INSTITUCIONAL)
+    # Mensagem do estado do vinculo (sem vinculo / ambiguo / indisponivel),
+    # sempre da fonte unica do servico de identidade.
+    await send_text(sender_phone, reply_for_status(status))
     return True

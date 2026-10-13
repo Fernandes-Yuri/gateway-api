@@ -124,6 +124,23 @@ except ImportError:
         return False
 
 try:
+    from services.whatsapp_identity import (
+        STATUS_OK,
+        STATUS_UNAVAILABLE,
+        STATUS_UNLINKED,
+        is_confirmed,
+        resolve_linked_account,
+    )
+except ImportError:  # pragma: no cover - fallback defensivo do monolito
+    STATUS_OK, STATUS_UNAVAILABLE, STATUS_UNLINKED = "ok", "unavailable", "unlinked"
+
+    def is_confirmed(identity):  # type: ignore
+        return bool(identity) and identity.get("status") == "ok"
+
+    async def resolve_linked_account(conn, sender_phone):  # type: ignore
+        return {"status": STATUS_UNLINKED, "user_id": None, "full_name": None}
+
+try:
     from webhook_security import verify_meta_signature
     HAS_WEBHOOK_SECURITY = True
 except ImportError:
@@ -422,57 +439,25 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         continue
 
                     # 2. Identificação do Usuário no PostgreSQL
-                    # Primária: whatsapp_phone (vínculo verificado por TOTP, new).
-                    # Fallback (transição): busca legada por número completo,
-                    # mantida até as contas existentes migrarem para o vínculo novo.
-                    #
-                    # AUD-G10: o fallback comparava os ÚLTIMOS 8 dígitos contra
-                    # phone/emergency_contact_phone com LIKE '%sufixo%' — o que
-                    # casava QUALQUER aparição do sufixo em QUALQUER posição. Dois
-                    # números diferentes que coincidem nos 8 finais (ou até
-                    # continham o trecho) apontavam para o mesmo paciente, e um
-                    # estranho podia se passar por usuário cadastrado. Agora a
-                    # associação legada exige o número COMPLETO (mesma
-                    # quantidade de dígitos), e logs avisam que o caminho
-                    # ainda está em uso para que a migração seja concluída.
-                    user_id = None
-                    user_name = None
-                    verified_link = False
+                    # Só vale o vínculo confirmado por TOTP (whatsapp_phone).
+                    # O fallback legado por phone / emergency_contact_phone foi
+                    # removido do canal de saúde no passo 1.2: telefone de
+                    # contato e de emergência não autorizam uma conta clínica,
+                    # e um número sem vínculo nunca é identidade.
+                    # Ambiguidade (mais de uma conta no mesmo número) interrompe
+                    # o fluxo e pede regularização — a identidade não vem da
+                    # interpretação do modelo.
+                    identity = {"status": STATUS_UNLINKED, "user_id": None, "full_name": None}
                     if db_pool:
                         try:
-                            _wa_digits = "".join(filter(str.isdigit, sender_phone or ""))
                             async with db_pool.acquire() as conn:
-                                p_row = await conn.fetchrow(
-                                    "SELECT id, full_name, user_role FROM profiles "
-                                    "WHERE regexp_replace(whatsapp_phone, '\\D', '', 'g') = $1",
-                                    _wa_digits
-                                )
-                                verified_link = bool(p_row)
-                                if not p_row and _wa_digits:
-                                    # AUD-G10: match EXATO do número completo
-                                    # (igualdade de dígitos), nunca substring.
-                                    p_row = await conn.fetchrow(
-                                        "SELECT id, full_name, user_role FROM profiles "
-                                        "WHERE regexp_replace(phone, '\\D', '', 'g') = $1",
-                                        _wa_digits
-                                    )
-                                    if not p_row:
-                                        p_row = await conn.fetchrow(
-                                            "SELECT id, full_name, user_role FROM profiles "
-                                            "WHERE regexp_replace(emergency_contact_phone, '\\D', '', 'g') = $1",
-                                            _wa_digits
-                                        )
-                                    if p_row:
-                                        print(
-                                            f"[AUD-G10] Conta {p_row['id']} acessada pelo fallback "
-                                            f"legado (phone completo) — número sem vínculo TOTP. "
-                                            f"Migrar para whatsapp_link."
-                                        )
-                                if p_row:
-                                    user_id = p_row["id"]
-                                    user_name = p_row["full_name"]
+                                identity = await resolve_linked_account(conn, sender_phone)
                         except Exception as db_err:
                             print(f"[WhatsApp DB Lookup Error] {db_err}")
+                            identity = {"status": STATUS_UNAVAILABLE, "user_id": None, "full_name": None}
+                    verified_link = identity.get("status") == STATUS_OK
+                    user_id = identity.get("user_id") if verified_link else None
+                    user_name = identity.get("full_name") if verified_link else None
 
                     # 2.5. VÍNCULO TOTP (arquitetura temporária, sem template).
                     # Roda ANTES do portão de conta: é assim que um número sem conta
@@ -497,7 +482,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         try:
                             _blocked = await gate_unregistered(
                                 user_text=user_text,
-                                user_id=user_id,
+                                identity=identity,
                                 send_text=send_whatsapp_text,
                                 sender_phone=sender_phone,
                             )
@@ -680,30 +665,23 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
         except Exception as _e:
             print(f"[Callback] Aviso: não expirou pendências vencidas: {_e}")
 
-        # Buscar usuário pelo telefone
-        # AUD-G10: era LIKE '%' || $1 com os últimos 8 dígitos — correspondência
-        # parcial que podia casar a conta errada. Agora exige o número completo.
+        # Buscar usuário pelo telefone: somente vínculo confirmado (TOTP).
+        # Passo 1.2: fallback por phone / emergency_contact_phone removido —
+        # confirmar um registro de saúde exige a conta vinculada a este número.
         user_id = None
-        _cb_digits = "".join(filter(str.isdigit, sender_phone or ""))
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                SELECT id FROM profiles
-                WHERE regexp_replace(whatsapp_phone, '\\D', '', 'g') = $1
-                   OR regexp_replace(phone, '\\D', '', 'g') = $1
-                LIMIT 1
-            """, _cb_digits)
-            if not row:
-                row = await conn.fetchrow("""
-                    SELECT id FROM profiles
-                    WHERE regexp_replace(emergency_contact_phone, '\\D', '', 'g') = $1
-                    LIMIT 1
-                """, _cb_digits)
-            if row:
-                user_id = row['id']
+            _cb_identity = await resolve_linked_account(conn, sender_phone)
+            if is_confirmed(_cb_identity):
+                user_id = _cb_identity["user_id"]
 
         if not user_id:
-            print(f"[Callback] Usuário não encontrado para telefone: {sender_phone}")
-            await send_whatsapp_text(sender_phone, "Usuário não encontrado. Verifique seu cadastro.")
+            print(f"[Callback] Sem vínculo confirmado para telefone: {sender_phone}")
+            await send_whatsapp_text(
+                sender_phone,
+                "Não encontrei uma conta vinculada a este WhatsApp. "
+                "Vincule seu número no aplicativo Braga Saúde ('Vincular WhatsApp') "
+                "para confirmar registros."
+            )
             return
 
         # Processar ação
