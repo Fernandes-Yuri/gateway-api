@@ -103,7 +103,8 @@ Erro inesperado de banco reverte logs, baixas e resultado integralmente.
 A resposta só sai após commit. 503 pede recuperar o lote antes de repetir a ação.
 
 IDs UTC, índice único das ocorrências e logs canônicos, locks ordenados e transação compartilhada
-impedem segunda baixa entre app, WhatsApp e cuidadores. O histórico pode conter duplicações antigas;
+impedem segunda baixa entre app, WhatsApp e cuidadores. Triggers de inserção também
+cobrem a versão anterior durante a janela entre migration e reinício do serviço. O histórico pode conter duplicações antigas;
 esses logs permanecem preservados, com uma ocorrência sinalizada para revisão.
 O resultado terminal fica persistido, com proteção contra reabertura no banco.
 

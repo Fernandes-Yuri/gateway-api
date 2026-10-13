@@ -111,6 +111,53 @@ DO $$ DECLARE r record; instant timestamptz; oid uuid; zone text; BEGIN
   UPDATE medication_logs SET occurrence_id=oid WHERE id=r.id;
  END LOOP;
 END $$;
+-- A trava também cobre escritores da versão anterior durante a janela de deploy.
+CREATE OR REPLACE FUNCTION medication_log_canonical_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE instant timestamptz; zone text; oid uuid; prior uuid; owner_id text;
+BEGIN
+ IF NEW.scheduled_for IS NULL THEN RETURN NEW; END IF;
+ SELECT user_id INTO owner_id FROM medications WHERE id=NEW.medication_id FOR UPDATE;
+ IF owner_id IS DISTINCT FROM NEW.user_id THEN
+  RAISE EXCEPTION 'Medication occurrence patient mismatch' USING ERRCODE='23514';
+ END IF;
+ SELECT COALESCE((SELECT name FROM pg_timezone_names WHERE name=p.timezone),'America/Sao_Paulo')
+ INTO zone FROM profiles p WHERE p.id=NEW.user_id;
+ IF NEW.scheduled_for ~ '(Z|[+-][0-9]{2}:[0-9]{2})$' THEN
+  instant:=NEW.scheduled_for::timestamptz;
+ ELSIF NEW.scheduled_for ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$' THEN
+  instant:=NEW.scheduled_for::timestamp AT TIME ZONE zone;
+ ELSE
+  RAISE EXCEPTION 'Scheduled occurrence must contain a valid timezone or legacy local minute' USING ERRCODE='22007';
+ END IF;
+ oid:=uuid_generate_v5(uuid_ns_url(),NEW.user_id||'/'||NEW.medication_id::text||'/'||to_char(instant AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'));
+ IF NEW.occurrence_id IS NOT NULL AND NEW.occurrence_id <> oid THEN
+  RAISE EXCEPTION 'Medication occurrence identity mismatch' USING ERRCODE='23514';
+ END IF;
+ INSERT INTO medication_dose_occurrences(id,patient_id,medication_id,scheduled_at,local_date,local_time,timezone)
+ VALUES(oid,NEW.user_id,NEW.medication_id,instant,(instant AT TIME ZONE zone)::date,to_char(instant AT TIME ZONE zone,'HH24:MI'),zone)
+ ON CONFLICT DO NOTHING;
+ SELECT log_id INTO prior FROM medication_dose_occurrences WHERE id=oid FOR UPDATE;
+ IF prior IS NOT NULL THEN
+  RAISE EXCEPTION 'Medication occurrence already recorded' USING ERRCODE='23505';
+ END IF;
+ NEW.occurrence_id:=oid;
+ NEW.canonical_guard:=true;
+ RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS medication_log_canonical_guard ON medication_logs;
+CREATE TRIGGER medication_log_canonical_guard BEFORE INSERT ON medication_logs
+ FOR EACH ROW EXECUTE FUNCTION medication_log_canonical_guard();
+CREATE OR REPLACE FUNCTION medication_log_link_occurrence() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.occurrence_id IS NOT NULL THEN
+  UPDATE medication_dose_occurrences SET log_id=NEW.id WHERE id=NEW.occurrence_id;
+ END IF;
+ RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS medication_log_link_occurrence ON medication_logs;
+CREATE TRIGGER medication_log_link_occurrence AFTER INSERT ON medication_logs
+ FOR EACH ROW EXECUTE FUNCTION medication_log_link_occurrence();
+
 CREATE OR REPLACE FUNCTION medication_batch_terminal_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF OLD.state <> 'prepared' AND NEW IS DISTINCT FROM OLD THEN

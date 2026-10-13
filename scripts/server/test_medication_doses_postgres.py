@@ -269,10 +269,14 @@ class DosePostgresTests(unittest.IsolatedAsyncioTestCase):
     async def test_migration_preserves_offset_duplicates_and_flags_naive(self):
         mid = await self.med()
         async with self.pool.acquire() as conn:
+            await conn.execute('ALTER TABLE medication_logs DISABLE TRIGGER medication_log_canonical_guard')
+            await conn.execute('ALTER TABLE medication_logs DISABLE TRIGGER medication_log_link_occurrence')
             await conn.execute('''INSERT INTO medication_logs(user_id,medication_id,taken_at,scheduled_for)
                 VALUES('patient',$1,now(),'2026-10-13T08:00:00-03:00'),
                 ('patient',$1,now(),'2026-10-13T11:00:00+00:00'),
                 ('patient',$1,now(),'2026-10-13T20:00')''', mid)
+            await conn.execute('ALTER TABLE medication_logs ENABLE TRIGGER medication_log_canonical_guard')
+            await conn.execute('ALTER TABLE medication_logs ENABLE TRIGGER medication_log_link_occurrence')
             await conn.execute((ROOT/'migrations/055_medication_dose_batches.sql').read_text())
             self.assertEqual(await conn.fetchval('SELECT count(*) FROM medication_logs'), 3)
             self.assertEqual(await conn.fetchval('SELECT count(*) FROM medication_dose_occurrences'), 1)
@@ -352,3 +356,15 @@ class DosePostgresTests(unittest.IsolatedAsyncioTestCase):
             await conn.execute("UPDATE medications SET schedule_time='inválido',schedule_times='inválido' WHERE id=$1",mid)
             data = await doses.materialize_groups(conn,actor_id='actor',patient_id='patient',day=self.day)
             self.assertEqual(data['review_items'][0]['reason_code'], 'schedule_invalid')
+
+    async def test_database_guards_legacy_writer_during_deploy(self):
+        mid = await self.med()
+        async with self.pool.acquire() as conn:
+            await conn.execute("INSERT INTO medication_logs(user_id,medication_id,taken_at,scheduled_for) VALUES('patient',$1,now(),'2026-10-13T08:00')", mid)
+            with self.assertRaises(asyncpg.UniqueViolationError):
+                await conn.execute("INSERT INTO medication_logs(user_id,medication_id,taken_at,scheduled_for) VALUES('patient',$1,now(),'2026-10-13T11:00:00Z')", mid)
+            self.assertEqual(await conn.fetchval('SELECT count(*) FROM medication_logs'),1)
+        batch, _ = await self.prepare()
+        result = await self.confirm(batch)
+        self.assertEqual(result['counts']['already_recorded'],1)
+        self.assertEqual(await self.stock(mid),40)
