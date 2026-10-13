@@ -50,8 +50,40 @@ _SET_LENGTH_RE = re.compile(
     r"quero respostas? (curtas|longas|detalhadas|equilibradas))\b")
 
 _FORGET_ONE_RE = re.compile(
-    r"\b(esquece|apaga|remove)\b\s+(o\s+)?(apelido|tamanho do copo|volume do copo|"
-    r"extensao das respostas|respostas curtas)\b")
+    r"\b(esquece|apaga|remove)\b.{0,40}\b"
+    r"(apelido|copo|respostas|extensao|tamanho)\b")
+
+# Passo 5.3: consulta de UMA preferência ("qual meu apelido?"), além do
+# "o que você lembra de mim?" que lista tudo. Padrões específicos para
+# não confundir "qual copo devo usar?" com consulta de preferência.
+_QUERY_ONE_RE = re.compile(
+    r"\b(qual|o que e|qual e|me diz|me fala)\b.{0,20}\b"
+    r"(apelido|tamanho do (meu )?copo|volume do (meu )?copo|"
+    r"extensao das (minhas )?respostas)\b"
+    r"|como voce (me )?(chama|chamaria)")
+
+# Passo 5.3: volume habitual do copo ("meu copo é de 200 ml").
+_SET_CUP_RE = re.compile(
+    r"\b(meu copo (e|tem)?\s*(de|e)?|copo (de|com|e)|bebo (no|em|de)?\s*(um|copo)?\s*"
+    r"(copo\s*(de|com)?|de)?)\s*(\d{2,4})\s*(ml|mililitros?)\b",
+    re.IGNORECASE)
+
+
+def _target_key(norm: str) -> Optional[str]:
+    """Resolve a chave (nickname/cup_ml/response_length) da preferência citada.
+
+    Tolerante a possessivos e variações ("tamanho do MEU copo",
+    "como você ME chama", "extensão das MINHAS respostas").
+    """
+    if re.search(r"\bapelido\b|\bcomo voce (me )?chama\w*\b|"
+                 r"\bnome que voce (me )?chama\w*\b", norm):
+        return "nickname"
+    if re.search(r"\bcopo\b|\btamanho do copo\b|\bvolume do copo\b", norm):
+        return "cup_ml"
+    if re.search(r"\bextensao das (minhas )?respostas\b|"
+                 r"\brespostas (curtas|longas|detalhadas|equilibradas)\b", norm):
+        return "response_length"
+    return None
 
 
 def _length_value(norm: str) -> Optional[str]:
@@ -84,11 +116,15 @@ def detect_preference_intent(text: str) -> Optional[dict]:
         return {"op": "forget", "key": "all"}
 
     if _FORGET_ONE_RE.search(norm):
-        alvo = re.search(r"\b(apelido|tamanho do copo|volume do copo|"
-                         r"extensao das respostas|respostas curtas)\b", norm)
-        key = "nickname" if alvo and alvo.group(1) == "apelido" else (
-            "cup_ml" if alvo and "copo" in alvo.group(1) else "response_length")
-        return {"op": "forget", "key": key}
+        key = _target_key(norm)
+        if key:
+            return {"op": "forget", "key": key}
+
+    # Passo 5.3: consulta de uma única preferência.
+    if _QUERY_ONE_RE.search(norm):
+        key = _target_key(norm)
+        if key:
+            return {"op": "list", "key": key}
 
     m = _SET_NICKNAME_RE.search(norm)
     if m:
@@ -100,6 +136,12 @@ def detect_preference_intent(text: str) -> Optional[dict]:
         valor = _length_value(norm)
         if valor:
             return {"op": "set", "key": "response_length", "value": valor}
+
+    m = _SET_CUP_RE.search(text)
+    if m:
+        volume = int(m.group(9))
+        if 50 <= volume <= 2000:
+            return {"op": "set", "key": "cup_ml", "value": volume}
 
     return None
 
@@ -202,6 +244,17 @@ async def handle_preference(conn: Any, db_pool: Any, *,
         return None
 
     if intent["op"] == "list":
+        chave = intent.get("key")
+        if chave:
+            if chave not in prefs:
+                return OperationResult.success(
+                    {"nickname": "Não guardei apelido seu — me diga "
+                                 "'me chama de ...' se quiser.",
+                     "response_length": "Não guardei preferência de extensão "
+                                        "das respostas.",
+                     "cup_ml": "Não guardei o tamanho do seu copo habitual."}[chave])
+            return OperationResult.success(
+                "Guardei isto: " + _describe(chave, prefs[chave]) + ".")
         if not prefs:
             return OperationResult.success(
                 "Ainda não tenho preferências suas guardadas.")
