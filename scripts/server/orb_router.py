@@ -265,6 +265,30 @@ def detect_hydration(norm: str):
 
 
 # ------------------------------------------------------------------
+# Peso (PR2, passo 2.4): reconhecimento deterministico com faixa clinica.
+# ------------------------------------------------------------------
+_WEIGHT_CONTEXT = re.compile(r"\bpeso\b|\bpesando\b|\bquilos?\b")
+_WEIGHT_NUM = re.compile(r"(\d{1,3}(?:[.,]\d{1,2})?)")
+
+
+def detect_weight(norm: str):
+    """Peso em kg (20-300), ou None. Exige contexto de peso + número."""
+    if not _WEIGHT_CONTEXT.search(norm):
+        return None
+    m = _WEIGHT_NUM.search(norm)
+    if not m:
+        return None
+    try:
+        val = float(m.group(1).replace(",", "."))
+    except ValueError:
+        return None
+    # Faixa do HEALTH_VALIDATION_RULES do core/confirmation (PESO).
+    if not (20 <= val <= 300):
+        return None
+    return val
+
+
+# ------------------------------------------------------------------
 # Roteador principal (Fase 2) + API estruturada (Fase 4)
 # ------------------------------------------------------------------
 
@@ -314,6 +338,9 @@ def detect_all(raw: str) -> dict:
     spo2 = detect_spo2(norm)
     if spo2:
         return {"kind": "spo2", "valor": spo2}
+    peso = detect_weight(norm)
+    if peso:
+        return {"kind": "weight", "peso_kg": peso}
     # Passo 2.3: consulta (pergunta sem valor) é respondida pelo serviço de
     # consultas, antes de qualquer conversa aberta.
     query = detect_query(norm)
@@ -603,6 +630,8 @@ _WA_VITALS = {
     "hydration": ("AGUA", lambda d: {"quantidade_ml": d["ml"]}),
     "hr": ("BATIMENTOS", lambda d: {"batimentos": d["bpm"]}),
     "spo2": ("OXIGENACAO", lambda d: {"saturacao": d["valor"]}),
+    # Passo 2.4: peso vai para a biometria do app, não para vital_signs.
+    "weight": ("PESO", lambda d: {"peso_kg": d["peso_kg"]}),
 }
 
 
@@ -634,6 +663,8 @@ def whatsapp_next(raw: str, is_registered: bool) -> dict:
                 summary = f"{det['ml']} ml de água"
             elif kind == "hr":
                 summary = f"{det['bpm']} bpm"
+            elif kind == "weight":
+                summary = f"{det['peso_kg']} kg de peso"
             else:
                 summary = f"{det['valor']}% de saturação"
             return {"type": "vitals", "metric": metric, "values": values,

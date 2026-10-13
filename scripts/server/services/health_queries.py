@@ -165,7 +165,38 @@ async def last_oxygen_saturation(conn: Any, context: OperationContext,
 
 async def last_weight(conn: Any, context: OperationContext,
                       zone: Optional[str] = None) -> OperationResult:
-    return await _query_reading(conn, context, "peso", zone)
+    # Passo 2.4/2.5: o peso pode estar na biometria (novo destino) ou no
+    # histórico de vital_signs; mostra o registro mais recente de qualquer
+    # uma das fontes.
+    denied = await validate_actor(conn, context)
+    if denied:
+        return denied
+    tz = await _resolve_zone(conn, context, zone)
+    try:
+        row = await conn.fetchrow(
+            """SELECT weight_kg, measured_at FROM biometrics
+               WHERE user_id = $1
+               UNION ALL
+               SELECT weight_kg, measured_at FROM vital_signs
+               WHERE user_id = $1 AND weight_kg IS NOT NULL
+               ORDER BY measured_at DESC LIMIT 1""",
+            context.patient_id,
+        )
+    except Exception as err:
+        print(f"[Health Queries] Falha ao consultar peso: {err}")
+        return OperationResult.unavailable(
+            "Não consegui acessar seus registros agora. Tente novamente em instantes.")
+    if not row:
+        return OperationResult.missing_data(
+            "Ainda não encontrei registros de peso seu. Quando se pesar, é só me "
+            "enviar aqui, como 'meu peso 74,5 kg', que eu anoto com sua confirmação.",
+            data={"kind": "peso"})
+    peso = row["weight_kg"]
+    value = f"{peso:.1f}".replace(".", ",") if isinstance(peso, float) else str(peso)
+    return OperationResult.success(
+        f"Seu último peso foi {value} kg, registrado {format_when(row['measured_at'], tz)}.",
+        data={"kind": "peso", "value": value, "unit": "kg",
+              "measured_at": row["measured_at"].isoformat()})
 
 
 async def water_today(conn: Any, context: OperationContext, *,
@@ -240,6 +271,19 @@ async def day_summary(conn: Any, context: OperationContext, *,
         if row["weight_kg"]:
             leituras.append({"kind": "peso", "value": format_value("peso", row),
                              "unit": _UNIT["peso"], "at": row["measured_at"].isoformat()})
+    # Passo 2.4: peso do dia pode estar na biometria (novo destino).
+    try:
+        bio_rows = await conn.fetch(
+            """SELECT weight_kg, measured_at FROM biometrics
+               WHERE user_id = $1 AND measured_at >= $2 AND measured_at < $3""",
+            context.patient_id, inicio, fim,
+        )
+        for row in bio_rows:
+            leituras.append({"kind": "peso", "value": format_value("peso", row),
+                             "unit": _UNIT["peso"], "at": row["measured_at"].isoformat()})
+        leituras.sort(key=lambda leitura: leitura["at"])
+    except Exception as err:
+        print(f"[Health Queries] Aviso: biometria do dia não lida: {err}")
     agua = sum(r["hydration_ml"] or 0 for r in rows)
     dia_iso = (day or datetime.now(tz).date()).isoformat()
     if not leituras and agua <= 0:
