@@ -134,12 +134,12 @@ class RestWireTests(unittest.IsolatedAsyncioTestCase):
         captured = {}
         async def resolve(_conn, context, _text):
             captured["actor_id"] = context.actor_id
-            return context.model_copy(update={"patient_id": "yuri-patient"}), None
+            return OperationResult.success("Alvo encontrado.", data={"patient_id": "yuri-patient"})
         async def query(_conn, context):
             captured["patient_id"] = context.patient_id
             return OperationResult.success("A última pressão de Yuri foi 120 x 80 mmHg.")
 
-        with patch("services.family_target.resolve_target_context", resolve), \
+        with patch("services.family_target.resolve_family_target", resolve), \
              patch("services.health_queries.blood_pressure_today", query):
             result = await chat_router._query_health_service(
                 Pool(), actor_id="caregiver", request=req, kind="query_bp",
