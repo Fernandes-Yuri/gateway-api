@@ -118,7 +118,7 @@ async def _broadcast_app_update(req: BroadcastUpdateRequest):
             token = dev.get("token")
             if not token:
                 continue
-            success = dispatch_push(
+            success = await asyncio.to_thread(dispatch_push,
                 token=token,
                 title=req.title,
                 body=req.message,

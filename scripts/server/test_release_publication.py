@@ -147,6 +147,11 @@ class PublicationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await call(value.model_dump()))['status'], 'published')
             self.assertEqual((await call(value.model_dump()))['status'], 'already_active')
             self.assertEqual((await call({'variant': 'debug'}))['status'], 'error')
+            if os.getuid() != 0:
+                other_uid = os.getuid() + 1
+                with patch('release_control.os.getuid', return_value=other_uid):
+                    denied = await call(value.model_dump())
+                self.assertEqual(denied['error'], 'PermissionError')
             notify.assert_awaited_once_with(value)
         finally:
             server.close(); await server.wait_closed(); path.unlink()
@@ -158,3 +163,14 @@ class ManifestTests(unittest.TestCase):
                         {'certificate_sha256': '0' * 64}, {'version_name': '../bad'}, {'version_code': 0}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 ReleaseManifest.model_validate({**manifest().model_dump(), **changes})
+
+
+class ControlPathTests(unittest.IsolatedAsyncioTestCase):
+    async def test_symlink_control_path_never_replaced_or_used(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / 'unrelated'; target.write_text('preserved')
+            (root / 'publish.sock').symlink_to(target)
+            with self.assertRaises(RuntimeError):
+                await start_release_control(root, lambda: None, 'https://fixture')
+            self.assertEqual(target.read_text(), 'preserved')

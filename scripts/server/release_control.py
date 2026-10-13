@@ -18,6 +18,8 @@ async def start_release_control(root, pool_getter, public_base_url, notify=None)
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     path = root / 'publish.sock'
+    if path.is_symlink():
+        raise RuntimeError('Socket de publicação não pode ser um link')
     if path.exists():
         info = path.lstat()
         if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
@@ -55,8 +57,11 @@ async def start_release_control(root, pool_getter, public_base_url, notify=None)
             response = await publish_release(pool_getter(), root, manifest, public_base_url)
             if response['status'] == 'published' and notify is not None:
                 try:
-                    await notify(manifest)
-                    response['notification'] = 'sent'
+                    result = await notify(manifest)
+                    response['notification'] = 'completed'
+                    if isinstance(result, dict):
+                        response['sent_count'] = result.get('sent_count', 0)
+                        response['failed_count'] = result.get('failed_count', 0)
                 except Exception:
                     response['notification'] = 'failed'
         except Exception as error:
