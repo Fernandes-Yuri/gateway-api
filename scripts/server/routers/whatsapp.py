@@ -52,6 +52,7 @@ from core.dataset import log_fine_tuning_sample
 from core.text import clean_text_for_tts
 from orb_router import (
     ESCALATION_SUFFIX,
+    QUERY_AMBIGUOUS_FALA,
     SYMPTOM_KINDS,
     dedupe_fala,
     detect_all,
@@ -153,6 +154,36 @@ except ImportError:  # pragma: no cover - fallback defensivo do monolito
 
     async def claim_operation_key(conn, *, message_id, kind, actor_id):  # type: ignore
         return True
+
+try:
+    from services.health_queries import (
+        day_summary,
+        last_blood_pressure,
+        last_glucose,
+        last_heart_rate,
+        last_oxygen_saturation,
+        last_weight,
+        water_today,
+    )
+    from services.operations import OperationResult
+
+    async def _ambiguous_query(conn, ctx):
+        """Ambíguo: sem métrica específica, pergunta qual dado (não adivinha)."""
+        return OperationResult.clarification(QUERY_AMBIGUOUS_FALA)
+
+    # Passo 2.3: cada intent de consulta chama o serviço daquela métrica.
+    _WA_QUERY_HANDLERS = {
+        "query_bp": last_blood_pressure,
+        "query_glucose": last_glucose,
+        "query_hr": last_heart_rate,
+        "query_spo2": last_oxygen_saturation,
+        "query_weight": last_weight,
+        "query_water": water_today,
+        "query_summary": day_summary,
+        "query_ambiguous": _ambiguous_query,
+    }
+except ImportError:  # pragma: no cover - fallback defensivo do monolito
+    _WA_QUERY_HANDLERS = {}
 
 try:
     from webhook_security import verify_meta_signature
@@ -583,7 +614,36 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             await send_whatsapp_text(sender_phone, FAST_LANE_INTENTS[fast_intent]["link_text"])
                         continue
 
-                    # 2.8. Camada 0 (Fase 4): router determinístico antes do LLM.
+                    # 2.8. Consultas de saúde (PR2, passo 2.3): o serviço
+                    # responde ANTES da conversa aberta — sem LLM. Só
+                    # autocuidado (familiar chega no PR4, com revalidação).
+                    wa_kind = detect_all(user_text).get("kind")
+                    if user_id and wa_kind in _WA_QUERY_HANDLERS:
+                        _q_result = None
+                        try:
+                            async with db_pool.acquire() as _q_conn:
+                                _q_result = await _WA_QUERY_HANDLERS[wa_kind](
+                                    _q_conn, wa_ctx or context_from_identity(identity, message_id=msg_id))
+                        except Exception as _q_err:
+                            print(f"[WhatsApp Queries] Falha na consulta {wa_kind}: {_q_err}")
+                            _q_result = None
+                        if _q_result is not None and _q_result.message:
+                            # Log sem o valor de saúde (LGPD): registra a
+                            # intenção, não o dado clínico.
+                            try:
+                                log_fine_tuning_sample(
+                                    user_prompt=user_text,
+                                    assistant_reply="Consulta respondida pelo serviço de saúde.",
+                                    source="whatsapp_query",
+                                    system_prompt="health_queries (serviço, sem LLM)",
+                                    user_name=user_name, action="CONSULTA",
+                                    action_params={"kind": wa_kind, "result": _q_result.status})
+                            except Exception:
+                                pass
+                            await send_whatsapp_text(sender_phone, _q_result.message)
+                            continue
+
+                    # 2.9. Camada 0 (Fase 4): router determinístico antes do LLM.
                     # Vitais com número vão direto aos botões; fofoca/social vai
                     # de template; só conversa aberta chega ao Groq.
                     wa_mem_key = "".join(filter(str.isdigit, sender_phone or "")) or sender_phone
@@ -594,7 +654,6 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         trace_llm('whatsapp', 'followup_hit', wa_tid, fala=wa_follow["fala"])
                         await _wa_send_router_text(sender_phone, msg_type, wa_follow["fala"], user_text, user_name)
                         continue
-                    wa_kind = detect_all(user_text).get("kind")
                     wa_route = whatsapp_next(user_text, bool(user_id))
                     trace_llm('whatsapp', 'router_hit', wa_tid, route={k: (str(v)[:200]) for k, v in wa_route.items()})
                     if wa_route["type"] == "text":
