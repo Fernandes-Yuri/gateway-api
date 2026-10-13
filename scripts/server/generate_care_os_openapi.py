@@ -18,7 +18,7 @@ PUBLIC_PATHS = {
 
 
 def build_spec():
-    app = FastAPI(title="Braga Saúde Care OS Contracts", version="1.0.0")
+    app = FastAPI(title="Braga Saúde Care OS Contracts", version="1.1.0")
     app.include_router(router)
     spec = app.openapi()
     spec.setdefault("components", {}).setdefault("securitySchemes", {})["FirebaseBearer"] = {

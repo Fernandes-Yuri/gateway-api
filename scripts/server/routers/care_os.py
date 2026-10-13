@@ -995,3 +995,116 @@ async def ingest_ble(payload: BleTelemetryRequest, uid: str = Depends(firebase_u
             vital = await conn.fetchrow("""INSERT INTO vital_signs(user_id,systolic_pressure,diastolic_pressure,glucose_level,measured_at)
                 VALUES($1,$2,$3,$4,$5) RETURNING id""",payload.patient_id,payload.systolic_pressure,payload.diastolic_pressure,payload.glucose_level,payload.measured_at)
     return {"status":"recorded","receipt_id":str(receipt['id']),"vital_sign_id":str(vital['id']),"protocol":"GATT"}
+
+
+# Contrato de doses v1, compartilhado com adaptadores WhatsApp.
+from schemas.medication_doses import (
+    DoseBatchConfirm, DoseBatchPrepare, DoseBatchResponse, DoseError,
+    DoseGroupsResponse, DoseScheduleResponse, DoseScheduleUpdate,
+)
+from services import medication_doses as dose_service
+
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
+import asyncpg
+
+
+class DoseContractRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+        async def structured_handler(request):
+            try:
+                return await handler(request)
+            except RequestValidationError:
+                dose_service.fail(422, 'INVALID_INPUT', 'Confira os campos e identificadores da requisição.')
+            except HTTPException as exc:
+                if isinstance(exc.detail, dict) and 'code' in exc.detail:
+                    raise
+                dose_service.fail(exc.status_code, 'AUTHENTICATION_REQUIRED' if exc.status_code == 401 else
+                                  ('INFRASTRUCTURE_UNAVAILABLE' if exc.status_code == 503 else 'REQUEST_REJECTED'),
+                                  str(exc.detail), retryable=exc.status_code == 503)
+            except (asyncpg.PostgresError, asyncpg.InterfaceError, OSError, TimeoutError):
+                logger.exception('Falha de infraestrutura no contrato de doses')
+                dose_service.fail(503, 'INFRASTRUCTURE_UNAVAILABLE',
+                                  'Não foi possível concluir. Recupere o lote antes de tentar novamente.', retryable=True)
+        return structured_handler
+
+
+def dose_contract_enabled():
+    return os.getenv('MEDICATION_DOSE_BATCHES_ENABLED', 'true').lower() in ('true', '1', 'yes')
+
+
+async def require_dose_contract():
+    if not dose_contract_enabled():
+        dose_service.fail(503, 'CONTRACT_DISABLED', 'Confirmação coletiva temporariamente indisponível.', retryable=True)
+
+
+dose_router = APIRouter(route_class=DoseContractRoute)
+
+DOSE_ERRORS = {code: {"model": DoseError} for code in (403, 404, 409, 422, 503)}
+
+
+@dose_router.put("/api/family/patients/{patient_id}/medications/{medication_id}/dose-schedule",
+            response_model=DoseScheduleResponse, responses=DOSE_ERRORS, dependencies=[Depends(require_dose_contract)])
+async def update_dose_schedule(patient_id: str, medication_id: uuid.UUID,
+                               payload: DoseScheduleUpdate, uid: str = Depends(firebase_uid)):
+    async with _pool().acquire() as conn:
+        async with conn.transaction():
+            return await dose_service.update_schedule(conn, actor_id=uid, patient_id=patient_id,
+                                                       medication_id=medication_id, payload=payload)
+
+
+@dose_router.get("/api/family/patients/{patient_id}/medication-dose-groups",
+            response_model=DoseGroupsResponse, responses=DOSE_ERRORS)
+async def medication_dose_groups(patient_id: str, date: Optional[date] = None,
+                                 uid: str = Depends(firebase_uid)):
+    async with _pool().acquire() as conn:
+        async with conn.transaction():
+            return await dose_service.materialize_groups(conn, actor_id=uid, patient_id=patient_id, day=date)
+
+
+@dose_router.post("/api/family/patients/{patient_id}/medication-dose-batches", status_code=201,
+             response_model=DoseBatchResponse, responses=DOSE_ERRORS, dependencies=[Depends(require_dose_contract)])
+async def prepare_dose_batch(patient_id: str, payload: DoseBatchPrepare,
+                             response: Response, uid: str = Depends(firebase_uid)):
+    async with _pool().acquire() as conn:
+        async with conn.transaction():
+            result, created = await dose_service.prepare_batch(conn, actor_id=uid, patient_id=patient_id, payload=payload)
+    response.status_code = 201 if created else 200
+    return result
+
+
+@dose_router.get("/api/medication-dose-batches/{batch_id}", response_model=DoseBatchResponse, responses=DOSE_ERRORS)
+async def get_dose_batch(batch_id: uuid.UUID, uid: str = Depends(firebase_uid)):
+    async with _pool().acquire() as conn:
+        async with conn.transaction():
+            row = await dose_service.get_batch(conn, actor_id=uid, batch_id=batch_id, lock=True)
+            result = dose_service.batch_response(row)
+    return result
+
+
+@dose_router.post("/api/medication-dose-batches/{batch_id}/confirm", response_model=DoseBatchResponse, responses=DOSE_ERRORS, dependencies=[Depends(require_dose_contract)])
+async def confirm_dose_batch(batch_id: uuid.UUID, payload: DoseBatchConfirm, uid: str = Depends(firebase_uid)):
+    async with _pool().acquire() as conn:
+        async with conn.transaction():
+            result = await dose_service.confirm_batch(conn, actor_id=uid, batch_id=batch_id, payload=payload)
+    return result
+
+
+@dose_router.post("/api/medication-dose-batches/{batch_id}/cancel", response_model=DoseBatchResponse, responses=DOSE_ERRORS, dependencies=[Depends(require_dose_contract)])
+async def cancel_dose_batch(batch_id: uuid.UUID, uid: str = Depends(firebase_uid)):
+    async with _pool().acquire() as conn:
+        async with conn.transaction():
+            result = await dose_service.cancel_batch(conn, actor_id=uid, batch_id=batch_id)
+    return result
+
+
+@router.get('/api/medication-dose-capabilities')
+async def medication_dose_capabilities(uid: str = Depends(firebase_uid)):
+    return {"medication_batch_contract": 1, "enabled": dose_contract_enabled(),
+            "structured_quantities": True, "integer_units_min": 1, "integer_units_max": 20,
+            "proposal_ttl_seconds": 300, "offline_result_recovery": True,
+            "grouping": "exact_local_time", "supported_channels": ["app", "whatsapp"]}
+
+
+router.include_router(dose_router)

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Braga Saúde Care OS Contracts",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "paths": {
     "/api/anvisa/medications/barcode/{ean}": {
@@ -117,6 +117,119 @@
             "FirebaseBearer": []
           }
         ]
+      },
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "List Patient Medications",
+        "description": "Retorna todos os medicamentos completos do paciente para sincronização com o app.",
+        "operationId": "list_patient_medications_api_family_patients__patient_id__medications_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/medications/batch": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Create Medications Batch",
+        "operationId": "create_medications_batch_api_family_patients__patient_id__medications_batch_post",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MedicationBatchCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MedicationBatchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
       }
     },
     "/api/family/patients/{patient_id}/medications/stock": {
@@ -137,6 +250,198 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/medications/logs": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "List Patient Medication Logs",
+        "description": "Retorna os logs de doses tomadas do paciente para sincronização com o banco local Room.",
+        "operationId": "list_patient_medication_logs_api_family_patients__patient_id__medications_logs_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 7,
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/medications/{medication_id}": {
+      "delete": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Delete Medication",
+        "description": "Exclusão de medicamento com direito ao esquecimento e descarte LGPD (Art. 18).",
+        "operationId": "delete_medication_api_family_patients__patient_id__medications__medication_id__delete",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "medication_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Medication Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Update Medication",
+        "description": "Edição Parcial de Horários e Posologia (PATCH).",
+        "operationId": "update_medication_api_family_patients__patient_id__medications__medication_id__patch",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "medication_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Medication Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MedicationUpdateRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -372,6 +677,121 @@
               "title": "Patient Id"
             }
           },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/prescriptions/analyze": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Analyze Prescription",
+        "description": "Análise Segura de Receitas Médicas com Dupla Checagem e Árbitro ANVISA.",
+        "operationId": "analyze_prescription_api_family_patients__patient_id__prescriptions_analyze_post",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_analyze_prescription_api_family_patients__patient_id__prescriptions_analyze_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrescriptionAnalysisResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/files/prescriptions/{filename}": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Prescription Photo",
+        "operationId": "prescription_photo_api_files_prescriptions__filename__get",
+        "parameters": [
           {
             "name": "filename",
             "in": "path",
@@ -959,10 +1379,760 @@
           }
         ]
       }
+    },
+    "/api/medication-dose-capabilities": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Medication Dose Capabilities",
+        "operationId": "medication_dose_capabilities_api_medication_dose_capabilities_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/medications/{medication_id}/dose-schedule": {
+      "put": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Update Dose Schedule",
+        "operationId": "update_dose_schedule_api_family_patients__patient_id__medications__medication_id__dose_schedule_put",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "medication_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Medication Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DoseScheduleUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseScheduleResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/medication-dose-groups": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Medication Dose Groups",
+        "operationId": "medication_dose_groups_api_family_patients__patient_id__medication_dose_groups_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseGroupsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/family/patients/{patient_id}/medication-dose-batches": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Prepare Dose Batch",
+        "operationId": "prepare_dose_batch_api_family_patients__patient_id__medication_dose_batches_post",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DoseBatchPrepare"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseBatchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/medication-dose-batches/{batch_id}": {
+      "get": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Get Dose Batch",
+        "operationId": "get_dose_batch_api_medication_dose_batches__batch_id__get",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseBatchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/medication-dose-batches/{batch_id}/confirm": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Confirm Dose Batch",
+        "operationId": "confirm_dose_batch_api_medication_dose_batches__batch_id__confirm_post",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DoseBatchConfirm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseBatchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
+    },
+    "/api/medication-dose-batches/{batch_id}/cancel": {
+      "post": {
+        "tags": [
+          "Care OS"
+        ],
+        "summary": "Cancel Dose Batch",
+        "operationId": "cancel_dose_batch_api_medication_dose_batches__batch_id__cancel_post",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseBatchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Vínculo ou permissão insuficiente"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoseError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "401": {
+            "description": "Token ausente ou inválido"
+          }
+        },
+        "security": [
+          {
+            "FirebaseBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "AnalyzedMedicationItem": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          },
+          "name_divergent": {
+            "type": "boolean",
+            "title": "Name Divergent",
+            "default": false
+          },
+          "dosage": {
+            "type": "string",
+            "title": "Dosage",
+            "default": ""
+          },
+          "dosage_divergent": {
+            "type": "boolean",
+            "title": "Dosage Divergent",
+            "default": false
+          },
+          "dosage_mg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dosage Mg"
+          },
+          "frequency": {
+            "type": "string",
+            "title": "Frequency",
+            "default": ""
+          },
+          "frequency_divergent": {
+            "type": "boolean",
+            "title": "Frequency Divergent",
+            "default": false
+          },
+          "frequency_interval_hours": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 48.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency Interval Hours"
+          },
+          "daily_doses_count": {
+            "type": "integer",
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Daily Doses Count",
+            "default": 1
+          },
+          "treatment_duration_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 365.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Treatment Duration Days"
+          },
+          "meal_context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meal Context"
+          },
+          "suggested_times": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Suggested Times"
+          },
+          "ean_barcode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean Barcode"
+          },
+          "anvisa_registration_number": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anvisa Registration Number"
+          },
+          "active_principle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Principle"
+          },
+          "confidence_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence Score",
+            "default": 0.0
+          },
+          "requires_human_fill": {
+            "type": "boolean",
+            "title": "Requires Human Fill",
+            "default": false
+          },
+          "divergence_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Divergence Reason"
+          },
+          "source_pages": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Source Pages"
+          }
+        },
+        "type": "object",
+        "title": "AnalyzedMedicationItem"
+      },
       "BarcodeMedication": {
         "properties": {
           "ean_barcode": {
@@ -1027,6 +2197,17 @@
               }
             ],
             "title": "Farmacia Popular Eligible"
+          },
+          "anvisa_registration_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anvisa Registration Number"
           },
           "source_name": {
             "type": "string",
@@ -1137,6 +2318,20 @@
         ],
         "title": "BleTelemetryRequest"
       },
+      "Body_analyze_prescription_api_family_patients__patient_id__prescriptions_analyze_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_analyze_prescription_api_family_patients__patient_id__prescriptions_analyze_post"
+      },
       "Body_upload_medication_photo_api_family_patients__patient_id__medications_photo_post": {
         "properties": {
           "file": {
@@ -1150,6 +2345,597 @@
           "file"
         ],
         "title": "Body_upload_medication_photo_api_family_patients__patient_id__medications_photo_post"
+      },
+      "DoseBatchConfirm": {
+        "properties": {
+          "confirmation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Confirmation Id"
+          },
+          "snapshot_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Snapshot Digest"
+          },
+          "selected_occurrence_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Selected Occurrence Ids"
+          },
+          "declared_taken_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Taken At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "confirmation_id",
+          "snapshot_digest",
+          "selected_occurrence_ids"
+        ],
+        "title": "DoseBatchConfirm"
+      },
+      "DoseBatchPrepare": {
+        "properties": {
+          "client_batch_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Client Batch Id"
+          },
+          "group_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Group Id"
+          },
+          "expected_schedule_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Schedule Digest"
+          },
+          "occurrence_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Occurrence Ids"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "app",
+              "whatsapp"
+            ],
+            "title": "Channel"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "client_batch_id",
+          "group_id",
+          "expected_schedule_digest",
+          "occurrence_ids",
+          "channel"
+        ],
+        "title": "DoseBatchPrepare"
+      },
+      "DoseBatchResponse": {
+        "properties": {
+          "medication_batch_contract": {
+            "type": "integer",
+            "const": 1,
+            "title": "Medication Batch Contract",
+            "default": 1
+          },
+          "batch_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Batch Id"
+          },
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "actor_id": {
+            "type": "string",
+            "title": "Actor Id"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "app",
+              "whatsapp"
+            ],
+            "title": "Channel"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "prepared",
+              "confirmed",
+              "partially_confirmed",
+              "failed",
+              "cancelled",
+              "expired"
+            ],
+            "title": "State"
+          },
+          "prepared_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Prepared At"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "snapshot_digest": {
+            "type": "string",
+            "title": "Snapshot Digest"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "local_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Local Date"
+          },
+          "local_time": {
+            "type": "string",
+            "title": "Local Time"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DoseItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "requires_action": {
+            "type": "boolean",
+            "title": "Requires Action"
+          }
+        },
+        "type": "object",
+        "required": [
+          "batch_id",
+          "patient_id",
+          "actor_id",
+          "channel",
+          "state",
+          "prepared_at",
+          "expires_at",
+          "snapshot_digest",
+          "timezone",
+          "local_date",
+          "local_time",
+          "items",
+          "counts",
+          "requires_action"
+        ],
+        "title": "DoseBatchResponse"
+      },
+      "DoseError": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/DoseErrorDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "DoseError"
+      },
+      "DoseErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "retryable": {
+            "type": "boolean",
+            "title": "Retryable"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "title": "DoseErrorDetail"
+      },
+      "DoseGroup": {
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Group Id"
+          },
+          "local_time": {
+            "type": "string",
+            "title": "Local Time"
+          },
+          "scheduled_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduled At"
+          },
+          "schedule_digest": {
+            "type": "string",
+            "title": "Schedule Digest"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "can_confirm_all": {
+            "type": "boolean",
+            "title": "Can Confirm All"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DoseItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group_id",
+          "local_time",
+          "scheduled_at",
+          "schedule_digest",
+          "counts",
+          "can_confirm_all",
+          "items"
+        ],
+        "title": "DoseGroup"
+      },
+      "DoseGroupsResponse": {
+        "properties": {
+          "medication_batch_contract": {
+            "type": "integer",
+            "const": 1,
+            "title": "Medication Batch Contract",
+            "default": 1
+          },
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "patient_name": {
+            "type": "string",
+            "title": "Patient Name"
+          },
+          "local_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Local Date"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "timezone_source": {
+            "type": "string",
+            "enum": [
+              "profile",
+              "fallback"
+            ],
+            "title": "Timezone Source"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/DoseGroup"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "review_items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Review Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "patient_id",
+          "patient_name",
+          "local_date",
+          "timezone",
+          "timezone_source",
+          "generated_at",
+          "groups"
+        ],
+        "title": "DoseGroupsResponse"
+      },
+      "DoseItem": {
+        "properties": {
+          "occurrence_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Occurrence Id"
+          },
+          "medication_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Medication Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "dose_units": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dose Units"
+          },
+          "instruction_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instruction Text"
+          },
+          "schedule_revision": {
+            "type": "integer",
+            "title": "Schedule Revision"
+          },
+          "scheduled_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduled At"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "recorded",
+              "blocked"
+            ],
+            "title": "State"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "recorded",
+                  "already_recorded",
+                  "excluded",
+                  "blocked"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "log_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Log Id"
+          },
+          "current_units": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Units"
+          },
+          "stock_decremented": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Decremented"
+          },
+          "recorded_units": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Units"
+          }
+        },
+        "type": "object",
+        "required": [
+          "occurrence_id",
+          "medication_id",
+          "name",
+          "dose_units",
+          "instruction_text",
+          "schedule_revision",
+          "scheduled_at",
+          "state"
+        ],
+        "title": "DoseItem"
+      },
+      "DoseScheduleResponse": {
+        "properties": {
+          "medication_batch_contract": {
+            "type": "integer",
+            "const": 1,
+            "title": "Medication Batch Contract",
+            "default": 1
+          },
+          "medication_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Medication Id"
+          },
+          "schedule_revision": {
+            "type": "integer",
+            "title": "Schedule Revision"
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/DoseSlot"
+            },
+            "type": "array",
+            "title": "Slots"
+          }
+        },
+        "type": "object",
+        "required": [
+          "medication_id",
+          "schedule_revision",
+          "slots"
+        ],
+        "title": "DoseScheduleResponse"
+      },
+      "DoseScheduleUpdate": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/DoseSlot"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Slots"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "slots"
+        ],
+        "title": "DoseScheduleUpdate"
+      },
+      "DoseSlot": {
+        "properties": {
+          "local_time": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "title": "Local Time"
+          },
+          "dose_units": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dose Units"
+          },
+          "quantity_confirmed": {
+            "type": "boolean",
+            "title": "Quantity Confirmed",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "local_time"
+        ],
+        "title": "DoseSlot"
       },
       "EmergencyTokenGrant": {
         "properties": {
@@ -1234,6 +3020,79 @@
         ],
         "title": "MedicalAccessGrant"
       },
+      "MedicationBatchCreate": {
+        "properties": {
+          "medications": {
+            "items": {
+              "$ref": "#/components/schemas/MedicationCreate"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Medications"
+          }
+        },
+        "type": "object",
+        "required": [
+          "medications"
+        ],
+        "title": "MedicationBatchCreate",
+        "description": "Remessa de múltiplos medicamentos para gravação atômica."
+      },
+      "MedicationBatchItemResult": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "confirmed_with_prescription": {
+            "type": "boolean",
+            "title": "Confirmed With Prescription",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "MedicationBatchItemResult"
+      },
+      "MedicationBatchResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "success"
+          },
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "created_count": {
+            "type": "integer",
+            "title": "Created Count"
+          },
+          "medications": {
+            "items": {
+              "$ref": "#/components/schemas/MedicationBatchItemResult"
+            },
+            "type": "array",
+            "title": "Medications"
+          }
+        },
+        "type": "object",
+        "required": [
+          "patient_id",
+          "created_count",
+          "medications"
+        ],
+        "title": "MedicationBatchResponse"
+      },
       "MedicationCreate": {
         "properties": {
           "ean_barcode": {
@@ -1247,6 +3106,18 @@
               }
             ],
             "title": "Ean Barcode"
+          },
+          "anvisa_registration_number": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anvisa Registration Number"
           },
           "name": {
             "type": "string",
@@ -1302,6 +3173,43 @@
               }
             ],
             "title": "Pharmaceutical Form"
+          },
+          "frequency_interval_hours": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 48.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency Interval Hours"
+          },
+          "treatment_duration_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 365.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Treatment Duration Days"
+          },
+          "meal_context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meal Context"
           },
           "schedule_times": {
             "items": {
@@ -1412,6 +3320,168 @@
           "idempotency_key"
         ],
         "title": "MedicationTakeRequest"
+      },
+      "MedicationUpdateRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "schedule_times": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "time"
+                },
+                "type": "array",
+                "maxItems": 12,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Times"
+          },
+          "frequency_interval_hours": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 48.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency Interval Hours"
+          },
+          "treatment_duration_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 365.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Treatment Duration Days"
+          },
+          "meal_context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meal Context"
+          },
+          "dosage_mg": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dosage Mg"
+          },
+          "total_units": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 10000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Units"
+          },
+          "alert_threshold_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 30.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alert Threshold Days"
+          }
+        },
+        "type": "object",
+        "title": "MedicationUpdateRequest"
+      },
+      "PrescriptionAnalysisResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "success"
+          },
+          "prescription_image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prescription Image Url"
+          },
+          "medications": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyzedMedicationItem"
+            },
+            "type": "array",
+            "title": "Medications"
+          },
+          "raw_ocr_snippet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Ocr Snippet"
+          },
+          "total_pages_analyzed": {
+            "type": "integer",
+            "title": "Total Pages Analyzed",
+            "default": 1
+          },
+          "duplicates_merged_count": {
+            "type": "integer",
+            "title": "Duplicates Merged Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "PrescriptionAnalysisResponse"
       },
       "PrescriptionCreate": {
         "properties": {
