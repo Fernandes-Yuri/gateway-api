@@ -224,3 +224,104 @@ async def confirm_medication_take(conn: Any, *, user_id: str,
         units_taken=int(value_json.get("units_taken") or 1),
         idempotency_key=f"wa:{value_json['medication_id']}:{scheduled_raw}",
     )
+
+
+async def confirm_pending_medication_take(db_pool: Any, *,
+                                          confirmation_code: str,
+                                          actor_id: str) -> OperationResult:
+    """
+    Passo 3.4: consome a pendência da tomada e executa o serviço compartilhado
+    na mesma transação. Confirma ao usuário só depois do commit; reenvio do
+    botão ou reenvio da Meta reconhece a mesma tomada e não duplica.
+
+    Erros de negócio do serviço (estoque, propriedade, dose inexistente)
+    voltam como resultado estruturado — o router traduz em texto, sem
+    inventar sucesso.
+    """
+    if not db_pool:
+        return OperationResult.unavailable(
+            "Não consegui acessar o banco agora. Tente novamente em instantes.")
+    if not confirmation_code or not actor_id:
+        return OperationResult.missing_data(
+            "Não consegui identificar esta confirmação. Envie novamente o "
+            "remédio e o horário.")
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT id, value_json FROM pending_confirmations
+               WHERE confirmation_code = $1
+                 AND user_id = $2
+                 AND status = 'pending'
+                 AND expires_at > NOW()""",
+            confirmation_code, actor_id,
+        )
+        if not row:
+            # Pendência já consumida (clique duplicado ou reenvio da Meta) ou
+            # expirada. Sem dizer que registrou: a tomada pode não existir.
+            return OperationResult.missing_data(
+                "Esta confirmação já foi usada ou está expirada. Se a tomada "
+                "não foi registrada, envie novamente o remédio e o horário.")
+
+        value_json = json.loads(row["value_json"])
+        pending_id = row["id"]
+
+        outcome: dict = {}
+        try:
+            async with conn.transaction():
+                # 1. Consome a pendência de forma atômica (passo 1.4): só um
+                # clique vence; o outro encontra 'confirmed' e nada faz.
+                consumed = await conn.execute(
+                    """UPDATE pending_confirmations
+                       SET status = 'confirmed', confirmed_at = NOW()
+                       WHERE id = $1 AND status = 'pending'""",
+                    pending_id,
+                )
+                if consumed != "UPDATE 1":
+                    return OperationResult.missing_data(
+                        "Esta tomada já foi confirmada por outra via. "
+                        "Nada foi duplicado.")
+
+                # 2. Executa o serviço na mesma transação: ou a pendência e a
+                # tomada entram juntas, ou nenhuma entra.
+                outcome = await confirm_medication_take(
+                    conn, user_id=actor_id, value_json=value_json)
+
+                # 3. Auditoria do canal, como no fluxo de saúde.
+                await conn.execute(
+                    """INSERT INTO confirmation_logs
+                           (user_id, pending_conf_id, confirmation_code,
+                            action, values_submitted, values_confirmed,
+                            channel, confirmed_by_user, was_edited)
+                       VALUES ($1, $2, $3, $4, $5, $6, 'whatsapp', TRUE, FALSE)""",
+                    actor_id, pending_id, confirmation_code, "REGISTRAR_MED_TOMADA",
+                    json.dumps(value_json), json.dumps(outcome),
+                )
+        except HTTPException as err:
+            # Rollback automático: a pendência volta a 'pending' e nada foi
+            # gravado. O detalhe do serviço vira texto — nunca "tomada feita".
+            detail = getattr(err, "detail", None) or str(err)
+            if not isinstance(detail, str) or not detail.strip():
+                detail = "Não foi possível registrar a tomada agora."
+            if err.status_code == 403:
+                return OperationResult.denied(detail)
+            return OperationResult.unavailable(detail)
+        except Exception as err:
+            print(f"[Med Take] Falha ao confirmar tomada: {err}")
+            return OperationResult.unavailable(
+                "Agora não consegui registrar a tomada. Tente novamente em instantes.")
+
+    # Depois do commit: a tomada existe no banco.
+    name = value_json.get("name") or "Medicamento"
+    hora = str(value_json.get("scheduled_for") or "")[11:16]
+    if outcome.get("status") == "already_recorded":
+        return OperationResult.success(
+            f"⏰ Esta tomada de *{name}* ({hora}) já estava registrada — "
+            f"nada foi duplicado.")
+    remaining = outcome.get("current_units")
+    stock_line = ""
+    if isinstance(remaining, (int, float)):
+        stock_line = f"\n📦 Estoque restante: {remaining} comprimido(s)."
+    return OperationResult.success(
+        f"✅ *Tomada registrada!*\n\n"
+        f"💊 {name} — confirmada às {hora}{stock_line}\n\n"
+        f"O registro já aparece no seu aplicativo.")

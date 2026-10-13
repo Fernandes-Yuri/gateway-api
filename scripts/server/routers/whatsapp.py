@@ -906,6 +906,36 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
 
         # Processar ação
         if action == "confirm":
+            # Passo 3.4: a tomada de medicamento tem fluxo próprio — o serviço
+            # compartilhado grava na mesma transação do consumo da pendência e
+            # devolve o resultado real (registrada / já registrada / erro).
+            # Não passa pelo caminho de vitais: destino e efeitos são outros.
+            _mt_metric = None
+            async with db_pool.acquire() as _c:
+                _mt_metric = await _c.fetchval(
+                    """SELECT metric_type FROM pending_confirmations
+                       WHERE confirmation_code = $1 AND user_id = $2""",
+                    confirmation_code, user_id,
+                )
+            if _mt_metric == "MED_TOMADA":
+                try:
+                    from services.medication_take import confirm_pending_medication_take
+                    _mt_result = await confirm_pending_medication_take(
+                        db_pool, confirmation_code=confirmation_code, actor_id=user_id)
+                    await send_whatsapp_text(
+                        sender_phone,
+                        _mt_result.message or "Não foi possível registrar a tomada agora.")
+                except ImportError:  # pragma: no cover
+                    await send_whatsapp_text(
+                        sender_phone,
+                        "Não foi possível registrar a tomada agora. Tente novamente.")
+                except Exception as _mt_err:
+                    print(f"[Callback] Falha na tomada: {_mt_err}")
+                    await send_whatsapp_text(
+                        sender_phone,
+                        "Não foi possível registrar a tomada agora. Tente novamente em instantes.")
+                return
+
             success = await confirm_pending_confirmation(confirmation_code, user_id, db_pool)
             if success:
                 # Buscar dados da confirmação para a mensagem final
