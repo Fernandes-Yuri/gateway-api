@@ -186,6 +186,12 @@ except ImportError:  # pragma: no cover - fallback defensivo do monolito
     _WA_QUERY_HANDLERS = {}
 
 try:
+    from services.family_target import resolve_target_context as _wa_family_target_ctx
+    _WA_FAMILY_RESOLVER = _wa_family_target_ctx
+except ImportError:  # pragma: no cover - fallback defensivo do monolito
+    _WA_FAMILY_RESOLVER = None
+
+try:
     from webhook_security import verify_meta_signature
     HAS_WEBHOOK_SECURITY = True
 except ImportError:
@@ -531,6 +537,79 @@ async def handle_wa_medication_take(*, sender_phone: str, user_id: str, user_nam
     return True
 
 
+async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
+                                 msg_type: str, db, user_text: str,
+                                 context=None) -> bool:
+    """Mensagem de cuidado no WhatsApp (PR4, passo 4.3).
+
+    "Me lembra de beber água" vira uma proposta com destinatário e texto,
+    exigindo confirmação antes do envio. Não promete agenda nem envio futuro:
+    nesta entrega, lembrete é mensagem enviada após o clique (passo 4.4).
+
+    Retorna True quando respondeu (proposta com botões ou esclarecimento do
+    serviço); False caso contrário, e o pipeline segue.
+    """
+    if not user_id:
+        return False
+    try:
+        from services.care_messages import prepare_care_message
+        from services.operations import OperationContext
+    except ImportError:  # pragma: no cover - fallback defensivo do monolito
+        print("[WhatsApp Care] Serviço de mensagem de cuidado indisponível")
+        return False
+
+    care_ctx = context or OperationContext(
+        actor_id=user_id, patient_id=user_id, channel="whatsapp")
+
+    # Familiar mencionado? O alvo é o paciente do vínculo (passo 4.1).
+    if _WA_FAMILY_RESOLVER is not None:
+        care_ctx, _fam_err = await _WA_FAMILY_RESOLVER(db, care_ctx, user_text)
+        if _fam_err is not None and _fam_err.message:
+            await send_whatsapp_text(sender_phone, _fam_err.message)
+            return True
+
+    care_result = None
+    try:
+        async with db.acquire() as conn:
+            care_result = await prepare_care_message(
+                conn, db, context=care_ctx, text=user_text)
+    except Exception as care_err:
+        print(f"[WhatsApp Care] Falha ao preparar mensagem: {care_err}")
+        return False
+    if care_result is None or not care_result.message:
+        return False
+
+    if care_result.is_confirmation and care_result.pending_op_id:
+        await send_confirmation_buttons(
+            to_number=sender_phone,
+            metric_type="CARE_MESSAGE",
+            values={"body": (care_result.data or {}).get("body", "")},
+            confirmation_code=care_result.pending_op_id,
+            user_name=user_name,
+        )
+        print(f"[WhatsApp Care] Botões enviados: {care_result.pending_op_id}")
+    else:
+        # clarification (conteúdo insuficiente) / denied / unavailable.
+        await send_whatsapp_text(sender_phone, care_result.message)
+
+    # Log sem o conteúdo da mensagem pessoal (LGPD): só a intenção e o
+    # resultado, como nos demais fluxos de serviço.
+    try:
+        log_fine_tuning_sample(
+            user_prompt=user_text,
+            assistant_reply=care_result.message,
+            source="whatsapp_voice" if msg_type in ("audio", "voice") else "whatsapp",
+            system_prompt="care_messages (serviço, sem LLM)",
+            user_name=user_name,
+            action="MENSAGEM_CUIDADO",
+            action_params={"result": care_result.status,
+                           "confirmation_code": care_result.pending_op_id}
+        )
+    except Exception:
+        pass
+    return True
+
+
 # =============================================================
 # PIPELINE DE MENSAGEM ENTRANTE
 # =============================================================
@@ -701,15 +780,24 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         continue
 
                     # 2.8. Consultas de saúde (PR2, passo 2.3): o serviço
-                    # responde ANTES da conversa aberta — sem LLM. Só
-                    # autocuidado (familiar chega no PR4, com revalidação).
+                    # responde ANTES da conversa aberta — sem LLM.
+                    # PR4 (4.1/4.2): se a fala menciona outro pessoa, o alvo
+                    # é o familiar do vínculo ativo (actor != patient), com
+                    # permissão revalidada no próprio serviço.
                     wa_kind = detect_all(user_text).get("kind")
                     if user_id and wa_kind in _WA_QUERY_HANDLERS:
+                        _q_ctx = wa_ctx or context_from_identity(identity, message_id=msg_id)
                         _q_result = None
                         try:
                             async with db_pool.acquire() as _q_conn:
-                                _q_result = await _WA_QUERY_HANDLERS[wa_kind](
-                                    _q_conn, wa_ctx or context_from_identity(identity, message_id=msg_id))
+                                if _WA_FAMILY_RESOLVER is not None and _q_ctx is not None:
+                                    _q_ctx, _fam_err = await _WA_FAMILY_RESOLVER(
+                                        _q_conn, _q_ctx, user_text)
+                                    if _fam_err is not None and _fam_err.message:
+                                        await send_whatsapp_text(sender_phone, _fam_err.message)
+                                        continue
+                                if _q_ctx is not None:
+                                    _q_result = await _WA_QUERY_HANDLERS[wa_kind](_q_conn, _q_ctx)
                         except Exception as _q_err:
                             print(f"[WhatsApp Queries] Falha na consulta {wa_kind}: {_q_err}")
                             _q_result = None
@@ -723,7 +811,8 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                     source="whatsapp_query",
                                     system_prompt="health_queries (serviço, sem LLM)",
                                     user_name=user_name, action="CONSULTA",
-                                    action_params={"kind": wa_kind, "result": _q_result.status})
+                                    action_params={"kind": wa_kind, "result": _q_result.status,
+                                                   "self_care": _q_ctx is not None and _q_ctx.is_self_care})
                             except Exception:
                                 pass
                             await send_whatsapp_text(sender_phone, _q_result.message)
@@ -740,6 +829,20 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             user_text=user_text, context=wa_ctx,
                         )
                         if _t_handled:
+                            continue
+
+                    # 2.8c. Lembrete como mensagem de cuidado (PR4, passo
+                    # 4.3): o "me lembra" vira proposta de mensagem com
+                    # destinatário e texto, confirmada antes do envio. Não é
+                    # evento de agenda: nada é agendado, só enviado após o
+                    # clique (passo 4.4).
+                    if user_id and wa_kind == "reminder":
+                        _c_handled = await handle_wa_care_message(
+                            sender_phone=sender_phone, user_id=user_id,
+                            user_name=user_name, msg_type=msg_type, db=db_pool,
+                            user_text=user_text, context=wa_ctx,
+                        )
+                        if _c_handled:
                             continue
 
                     # 2.9. Camada 0 (Fase 4): router determinístico antes do LLM.
@@ -934,6 +1037,29 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
                     await send_whatsapp_text(
                         sender_phone,
                         "Não foi possível registrar a tomada agora. Tente novamente em instantes.")
+                return
+
+            # Passo 4.4: mensagem de cuidado enviada após confirmação, pelo
+            # contrato do app. O resultado real da entrega vira texto —
+            # falha nunca é anunciada como "enviado".
+            if _mt_metric == "CARE_MESSAGE":
+                try:
+                    from services.care_messages import confirm_pending_care_message
+                    _cm_result = await confirm_pending_care_message(
+                        db_pool, _state.send_care_message,
+                        confirmation_code=confirmation_code, actor_id=user_id)
+                    await send_whatsapp_text(
+                        sender_phone,
+                        _cm_result.message or "Não foi possível enviar a mensagem agora.")
+                except ImportError:  # pragma: no cover
+                    await send_whatsapp_text(
+                        sender_phone,
+                        "Não foi possível enviar a mensagem agora. Tente novamente.")
+                except Exception as _cm_err:
+                    print(f"[Callback] Falha na mensagem de cuidado: {_cm_err}")
+                    await send_whatsapp_text(
+                        sender_phone,
+                        "Não foi possível enviar a mensagem agora. Tente novamente em instantes.")
                 return
 
             success = await confirm_pending_confirmation(confirmation_code, user_id, db_pool)
@@ -1183,12 +1309,16 @@ class _AppState:
 
     db_pool = None
     sem_wa = None
+    # Passo 4.4: sender do contrato de cuidado do app (care_automations),
+    # injetado pelo server.py. Usado só no envio após confirmação.
+    send_care_message = None
 
 
 _state = _AppState()
 
 
-def configure_state(*, db_pool=None, sem_wa=None):
+def configure_state(*, db_pool=None, sem_wa=None, send_care_message=None):
     """Chamado por server.py ao subir a aplicacao."""
     _state.db_pool = db_pool
     _state.sem_wa = sem_wa
+    _state.send_care_message = send_care_message

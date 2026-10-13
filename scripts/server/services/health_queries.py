@@ -69,6 +69,43 @@ async def _resolve_zone(conn: Any, context: OperationContext,
     return zone_of(await patient_timezone(conn, context.patient_id))
 
 
+async def _owner_first_name(conn: Any, context: OperationContext) -> Optional[str]:
+    """
+    Passo 4.2: primeiro nome do paciente-alvo, lido no banco.
+
+    Autocuidado (actor == patient) devolve None: a mensagem trata a própria
+    pessoa. Familiar devolve o nome, para a resposta dizer de quem é o dado
+    — valor sem dono parece dado do próprio interlocutor.
+    """
+    if context.is_self_care:
+        return None
+    try:
+        nome = await conn.fetchval(
+            "SELECT full_name FROM profiles WHERE id=$1", context.patient_id)
+    except Exception as err:
+        print(f"[Health Queries] Aviso: nome do paciente não lido: {err}")
+        nome = None
+    return (nome or "").split()[0] or None
+
+
+def _last_reading_message(owner: Optional[str], label: str, value: str,
+                          unit: str, when: str) -> str:
+    """Última leitura nomeando o dono do dado (passo 4.2)."""
+    if owner is None:
+        return f"Sua última {label} foi {value} {unit}, registrada {when}."
+    return (f"A última {label} de {owner} foi {value} {unit}, "
+            f"registrada {when}.")
+
+
+def _no_reading_message(owner: Optional[str], label: str) -> str:
+    """Sem registros: informa a ausência, sem inferir estado de saúde."""
+    if owner is None:
+        return (f"Ainda não encontrei registros de {label} seu. Quando medir, "
+                f"é só me enviar aqui que eu anoto com sua confirmação.")
+    return (f"Ainda não encontrei registros de {label} de {owner}. "
+            f"Quando ele(a) medir, é só enviar aqui que eu anoto.")
+
+
 def format_value(kind: str, row: Any) -> str:
     """Valor já formatado para exibição (ex.: '130 x 85', '74,5')."""
     if kind == "pressao":
@@ -119,6 +156,7 @@ async def _query_reading(conn: Any, context: OperationContext, kind: str,
     if denied:
         return denied
     tz = await _resolve_zone(conn, context, zone_name)
+    owner = await _owner_first_name(conn, context)
     colunas, nao_nulo = _COLS[kind]
     try:
         row = await conn.fetchrow(
@@ -133,12 +171,11 @@ async def _query_reading(conn: Any, context: OperationContext, kind: str,
             "Não consegui acessar seus registros agora. Tente novamente em instantes.")
     if not row:
         return OperationResult.missing_data(
-            f"Ainda não encontrei registros de {_LABEL[kind]} seu. Quando medir, "
-            f"é só me enviar aqui que eu anoto com sua confirmação.",
+            _no_reading_message(owner, _LABEL[kind]),
             data={"kind": kind})
     return OperationResult.success(
-        f"Sua última {_LABEL[kind]} foi {format_value(kind, row)} {_UNIT[kind]}, "
-        f"registrada {format_when(row['measured_at'], tz)}.",
+        _last_reading_message(owner, _LABEL[kind], format_value(kind, row),
+                              _UNIT[kind], format_when(row["measured_at"], tz)),
         data={"kind": kind, "value": format_value(kind, row),
               "unit": _UNIT[kind], "measured_at": row["measured_at"].isoformat()})
 
@@ -172,6 +209,7 @@ async def last_weight(conn: Any, context: OperationContext,
     if denied:
         return denied
     tz = await _resolve_zone(conn, context, zone)
+    owner = await _owner_first_name(conn, context)
     try:
         row = await conn.fetchrow(
             """SELECT weight_kg, measured_at FROM biometrics
@@ -188,13 +226,13 @@ async def last_weight(conn: Any, context: OperationContext,
             "Não consegui acessar seus registros agora. Tente novamente em instantes.")
     if not row:
         return OperationResult.missing_data(
-            "Ainda não encontrei registros de peso seu. Quando se pesar, é só me "
-            "enviar aqui, como 'meu peso 74,5 kg', que eu anoto com sua confirmação.",
+            _no_reading_message(owner, "peso"),
             data={"kind": "peso"})
     peso = row["weight_kg"]
     value = f"{peso:.1f}".replace(".", ",") if isinstance(peso, float) else str(peso)
     return OperationResult.success(
-        f"Seu último peso foi {value} kg, registrado {format_when(row['measured_at'], tz)}.",
+        _last_reading_message(owner, "peso", value, "kg",
+                              format_when(row["measured_at"], tz)),
         data={"kind": "peso", "value": value, "unit": "kg",
               "measured_at": row["measured_at"].isoformat()})
 
@@ -207,6 +245,7 @@ async def water_today(conn: Any, context: OperationContext, *,
     if denied:
         return denied
     tz = await _resolve_zone(conn, context, zone)
+    owner = await _owner_first_name(conn, context)
     inicio, fim = day_bounds(day, tz)
     try:
         total = await conn.fetchval(
@@ -221,13 +260,14 @@ async def water_today(conn: Any, context: OperationContext, *,
             "Não consegui acessar seus registros agora. Tente novamente em instantes.")
     total = int(total or 0)
     dia_iso = (day or datetime.now(tz).date()).isoformat()
+    sujeito = "Você" if owner is None else owner
     if total <= 0:
         return OperationResult.missing_data(
-            "Você ainda não registrou água hoje. Que tal um copo agora? "
-            "Me diga a quantidade, como 'bebi 200 ml'.",
+            (f"{sujeito} ainda não registrou água hoje. Que tal um copo agora? "
+             "Me diga a quantidade, como 'bebi 200 ml'."),
             data={"kind": "agua", "ml": 0, "day": dia_iso})
     return OperationResult.success(
-        f"Você registrou {total} ml de água hoje.",
+        f"{sujeito} registrou {total} ml de água hoje.",
         data={"kind": "agua", "ml": total, "day": dia_iso})
 
 
@@ -239,6 +279,7 @@ async def day_summary(conn: Any, context: OperationContext, *,
     if denied:
         return denied
     tz = await _resolve_zone(conn, context, zone)
+    owner = await _owner_first_name(conn, context)
     inicio, fim = day_bounds(day, tz)
     try:
         rows = await conn.fetch(
@@ -288,7 +329,8 @@ async def day_summary(conn: Any, context: OperationContext, *,
     dia_iso = (day or datetime.now(tz).date()).isoformat()
     if not leituras and agua <= 0:
         return OperationResult.missing_data(
-            "Ainda não há registros seus hoje. Quando medir ou beber água, é só me avisar.",
+            (f"Ainda não há registros{' de ' + owner if owner else ' seus'} hoje. "
+             "Quando medir ou beber água, é só me avisar."),
             data={"day": dia_iso, "readings": []})
     partes = []
     if agua > 0:
@@ -296,6 +338,7 @@ async def day_summary(conn: Any, context: OperationContext, *,
     for leitura in leituras:
         partes.append(f"{_LABEL[leitura['kind']].capitalize()}: {leitura['value']} "
                       f"{leitura['unit']} {format_when(leitura['at'], tz)}")
+    titulo = "Resumo de hoje" if owner is None else f"Resumo de hoje de {owner}"
     return OperationResult.success(
-        "Resumo de hoje: " + "; ".join(partes) + ".",
+        titulo + ": " + "; ".join(partes) + ".",
         data={"day": dia_iso, "water_ml": agua, "readings": leituras})

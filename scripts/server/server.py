@@ -379,6 +379,12 @@ def _propagate_db_pool():
     """
     for _router in _POOL_ROUTERS:
         _router._state.db_pool = db_pool
+    # Passo 4.4: o sender de cuidado vive no closure do startup; o router do
+    # WhatsApp só o usa no envio pós-confirmação. Sem pool, não há envio.
+    if db_pool is not None:
+        whatsapp_router._state.send_care_message = _care_sender
+    else:
+        whatsapp_router._state.send_care_message = None
 
 
 @app.on_event("startup")
@@ -839,9 +845,12 @@ sync_router.configure_state(
 app.include_router(sync_router.router)
 
 # Registro do router do WhatsApp (Fase A passo 7), com respostas em texto.
+# send_care_message (passo 4.4) é definido abaixo no startup e propagado por
+# _propagate_db_pool, junto com o pool — não existe aqui em tempo de import.
 whatsapp_router.configure_state(
     db_pool=None,  # preenchido no startup (init_db)
     sem_wa=SEM_WA,
+    send_care_message=None,
 )
 app.include_router(whatsapp_router.router)
 

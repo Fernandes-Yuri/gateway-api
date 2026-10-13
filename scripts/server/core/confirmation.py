@@ -314,6 +314,11 @@ def build_confirmation_message(metric_type: str, values: dict, confirmation_code
                 hora = ""
         value_display = f"{values.get('name', 'Medicamento')}{hora}"
         icon = "💊"
+    elif metric_type == "CARE_MESSAGE":
+        # Passo 4.3: mensagem de cuidado. Mostra o texto a enviar; o
+        # destinatário já foi apresentado na proposta do serviço.
+        value_display = (values.get("body") or "")[:120]
+        icon = "💌"
     else:
         value_display = str(values)
         icon = "📋"
