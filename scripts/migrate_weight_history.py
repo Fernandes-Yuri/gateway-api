@@ -27,43 +27,34 @@ import asyncpg
 
 SOURCE_MARK = "migrated_vital_signs"
 
-SQL_COUNT = "SELECT count(*) FROM vital_signs WHERE weight_kg IS NOT NULL"
+SQL_COUNT = "SELECT count(*) FROM vital_signs vs WHERE to_jsonb(vs)->>'weight_kg' IS NOT NULL"
 
 SQL_SAMPLE = """
-SELECT vs.user_id, vs.weight_kg, vs.measured_at
-FROM vital_signs vs
-WHERE vs.weight_kg IS NOT NULL
-ORDER BY vs.measured_at DESC
-LIMIT 20
+SELECT vs.user_id, (to_jsonb(vs)->>'weight_kg')::double precision AS weight_kg, vs.measured_at
+FROM vital_signs vs WHERE to_jsonb(vs)->>'weight_kg' IS NOT NULL
+ORDER BY vs.measured_at DESC LIMIT 20
 """
 
 SQL_MIGRATE = """
+WITH legacy AS (
+    SELECT vs.user_id, (to_jsonb(vs)->>'weight_kg')::double precision AS weight_kg,
+           vs.measured_at, CASE WHEN p.height > 3 THEN p.height / 100.0 ELSE p.height END AS height_m
+    FROM vital_signs vs LEFT JOIN profiles p ON p.id = vs.user_id
+    WHERE to_jsonb(vs)->>'weight_kg' IS NOT NULL
+)
 INSERT INTO biometrics (user_id, weight_kg, height_m, imc, measured_at, source)
-SELECT
-    vs.user_id,
-    vs.weight_kg,
-    CASE
-        WHEN p.height IS NULL THEN NULL
-        WHEN p.height > 3 THEN p.height / 100.0
-        ELSE p.height
-    END AS height_m,
-    CASE
-        WHEN p.height IS NULL THEN NULL
-        ELSE round(vs.weight_kg / power(
-            CASE WHEN p.height > 3 THEN p.height / 100.0 ELSE p.height END, 2), 1)
-    END AS imc,
-    vs.measured_at,
-    $1
-FROM vital_signs vs
-LEFT JOIN profiles p ON p.id = vs.user_id
-WHERE vs.weight_kg IS NOT NULL
-  AND NOT EXISTS (
-      SELECT 1 FROM biometrics b
-      WHERE b.user_id = vs.user_id
-        AND b.measured_at = vs.measured_at
-        AND b.weight_kg = vs.weight_kg
-  )
+SELECT vs.user_id, vs.weight_kg,
+       CASE WHEN vs.height_m BETWEEN 0.5 AND 2.5 THEN vs.height_m END,
+       CASE WHEN vs.height_m BETWEEN 0.5 AND 2.5
+            THEN round((vs.weight_kg / power(vs.height_m, 2))::numeric, 1) END,
+       vs.measured_at, $1
+FROM legacy vs
+WHERE NOT EXISTS (
+    SELECT 1 FROM biometrics b WHERE b.user_id = vs.user_id
+      AND b.measured_at = vs.measured_at AND b.weight_kg = vs.weight_kg
+)
 """
+
 
 
 async def main(dry_run: bool) -> int:

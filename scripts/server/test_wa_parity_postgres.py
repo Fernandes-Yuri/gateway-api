@@ -11,7 +11,7 @@ import asyncpg
 from core.confirmation import confirm_pending_confirmation
 from routers import sync
 from services.care_messages import prepare_care_message, confirm_pending_care_message
-from services.health_queries import last_weight, last_blood_pressure
+from services.health_queries import last_weight, last_blood_pressure, day_summary
 from services.medication_take import prepare_medication_take, confirm_pending_medication_take
 from services.operations import OperationContext
 from services.wa_preferences import handle_preference, confirm_pending_preference
@@ -102,7 +102,11 @@ class WhatsAppPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await confirm_pending_confirmation(code, 'actor', self.pool))
         async with self.pool.acquire() as conn:
             weight = await last_weight(conn, self.context)
+            self.assertEqual(weight.status, 'success', weight.message)
             self.assertEqual(weight.data['value'], '75,5')
+            summary = await day_summary(conn, self.context)
+            self.assertEqual(summary.status, 'success', summary.message)
+            self.assertEqual(len(summary.data['readings']), 1)
             self.assertEqual(await conn.fetchval('SELECT count(*) FROM biometrics'), 1)
         value = sync.BiometrySyncDto(id=uuid.uuid4(), userId='actor', weight=76, height=170, measuredAt='2026-10-13T12:00:00Z')
         with patch.object(sync._state, 'db_pool', self.pool):
