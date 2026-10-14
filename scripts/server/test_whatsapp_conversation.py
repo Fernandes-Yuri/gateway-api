@@ -66,6 +66,7 @@ class WhatsAppPipelineTests(unittest.IsolatedAsyncioTestCase):
         from services import wa_session_context
         wa_session_context._sessions.clear()
         self.wa = whatsapp
+        self.original_fast_lane = whatsapp.match_fast_lane_intent
         self.send = AsyncMock()
         conn = MagicMock()
         conn.execute = AsyncMock()
@@ -174,6 +175,26 @@ class WhatsAppPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('not delivered', str(context.messages('policy', 'oi')))
         finally:
             context.reset(token)
+
+    async def test_round8_download_uses_real_fast_lane_and_returns_one_current_link(self):
+        from orb_router import detect_all
+        from services.wa_onboarding import DOWNLOAD_URL, clear
+        clear('5500000000000')
+        with patch.object(self.wa, 'match_fast_lane_intent', side_effect=self.original_fast_lane), \
+             patch.object(self.wa, 'detect_all', side_effect=detect_all):
+            await self.deliver('como baixar o app')
+            first = self.send.await_args.args[1]
+            await self.deliver('como baixar o app')
+            second = self.send.await_args.args[1]
+        self.assertEqual(self.send.await_count, 2)
+        for reply in (first, second):
+            self.assertIn(DOWNLOAD_URL, reply)
+            self.assertNotIn('desenvolvimento', reply)
+            self.assertNotIn('Play Store', reply)
+            self.assertNotIn('Vincular WhatsApp', reply)
+            self.assertEqual(reply.count(DOWNLOAD_URL), 1)
+        self.assertNotEqual(first, second)
+        self.client.post.assert_not_awaited()
 
     async def test_linked_download_uses_official_page_without_model(self):
         from services.wa_onboarding import DOWNLOAD_URL, clear

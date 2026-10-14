@@ -4,7 +4,7 @@ from collections import OrderedDict
 from time import monotonic
 from services.wa_channel_privacy import norm, phone_hash
 
-DOWNLOAD_URL = 'https://bragasaude.online/app-download.html'
+from services.wa_download_links import DOWNLOAD_URL
 _counters = OrderedDict()
 
 

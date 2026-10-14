@@ -94,6 +94,8 @@ async def send_whatsapp_text(
     Envia uma mensagem de texto simples.
     Válido dentro da janela de 24h aberta pelo usuário.
     """
+    from services.wa_download_links import has_download_link
+    preview_url = bool(preview_url or has_download_link(text))
     cleaned_number = sanitize_phone_number(to_number)
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",

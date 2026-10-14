@@ -73,6 +73,7 @@ router = APIRouter()
 
 
 from services import wa_session_context as dialogue
+from services.wa_download_links import DOWNLOAD_REPLY
 
 
 async def _send_context_text(phone, text):
@@ -321,8 +322,7 @@ FAST_LANE_INTENTS = {
         "keywords": ["obrigado", "obrigada", "valeu", "gratidão", "muito obrigado", "muito obrigada", "agradeço"]
     },
     "app_info": {
-        "text": "O aplicativo Braga Saúde ainda está em fase de desenvolvimento e com carinho muito em breve estará disponível na Play Store! Por enquanto, você já pode acessar para conhecer os Termos de Uso e a Política de Privacidade. O app vai te ajudar a acompanhar sua hidratação, pressão arterial e rotina, com o objetivo principal de gerar um relatório em PDF bem organizado para você levar ao médico, tornando a avaliação e as decisões clínicas muito mais assertivas. Vou deixar o link logo abaixo para você poder conferir com calma!",
-        "link_text": "https://bragasaude.online/",
+        "text": DOWNLOAD_REPLY,
         "keywords": ["onde baixo", "como baixo", "link do app", "link do aplicativo", "baixar o app", "onde encontro o app", "mandar o link", "como baixar", "link para baixar", "onde baixar", "baixar aplicativo"]
     }
 }
@@ -901,7 +901,11 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                                    if wa_kind != "out_of_scope" and wa_kind != "model_identity"
                                    else None)
                     if fast_intent:
-                        reply_text = FAST_LANE_INTENTS[fast_intent]["text"]
+                        if fast_intent == "app_info":
+                            from services.wa_onboarding import linked_download_reply
+                            reply_text = linked_download_reply(sender_phone)
+                        else:
+                            reply_text = FAST_LANE_INTENTS[fast_intent]["text"]
 
                         print(f"[WhatsApp Fast-Lane] Intent '{fast_intent}'")
 
