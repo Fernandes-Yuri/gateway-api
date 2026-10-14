@@ -49,7 +49,9 @@ from core.confirmation import (
     send_confirmation_buttons,
     validate_health_data,
 )
-from core.dataset import log_fine_tuning_sample
+# WhatsApp não alimenta o dataset de treinamento. O app mantém seu pipeline.
+def log_fine_tuning_sample(*args, **kwargs):
+    return None
 from core.text import clean_text_for_tts
 from orb_router import (
     ESCALATION_SUFFIX,
@@ -477,6 +479,7 @@ async def handle_wa_health_confirmation(*, sender_phone: str, user_id: str, user
         db_pool=db
     )
     if confirmation_code:
+        await mark_channel_pending(db, confirmation_code, sender_phone, actor_id)
         await send_confirmation_buttons(
             to_number=sender_phone,
             metric_type=metric_type,
@@ -562,6 +565,7 @@ async def handle_wa_medication_take(*, sender_phone: str, user_id: str, user_nam
     _remember_operation(user_id, user_text, take_result, "med_take")
 
     if take_result.is_confirmation and take_result.pending_op_id:
+        await mark_channel_pending(db, take_result.pending_op_id, sender_phone, take_ctx.actor_id)
         await send_whatsapp_text(sender_phone, take_result.message)
         await send_confirmation_buttons(
             to_number=sender_phone,
@@ -645,6 +649,7 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
         return False
 
     if care_result.is_confirmation and care_result.pending_op_id:
+        await mark_channel_pending(db, care_result.pending_op_id, sender_phone, care_ctx.actor_id)
         await send_whatsapp_text(sender_phone, care_result.message)
         await send_confirmation_buttons(
             to_number=sender_phone,
@@ -679,74 +684,20 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
 async def handle_wa_preference(*, sender_phone: str, user_id: str, user_name,
                                msg_type: str, db, user_text: str,
                                context=None) -> bool:
-    """Preferências da conta no WhatsApp (PR5, passos 5.1 a 5.3).
-
-    Chave é a conta (nunca o telefone), escopo idêntico ao app: apelido,
-    extensão das respostas e volume do copo. Gravação só após confirmar a
-    proposta ativa; "sim" sem pendência não altera nada.
-
-    Retorna True quando respondeu (lista, proposta com botões ou
-    esclarecimento); False quando a fala não é de preferência e o pipeline
-    deve seguir seu fluxo normal.
-    """
-    if not user_id:
+    """Preferências persistentes pertencem ao app, não a este assistente."""
+    from services.wa_preferences import detect_preference_intent
+    if not detect_preference_intent(user_text):
         return False
-    try:
-        from services.wa_preferences import handle_preference
-        from services.operations import OperationContext
-    except ImportError:  # pragma: no cover - fallback defensivo do monolito
-        print("[WhatsApp Preferences] Serviço de preferências indisponível")
-        return False
-
-    pref_ctx = context or OperationContext(
-        actor_id=user_id, patient_id=user_id, channel="whatsapp")
-
-    pref_result = None
-    try:
-        async with db.acquire() as conn:
-            pref_result = await handle_preference(
-                conn, db, context=pref_ctx, text=user_text)
-    except Exception as pref_err:
-        print(f"[WhatsApp Preferences] Falha: {pref_err}")
-        return False
-    if pref_result is None or not pref_result.message:
-        # None = não é intenção de preferência; deixa o pipeline seguir.
-        return False
-
-    if pref_result.is_confirmation and pref_result.pending_op_id:
-        await send_whatsapp_text(sender_phone, pref_result.message)
-        await send_confirmation_buttons(
-            to_number=sender_phone,
-            metric_type="PREFERENCE",
-            values={"describe": (pref_result.data or {}).get("key", "")},
-            confirmation_code=pref_result.pending_op_id,
-            user_name=user_name,
-        )
-        print(f"[WhatsApp Preferences] Botões enviados: {pref_result.pending_op_id}")
-    else:
-        await send_whatsapp_text(sender_phone, pref_result.message)
-
-    # Log sem o apelido (dado pessoal): só a intenção e o resultado.
-    try:
-        log_fine_tuning_sample(
-            user_prompt=user_text,
-            assistant_reply=pref_result.message,
-            source="whatsapp_voice" if msg_type in ("audio", "voice") else "whatsapp",
-            system_prompt="wa_preferences (serviço, sem LLM)",
-            user_name=user_name,
-            action="PREFERENCIA",
-            action_params={"result": pref_result.status,
-                           "confirmation_code": pref_result.pending_op_id}
-        )
-    except Exception:
-        pass
+    await send_whatsapp_text(sender_phone,
+        "Não guardo apelidos nem preferências neste assistente WhatsApp. "
+        "Uso o nome da sua conta; configurações pessoais ficam no aplicativo Braga Saúde.")
     return True
 
 
 # =============================================================
 # PIPELINE DE MENSAGEM ENTRANTE
 # =============================================================
-async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
+async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
     """Processa mensagens recebidas no WhatsApp e responde usando a IA Qwen 2.5 72B."""
     if not HAS_WHATSAPP:
         return
@@ -773,11 +724,11 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         audio_info = msg.get("audio") or msg.get("voice") or {}
                         media_id = audio_info.get("id")
                         if media_id:
-                            print(f"[WhatsApp Audio] Processando áudio ID {media_id} de {sender_phone}...")
+                            print("[WhatsApp Audio] Processando áudio após aceite")
                             audio_bytes = await download_whatsapp_media(media_id)
                             if audio_bytes:
                                 user_text = await transcribe_audio_whisper(audio_bytes, GROQ_API_KEY_WHATSAPP) or ""
-                                print(f"[WhatsApp Audio] Transcrição concluída: '{user_text}'")
+                                print("[WhatsApp Audio] Transcrição concluída")
                         if not user_text:
                             await send_whatsapp_text(
                                 sender_phone,
@@ -797,6 +748,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         try:
                             async with db_pool.acquire() as _conn:
                                 _seen = await claim_message_receipt(_conn, msg_id)
+                                await _conn.execute("UPDATE whatsapp_message_receipts SET phone_hash=$2 WHERE message_id=$1", msg_id, channel_phone_hash(sender_phone))
                             if not _seen:
                                 print(f"[WhatsApp Dedup] Reenvio ignorado: {msg_id}")
                                 continue
@@ -804,9 +756,9 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             print(f"[WhatsApp Dedup] Aviso: {msg_id}: {_dedup_err}")
 
                     wa_tid = trace_llm('whatsapp', 'request', user_text=user_text,
-                                       msg_type=msg_type, phone_tail=(sender_phone or '')[-4:])
+                                       msg_type=msg_type, phone_hash=channel_phone_hash(sender_phone))
 
-                    print(f"[WhatsApp Webhook] Mensagem recebida de {sender_phone} ({msg_type}): {user_text}")
+                    print(f"[WhatsApp Webhook] Mensagem autorizada ({msg_type})")
 
                     # Reação humanizada e sutil: se a mensagem tiver tom carinhoso/amoroso/agradecimento, reage com coração verde 💚
                     if msg_id and is_warm_and_affectionate(user_text):
@@ -840,7 +792,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             identity = {"status": STATUS_UNAVAILABLE, "user_id": None, "full_name": None}
                     verified_link = identity.get("status") == STATUS_OK
                     user_id = identity.get("user_id") if verified_link else None
-                    user_name = identity.get("full_name") if verified_link else None
+                    user_name = first_name(identity.get("full_name")) if verified_link else None
 
                     # Passo 1.5: a identidade resolvida vira o contexto de
                     # operação (actor/patient/channel/message_id) que os
@@ -925,7 +877,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     if fast_intent:
                         reply_text = FAST_LANE_INTENTS[fast_intent]["text"]
 
-                        print(f"[WhatsApp Fast-Lane] Intent '{fast_intent}' engatilhado para {sender_phone}!")
+                        print(f"[WhatsApp Fast-Lane] Intent '{fast_intent}'")
 
                         # Registra no dataset de fine-tuning (higienizado por LGPD)
                         log_fine_tuning_sample(
@@ -1067,21 +1019,6 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         continue
                     if wa_route["type"] == "vitals" and user_id:
                         _wa_action = _WA_METRIC_TO_ACTION.get(wa_route["metric"])
-                        # Passo 5.4: no autocuidado, "um copo" sem volume
-                        # declarado usa o copo habitual da conta. A
-                        # preferência é do interlocutor: no cuidado
-                        # familiar (actor != patient) ela nunca preenche o
-                        # registro do paciente.
-                        if _wa_action == "REGISTRAR_AGUA" and wa_ctx and wa_ctx.is_self_care:
-                            try:
-                                from services.wa_preferences import resolve_cup_ml
-                                async with db_pool.acquire() as _cup_conn:
-                                    _copo_ml = await resolve_cup_ml(
-                                        _cup_conn, wa_ctx, user_text)
-                                if _copo_ml and wa_route.get("values"):
-                                    wa_route["values"]["quantidade_ml"] = _copo_ml
-                            except Exception as _cup_err:
-                                print(f"[WhatsApp Preferences] Aviso copo habitual: {_cup_err}")
                         _wa_handled = await handle_wa_health_confirmation(
                             sender_phone=sender_phone, user_id=user_id, user_name=user_name,
                             msg_type=msg_type, db=db_pool, action_name=_wa_action,
@@ -1102,16 +1039,9 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     # da conta do INTERLOCUTOR são carregadas como o app faz
                     # (context_prompt), no mesmo conteúdo persistido.
                     _wa_prefs = {}
-                    if user_id:
-                        try:
-                            from services.wa_preferences import read_preferences
-                            async with db_pool.acquire() as _pref_conn:
-                                _wa_prefs = await read_preferences(_pref_conn, user_id)
-                        except Exception as _pref_err:
-                            print(f"[WhatsApp Preferences] Aviso ao carregar: {_pref_err}")
                     conv_prompt = build_conversation_system(
                         "whatsapp", preferences=_wa_prefs,
-                        self_care=wa_ctx.is_self_care if wa_ctx else True)
+                        self_care=wa_ctx.is_self_care if wa_ctx else True, account_name=user_name)
 
                     # 4. Resposta com IA Qwen (Groq)
                     headers = {
@@ -1194,7 +1124,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
 # =============================================================
 # CALLBACK DE CONFIRMAÇÃO (botões)
 # =============================================================
-async def handle_confirmation_callback(button_id: str, sender_phone: str):
+async def _handle_authorized_confirmation_callback(button_id: str, sender_phone: str):
     """Processa cliques nos botões de confirmação."""
     db_pool = _state.db_pool
     try:
@@ -1234,7 +1164,7 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
                 user_id = _cb_identity["user_id"]
 
         if not user_id:
-            print(f"[Callback] Sem vínculo confirmado para telefone: {sender_phone}")
+            print("[Callback] Sem vínculo confirmado")
             await send_whatsapp_text(
                 sender_phone,
                 "Não encontrei uma conta vinculada a este WhatsApp. "
@@ -1312,22 +1242,9 @@ async def handle_confirmation_callback(button_id: str, sender_phone: str):
             # PR5, passo 5.2: confirma a proposta de preferência ativa e grava
             # na mesma conta do app. Reenvio do botão não duplica.
             if _mt_metric == "PREFERENCE":
-                try:
-                    from services.wa_preferences import confirm_pending_preference
-                    _pr_result = await confirm_pending_preference(
-                        db_pool, confirmation_code=confirmation_code, actor_id=user_id)
-                    await send_whatsapp_text(
-                        sender_phone,
-                        _pr_result.message or "Não consegui confirmar a alteração agora.")
-                except ImportError:  # pragma: no cover
-                    await send_whatsapp_text(
-                        sender_phone,
-                        "Não consegui confirmar a alteração agora. Tente novamente.")
-                except Exception as _pr_err:
-                    print(f"[Callback] Falha na preferência: {_pr_err}")
-                    await send_whatsapp_text(
-                        sender_phone,
-                        "Não consegui confirmar a alteração agora. Nada foi gravado.")
+                await cancel_pending_confirmation(confirmation_code, user_id, db_pool)
+                await send_whatsapp_text(sender_phone,
+                    "Esta proposta de preferência foi encerrada. Não guardo apelidos nem preferências neste assistente WhatsApp.")
                 return
 
             success = await confirm_pending_confirmation(confirmation_code, user_id, db_pool)
@@ -1509,7 +1426,7 @@ async def process_whatsapp_webhook_payload(body: Dict[str, Any]):
                     button_id = (interactive.get(reply_key) or {}).get('id')
                     sender_phone = msg.get('from')
                     if button_id and sender_phone:
-                        await handle_confirmation_callback(button_id=button_id, sender_phone=sender_phone)
+                        await handle_confirmation_callback(button_id=button_id, sender_phone=sender_phone, timestamp=msg.get('timestamp'))
                         continue
                 single = {'entry': [{**entry, 'changes': [{**change, 'value': {**value, 'messages': [msg]}}]}]}
                 await process_incoming_whatsapp_payload(single)
@@ -1529,23 +1446,13 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
 
     try:
         body = json.loads(raw_body.decode("utf-8"))
-        # AUD-G(M): persiste o evento BRUTO no outbox ANTES de ackar. Se o
-        # processo cair entre este ponto e o retorno 200, a mensagem se perde
-        # (a Meta não reenvia quem ackou). Falha aqui é só warning — melhor
-        # processar sem registro que perder a mensagem inteira.
+        from services.wa_channel_storage import event_metadata, append_event
+        event = {"ts": datetime.utcnow().isoformat(), "payload": event_metadata(body)}
         try:
-            with open(WEBHOOK_OUTBOX_PATH, "a", encoding="utf-8") as _f:
-                _f.write(json.dumps({
-                    "ts": datetime.utcnow().isoformat(),
-                    "payload": body,
-                }, ensure_ascii=False) + "\n")
-        except Exception as _e:
-            print(f"[WhatsApp Webhook] Aviso: não gravou no outbox: {_e}")
-
-        WHATSAPP_EVENT_LOG.append({
-            "timestamp": datetime.utcnow().isoformat(),
-            "payload": body
-        })
+            append_event(WEBHOOK_OUTBOX_PATH, event)
+        except Exception:
+            print("[WhatsApp Webhook] Falha ao gravar metadados do recebimento")
+        WHATSAPP_EVENT_LOG.append(event)
         if len(WHATSAPP_EVENT_LOG) > 200:
             WHATSAPP_EVENT_LOG.pop(0)
 
@@ -1616,3 +1523,138 @@ async def emergency_options_page():
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
     })
+
+
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+_channel_locks = ContextVar('wa_channel_locks', default=frozenset())
+from services.display_names import first_name
+from services.wa_channel_privacy import phone_hash as channel_phone_hash, mark_pending as mark_channel_pending
+
+
+@asynccontextmanager
+async def _channel_serialized(phone):
+    # Every conversation action and deletion share this lock. Business helpers
+    # use their own connections/transactions, so use a separate key namespace.
+    pool = _state.db_pool
+    if not pool:
+        yield
+        return
+    key = "pipeline:" + channel_phone_hash(phone)
+    held = (key, asyncio.current_task())
+    if held in _channel_locks.get():
+        yield
+        return
+    loop = asyncio.get_running_loop()
+    if getattr(_state, 'privacy_pool', None) is not pool or getattr(_state, 'privacy_loop', None) is not loop:
+        getter = getattr(pool, 'get_max_size', None)
+        size = getter() if callable(getter) else 3
+        size = size if type(size) is int else 3
+        # Reserve pool capacity for nested business transactions.
+        _state.privacy_sem = asyncio.Semaphore(max(1, size // 3))
+        _state.privacy_pool, _state.privacy_loop = pool, loop
+    async with _state.privacy_sem:
+        async with pool.acquire() as conn:
+            await conn.execute('SELECT pg_advisory_lock(hashtextextended($1, 0))', key)
+            token = _channel_locks.set(_channel_locks.get() | {held})
+            try:
+                yield
+            finally:
+                _channel_locks.reset(token)
+                await conn.execute('SELECT pg_advisory_unlock(hashtextextended($1, 0))', key)
+
+
+async def _send_channel_prompt(phone, text, buttons):
+    if buttons:
+        result = await send_whatsapp_interactive(phone, text, buttons)
+        if isinstance(result, dict) and result.get('success') is True:
+            return
+    if text:
+        await send_whatsapp_text(phone, text)
+
+
+async def _channel_privacy_guard(phone, *, text='', button_id='', timestamp=None):
+    """True = consumed. No media, clinical service, model or callback first."""
+    from services.wa_channel_privacy import (
+        consent_gate, deletion_request, prepare_deletion, resolve_deletion,
+        DELETED_TEXT, UNAVAILABLE_TEXT)
+    # Public rescue is the sole care exception to the consent gate.
+    if text and detect_all(text).get('kind') == 'emergency':
+        await send_whatsapp_emergency(phone, send_text=send_whatsapp_text)
+        return True
+    pool = _state.db_pool
+    if not pool:
+        await send_whatsapp_text(phone, UNAVAILABLE_TEXT)
+        return True
+    cleanup_started = False
+    try:
+        from services.wa_channel_storage import finish_channel_cleanup
+        async with pool.acquire() as conn:
+            pending_cleanup = await conn.fetchval('SELECT EXISTS(SELECT 1 FROM whatsapp_channel_cleanup WHERE phone_hash=$1)', channel_phone_hash(phone))
+        if pending_cleanup is True:
+            cleanup_started = True
+            await finish_channel_cleanup(pool, channel_phone_hash(phone), outbox_path=WEBHOOK_OUTBOX_PATH)
+            await send_whatsapp_text(phone, DELETED_TEXT)
+            return True
+        result = await resolve_deletion(pool, phone, text=text, button_id=button_id, timestamp=timestamp)
+        if isinstance(result, dict) and result.get('deleted'):
+            cleanup_started = True
+            _WA_OPERATION_MEMORY.pop(result.get('actor_id'), None)
+            for memory in (_WA_MEMORY, _WA_LASTFALA, _WA_SYMPTOM):
+                memory.pop(''.join(filter(str.isdigit, phone)), None)
+            filtered = []
+            for event in WHATSAPP_EVENT_LOG:
+                items = [item for item in (event.get('payload') or {}).get('events', [])
+                         if item.get('phone_hash') != channel_phone_hash(phone)]
+                if items:
+                    filtered.append({**event, 'payload': {'events': items, 'content_redacted': True}})
+            WHATSAPP_EVENT_LOG[:] = filtered
+            await finish_channel_cleanup(pool, channel_phone_hash(phone), outbox_path=WEBHOOK_OUTBOX_PATH)
+            await send_whatsapp_text(phone, result['message'])
+            return True
+        if result is not None:
+            await send_whatsapp_text(phone, result)
+            return True
+        if deletion_request(text):
+            async with pool.acquire() as conn:
+                identity = await resolve_linked_account(conn, phone)
+            if identity.get('status') in (STATUS_UNAVAILABLE, 'ambiguous'):
+                await send_whatsapp_text(phone, UNAVAILABLE_TEXT)
+                return True
+            message, buttons = await prepare_deletion(pool, phone, identity.get('user_id'))
+            await _send_channel_prompt(phone, message, buttons)
+            return True
+        blocked, message, buttons = await consent_gate(pool, phone, text=text,
+            button_id=button_id, timestamp=timestamp)
+        if blocked:
+            await _send_channel_prompt(phone, message, buttons)
+        return blocked
+    except Exception:
+        print('[WhatsApp Privacy] Operação indisponível')
+        message = ('Seu número foi desvinculado. A limpeza dos dados do canal ainda está em andamento. '
+                   'Sua conta e histórico no app foram preservados.' if cleanup_started else UNAVAILABLE_TEXT)
+        await send_whatsapp_text(phone, message)
+        return True
+
+
+async def process_incoming_whatsapp_payload(payload):
+    for entry in payload.get('entry', []):
+        for change in entry.get('changes', []):
+            value = change.get('value') or {}
+            for message in value.get('messages', []):
+                phone = message.get('from')
+                if not phone:
+                    continue
+                async with _channel_serialized(phone):
+                    text = (message.get('text') or {}).get('body', '') if message.get('type') == 'text' else ''
+                    if await _channel_privacy_guard(phone, text=text, timestamp=message.get('timestamp')):
+                        continue
+                    single = {'entry': [{**entry, 'changes': [{**change, 'value': {**value, 'messages': [message]}}]}]}
+                    await _process_authorized_whatsapp_payload(single)
+
+
+async def handle_confirmation_callback(button_id, sender_phone, timestamp=None):
+    async with _channel_serialized(sender_phone):
+        if await _channel_privacy_guard(sender_phone, button_id=button_id, timestamp=timestamp):
+            return
+        await _handle_authorized_confirmation_callback(button_id, sender_phone)

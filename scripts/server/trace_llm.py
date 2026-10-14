@@ -61,6 +61,11 @@ def trace_llm(channel: str, stage: str, trace_id=None, **fields) -> str:
         return tid
     try:
         cap = _cap()
+        if channel == 'whatsapp':
+            # Diagnostics carry neither dialogue, health values nor prompts.
+            fields = {key: value for key, value in fields.items()
+                      if key in ('phone_hash', 'kind', 'status', 'type', 'finish_reason')
+                      and isinstance(value, (str, bool, int))}
         record = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "trace_id": tid,
@@ -70,7 +75,8 @@ def trace_llm(channel: str, stage: str, trace_id=None, **fields) -> str:
         }
         line = json.dumps(record, ensure_ascii=False)
         path = _path()
-        with _lock:
+        from services.wa_channel_storage import file_lock
+        with _lock, file_lock(path):
             new_file = not os.path.exists(path)
             with open(path, "a", encoding="utf-8") as f:
                 f.write(line + "\n")

@@ -85,7 +85,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             await self.incoming('Me conta como está o tempo lá fora')
         self.assertEqual(client.post.await_count, 2)
         self.assertEqual(client.post.await_args_list[0].kwargs['json']['max_tokens'], 500)
-        self.assertIn('uma ou duas frases', client.post.await_args.kwargs['json']['messages'][0]['content'])
+        self.assertNotIn('\"response_length\": \"short\"', client.post.await_args.kwargs['json']['messages'][0]['content'])
         self.assertNotIn(partial, self.send.await_args.args[1])
         self.assertIn('região.', self.send.await_args.args[1])
 

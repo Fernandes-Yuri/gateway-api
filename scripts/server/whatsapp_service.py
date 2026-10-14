@@ -77,7 +77,7 @@ async def send_whatsapp_template(
         except Exception:
             res_json = {"raw": response.text}
 
-        print(f"[WhatsApp Template] Status: {response.status_code} | Resposta: {res_json}")
+        print(f"[WhatsApp Template] Status: {response.status_code}")
         return {
             "success": response.status_code in (200, 201),
             "status_code": response.status_code,
@@ -122,14 +122,14 @@ async def send_whatsapp_text(
             except Exception:
                 res_json = {"raw": response.text}
 
-            print(f"[WhatsApp Text] Status: {response.status_code} | Resposta: {res_json}")
+            print(f"[WhatsApp Text] Status: {response.status_code}")
             return {
                 "success": response.status_code in (200, 201),
                 "status_code": response.status_code,
                 "response": res_json
             }
     except Exception as exc:
-        print(f"[WhatsApp Text] Falha de transporte ao enviar para {cleaned_number}: {exc}")
+        print(f"[WhatsApp Text] Falha de transporte: {type(exc).__name__}")
         return {"success": False, "status_code": None, "error": str(exc)}
 
 
@@ -200,7 +200,7 @@ async def upload_whatsapp_media(file_bytes: bytes, mime_type: str = "audio/mpeg"
                 m_id = resp.json().get("id")
                 print(f"[WhatsApp Media Upload OK] ID: {m_id}")
                 return m_id
-            print(f"[WhatsApp Media Upload Fail] Status: {resp.status_code} | {resp.text}")
+            print(f"[WhatsApp Media Upload Fail] Status: {resp.status_code}")
             return None
     except Exception as e:
         print(f"[WhatsApp Media Upload Exception] {e}")
@@ -251,7 +251,7 @@ async def send_whatsapp_audio(
                     resp = await client.post(WHATSAPP_API_URL, headers=headers, json=payload)
 
             r_json = resp.json() if resp.status_code in (200, 201) else {"raw": resp.text}
-            print(f"[WhatsApp Send Audio] Status: {resp.status_code} | Media ID: {used_media_id} | {r_json}")
+            print(f"[WhatsApp Send Audio] Status: {resp.status_code} | Media ID: {used_media_id}")
             return {
                 "success": resp.status_code in (200, 201),
                 "media_id": used_media_id,
@@ -320,7 +320,7 @@ async def send_security_incident_alert_whatsapp(
         f"⏱️ *Duração:* 86.400 segundos (24h)\n\n"
         f"🔒 _O tráfego deste IP foi neutralizado pela Gateway na camada de middleware._"
     )
-    print(f"[SECURITY ALERT WHATSAPP] Disparando alerta para o administrador ({target_phone})...")
+    print("[SECURITY ALERT WHATSAPP] Disparando alerta administrativo")
     return await send_whatsapp_text(target_phone, msg)
 
 
@@ -373,7 +373,7 @@ async def transcribe_audio_whisper(audio_bytes: bytes, groq_api_key: str) -> Opt
                 result = resp.json()
                 text = result.get("text", "").strip()
                 if text:
-                    print(f"[Whisper Groq Transcrição] '{text}'")
+                    print("[Whisper Groq] Transcrição concluída")
                     return text
             else:
                 print(f"[Whisper Groq Error {resp.status_code}] {resp.text}")
@@ -460,7 +460,7 @@ async def send_whatsapp_interactive(
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(WHATSAPP_API_URL, headers=headers, json=payload)
             r_json = resp.json() if resp.status_code in (200, 201) else {"raw": resp.text}
-            print(f"[WhatsApp Interactive] Status: {resp.status_code} | Buttons: {len(buttons)} | {r_json}")
+            print(f"[WhatsApp Interactive] Status: {resp.status_code} | Buttons: {len(buttons)}")
             return {
                 "success": resp.status_code in (200, 201),
                 "response": r_json
@@ -521,7 +521,7 @@ async def send_whatsapp_list(
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(WHATSAPP_API_URL, headers=headers, json=payload)
             r_json = resp.json() if resp.status_code in (200, 201) else {"raw": resp.text}
-            print(f"[WhatsApp List] Status: {resp.status_code} | {r_json}")
+            print(f"[WhatsApp List] Status: {resp.status_code}")
             return {
                 "success": resp.status_code in (200, 201),
                 "response": r_json

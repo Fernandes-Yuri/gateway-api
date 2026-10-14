@@ -24,3 +24,7 @@ scripts/server/storage/
 # Artefatos de distribuição ficam fora do Git
 *.apk
 *.aab
+
+# Locks dos arquivos de diagnóstico e dados locais
+*.jsonl.lock
+*.log.lock

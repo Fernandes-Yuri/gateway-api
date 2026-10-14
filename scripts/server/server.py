@@ -371,6 +371,26 @@ _POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
 
 
 async def _care_sender(phone, message, notification_type):
+    # A phone stored as a contact is not a WhatsApp link/consent. This also
+    # prevents old scheduled deliveries after the channel has been deleted.
+    if db_pool is None:
+        return False
+    from services.wa_channel_privacy import TERMS_VERSION, PRIVACY_VERSION, phone_hash
+    from services.whatsapp_identity import normalize_phone_digits
+    async with whatsapp_router._channel_serialized(phone):
+        async with db_pool.acquire() as conn:
+            allowed = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM whatsapp_channel_consents c JOIN profiles p "
+                "ON regexp_replace(p.whatsapp_phone, '\\D', '', 'g')=$1 "
+                'WHERE c.phone_hash=$2 AND c.accepted_at IS NOT NULL '
+                'AND c.terms_version=$3 AND c.privacy_version=$4)',
+                normalize_phone_digits(phone), phone_hash(phone), TERMS_VERSION, PRIVACY_VERSION)
+        if not allowed:
+            return False
+        return await _authorized_care_sender(phone, message, notification_type)
+
+
+async def _authorized_care_sender(phone, message, notification_type):
     if not HAS_WHATSAPP:
         print("[Care OS] WhatsApp indisponível; entrega não realizada.")
         return False
@@ -477,6 +497,14 @@ async def startup():
             retention_scheduler.add_job(
                 cleanup_deleted_accounts, 'interval', minutes=5,
                 id="cleanup_deleted_accounts", replace_existing=True, max_instances=1,
+            )
+            async def cleanup_whatsapp_channel_files():
+                from services.wa_channel_storage import retry_channel_cleanup
+                await retry_channel_cleanup(db_pool, outbox_path=whatsapp_router.WEBHOOK_OUTBOX_PATH)
+            retention_scheduler.add_job(
+                cleanup_whatsapp_channel_files, 'interval', minutes=1,
+                id="cleanup_whatsapp_channel_files", replace_existing=True,
+                max_instances=1, coalesce=True, next_run_time=datetime.now(timezone.utc),
             )
             if HAS_FCM:
                 from services.firebase_account_reconciliation import reconcile_accounts

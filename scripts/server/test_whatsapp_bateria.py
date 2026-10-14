@@ -71,7 +71,7 @@ class WebhookTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(wa, 'handle_confirmation_callback', AsyncMock()) as handler, \
              patch.object(wa, 'process_incoming_whatsapp_payload', AsyncMock()):
             await self.client.post('/api/whatsapp/webhook', json=envelope([callback(kind='button')]))
-        handler.assert_awaited_once_with(button_id='confirm_TEST', sender_phone='5500000000000')
+        handler.assert_awaited_once_with(button_id='confirm_TEST', sender_phone='5500000000000', timestamp=None)
 
     async def test_invalid_signature_never_dispatches(self):
         with patch.object(wa, 'verify_meta_signature', return_value=False), \
