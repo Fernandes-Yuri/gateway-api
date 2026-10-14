@@ -477,6 +477,13 @@ async def startup():
                 cleanup_deleted_accounts, 'interval', minutes=5,
                 id="cleanup_deleted_accounts", replace_existing=True, max_instances=1,
             )
+            if HAS_FCM:
+                from services.firebase_account_reconciliation import reconcile_accounts
+                retention_scheduler.add_job(
+                    reconcile_accounts, 'interval', minutes=5, args=[db_pool],
+                    id="reconcile_firebase_accounts", replace_existing=True,
+                    max_instances=1, coalesce=True, next_run_time=datetime.now(),
+                )
             async def purge_expired_blocked_ips():
                 if db_pool:
                     try:

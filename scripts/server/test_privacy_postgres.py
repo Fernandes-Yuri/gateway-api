@@ -36,6 +36,8 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
             for number in (10, 17, 31, 32, 33):
                 migration = next((ROOT / "migrations").glob(f"{number:03d}_*.sql"))
                 await conn.execute(migration.read_text(encoding="utf-8"))
+            await conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)")
+            await conn.execute((ROOT / "migrations/056_firebase_account_reconciliation.sql").read_text(encoding="utf-8"))
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('paciente','Paciente'),('cuidador','Cuidador')")
 
     async def test_exam_storage_removal_preserves_patient_and_medications(self):
@@ -115,3 +117,42 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
             await conn.execute((ROOT / "migrations/034_prescription_files_legacy.sql").read_text(encoding="utf-8"))
             self.assertEqual(await conn.fetchval("SELECT patient_id FROM prescription_files WHERE filename='legado.pdf'"),"paciente")
             self.assertIsNone(await conn.fetchval("SELECT patient_id FROM prescription_files WHERE filename='ambiguo.pdf'"))
+
+    async def test_firebase_reconciliation_persists_missing_then_purges_without_touching_other_account(self):
+        from services.firebase_account_reconciliation import reconcile_accounts
+        exists = AsyncMock(return_value=True)
+        await reconcile_accounts(self.pool, exists=exists)
+        async with self.pool.acquire() as conn:
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM account_auth_observations WHERE observed_active_at IS NOT NULL"), 2)
+        exists.side_effect = lambda uid: uid != "paciente"
+        await reconcile_accounts(self.pool, exists=exists)
+        async with self.pool.acquire() as conn:
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM profiles"), 2)
+            await conn.execute("UPDATE account_auth_observations SET missing_since=NOW()-interval '6 minutes' WHERE user_id='paciente'")
+            await conn.execute("INSERT INTO feedbacks(user_id,category,message) VALUES ('paciente','bug','Sintético')")
+        with tempfile.TemporaryDirectory() as root, patch.object(account_deletion, "STORAGE_DIR", root), patch(
+            "services.firebase_account_reconciliation.cleanup_legacy_firebase_storage", AsyncMock()
+        ):
+            result = await reconcile_accounts(self.pool, exists=exists)
+        self.assertEqual(result["purged"], 1)
+        async with self.pool.acquire() as conn:
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM profiles WHERE id='paciente'"), 0)
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM profiles WHERE id='cuidador'"), 1)
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM feedbacks WHERE user_id='paciente'"), 0)
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM account_auth_observations WHERE user_id='paciente'"), 0)
+
+    async def test_firebase_cleanup_failure_is_retained_and_retry_recovers(self):
+        from services.firebase_account_reconciliation import cleanup_legacy_firebase_storage
+        with tempfile.TemporaryDirectory() as root, patch.object(account_deletion, "STORAGE_DIR", root), patch(
+            "services.firebase_account_reconciliation.cleanup_legacy_firebase_storage",
+            AsyncMock(side_effect=RuntimeError("synthetic 503"))
+        ):
+            result = await account_deletion.delete_account(self.pool, "paciente", actor="synthetic", firebase_cleanup=True)
+            self.assertFalse(result["success"])
+            async with self.pool.acquire() as conn:
+                self.assertTrue(await conn.fetchval("SELECT firebase_cleanup_required FROM account_storage_cleanup WHERE user_id='paciente'"))
+                self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM profiles WHERE id='paciente'"), 0)
+            with patch("services.firebase_account_reconciliation.cleanup_legacy_firebase_storage", AsyncMock(spec=cleanup_legacy_firebase_storage)):
+                self.assertTrue(await account_deletion.cleanup_account_files(self.pool, "paciente"))
+            async with self.pool.acquire() as conn:
+                self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM account_storage_cleanup WHERE user_id='paciente'"), 0)
