@@ -77,8 +77,7 @@ async def prepare_care_message(conn: Any, db_pool: Any, *,
     normalized = ''.join(c for c in unicodedata.normalize('NFD', (text or '').lower()) if not unicodedata.combining(c))
     if detect_hour(text or '') or re.search(r'\b(?:amanha|depois|daqui|diariamente|todo dia|todos os dias)\b|\b(?:as|das)\s+\d|\b\d{1,2}:\d{2}\b', normalized):
         return OperationResult.clarification(
-            "Aqui posso preparar uma mensagem de cuidado para enviar agora, após sua confirmação. "
-            "Para um lembrete em horário futuro, configure o lembrete no aplicativo.")
+            "Para um lembrete em horário futuro, configure-o no aplicativo Braga Saúde.")
 
     corpo = _validate_content(text)
     if not corpo:

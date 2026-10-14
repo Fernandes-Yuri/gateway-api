@@ -26,6 +26,8 @@ def evaluate(record):
     if checks is None:
         checks = []
         for line in str(record.get('esperado') or '').splitlines():
+            if len(re.findall(r'(?:^|[·;]\s*)(?:DEVE|N[ÃA]O DEVE):\s*/', line, re.I)) > 1:
+                return {**result, 'veredito': 'inconclusivo', 'motivos': ['Separe DEVE/NÃO DEVE em linhas distintas ou use checks estruturados.']}
             match = re.fullmatch(r'\s*(DEVE|N[ÃA]O DEVE):\s*/(.+)/\s*', line, re.I)
             if not match:
                 # Nunca trata uma expectativa parcialmente entendida como aprovação.

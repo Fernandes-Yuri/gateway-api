@@ -74,7 +74,7 @@ def identity_reply(question, *, verified_link, full_name):
 
 
 async def retry_public_reply(client, url, headers, payload):
-    """Uma tentativa adicional quando o provedor gerou somente raciocínio.
+    """Uma tentativa adicional para resposta vazia ou cortada pelo provedor.
 
     Não reaproveita texto interno nem executa ações da tentativa incompleta.
     Uma falha no retry mantém o fallback seguro do parser.
@@ -87,8 +87,12 @@ async def retry_public_reply(client, url, headers, payload):
     try:
         response = await client.post(url, headers=headers, json=retry_payload)
         if response.status_code == 200:
-            content = response.json()["choices"][0]["message"]["content"]
-            reply, _, _ = parse_conversation_reply(content)
+            choice = response.json()["choices"][0]
+            # Não envia nem executa uma resposta que o próprio provedor
+            # declarou incompleta, mesmo quando o conteúdo não está vazio.
+            if choice.get("finish_reason") == "length":
+                return FALLBACK_REPLY, 'CONVERSA', {}
+            reply, _, _ = parse_conversation_reply(choice["message"]["content"])
             # Retry é conversa pura, sem executar ações propostas pelo modelo.
             return reply, 'CONVERSA', {}
     except (KeyError, IndexError, TypeError, ValueError):
