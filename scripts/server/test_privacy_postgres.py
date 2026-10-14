@@ -132,6 +132,7 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
             await conn.execute("INSERT INTO feedbacks(user_id,category,message) VALUES ('paciente','bug','Sintético')")
         with tempfile.TemporaryDirectory() as root, patch.object(account_deletion, "STORAGE_DIR", root), patch(
             "services.firebase_account_reconciliation.cleanup_legacy_firebase_storage", AsyncMock()
+        ), patch("services.firebase_account_reconciliation.account_exists", AsyncMock(return_value=False)
         ):
             result = await reconcile_accounts(self.pool, exists=exists)
         self.assertEqual(result["purged"], 1)
@@ -146,6 +147,7 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as root, patch.object(account_deletion, "STORAGE_DIR", root), patch(
             "services.firebase_account_reconciliation.cleanup_legacy_firebase_storage",
             AsyncMock(side_effect=RuntimeError("synthetic 503"))
+        ), patch("services.firebase_account_reconciliation.account_exists", AsyncMock(return_value=False)
         ):
             result = await account_deletion.delete_account(self.pool, "paciente", actor="synthetic", firebase_cleanup=True)
             self.assertFalse(result["success"])

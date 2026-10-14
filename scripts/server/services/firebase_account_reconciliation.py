@@ -50,18 +50,19 @@ async def observe_active(conn, user_id):
     )
 
 
-async def reconcile_accounts(pool, *, exists=account_exists, delete=delete_account, limit=100):
+async def reconcile_accounts(pool, *, exists=account_exists, delete=delete_account, limit=100, only_user_id=None):
     stats = {key: 0 for key in ("checked", "active", "missing", "historical_unconfirmed", "unavailable", "purged", "cleanup_pending")}
     async with pool.acquire() as conn:
         if not await conn.fetchval("SELECT pg_try_advisory_lock($1)", RECONCILIATION_LOCK):
             return {**stats, "busy": True}
         try:
             await conn.execute(
-                "INSERT INTO account_auth_observations(user_id) SELECT id FROM profiles ON CONFLICT DO NOTHING"
+                "INSERT INTO account_auth_observations(user_id) SELECT id FROM profiles "
+                "WHERE ($1::text IS NULL OR id=$1) ON CONFLICT DO NOTHING", only_user_id
             )
             rows = await conn.fetch(
                 "SELECT user_id,observed_active_at,missing_since FROM account_auth_observations "
-                "ORDER BY last_checked_at,user_id LIMIT $1", limit
+                "WHERE ($2::text IS NULL OR user_id=$2) ORDER BY last_checked_at,user_id LIMIT $1", limit, only_user_id
             )
             for row in rows:
                 user_id = row["user_id"]

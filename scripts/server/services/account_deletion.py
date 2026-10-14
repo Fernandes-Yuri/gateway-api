@@ -17,6 +17,11 @@ async def cleanup_account_files(pool, user_id: str) -> bool:
         if isinstance(names, str):
             names = json.loads(names)
         try:
+            if job.get("firebase_cleanup_required"):
+                from services.firebase_account_reconciliation import account_exists
+                if await account_exists(user_id):
+                    # Um retry antigo não pode apagar arquivos de uma conta recriada.
+                    return False
             for root in (os.path.join(STORAGE_DIR, "avatars"), os.path.join(STORAGE_DIR, "medications")):
                 path = os.path.realpath(os.path.join(root, user_id))
                 if os.path.commonpath([os.path.realpath(root), path]) != os.path.realpath(root):
