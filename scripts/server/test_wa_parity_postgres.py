@@ -185,7 +185,7 @@ class WhatsAppPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('expirou', await self.deliver_button(code))
         foreign = await create_pending_confirmation('patient', 'AGUA', {'quantidade_ml': 500}, self.pool)
         self.assertIn('sua conta', await self.deliver_button(foreign))
-        self.assertIn('Vincule', await self.deliver_button(foreign, phone='5500000000001'))
+        self.assertIn('Termos de Uso', await self.deliver_button(foreign, phone='5500000000001'))
         async with self.pool.acquire() as conn:
             self.assertEqual(await conn.fetchval('SELECT count(*) FROM vital_signs'), 0)
             self.assertEqual(await conn.fetchval('SELECT count(*) FROM biometrics'), 0)
@@ -207,22 +207,14 @@ class WhatsAppPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(logs), 1)
         self.assertEqual(logs[0]['units_taken'], 2)
 
-    async def test_forget_all_with_pending_proposal_requires_confirmation(self):
+    async def test_legacy_preference_callback_cannot_change_app_preferences(self):
         async with self.pool.acquire() as conn:
-            first = await handle_preference(conn, self.pool, context=self.context, text='me chama de Ana')
-        await self.deliver_button(first.pending_op_id)
+            await conn.execute("INSERT INTO assistant_preferences(user_id,preferences) VALUES('actor','{\"nickname\":\"AppAlias\",\"cup_ml\":350}'::jsonb)")
+            proposal = await handle_preference(conn, self.pool, context=self.context, text='me chama de Ana')
+        self.assertIn('Não guardo apelidos', await self.deliver_button(proposal.pending_op_id))
         async with self.pool.acquire() as conn:
-            await handle_preference(conn, self.pool, context=self.context, text='meu copo é de 200 ml')
-            forget = await handle_preference(conn, self.pool, context=self.context, text='Esquece tudo')
-            self.assertEqual(forget.status, 'confirmation')
-            self.assertEqual(json.loads(await conn.fetchval("SELECT preferences FROM assistant_preferences WHERE user_id='actor'")), {'nickname': 'ana'})
-        await self.deliver_button(forget.pending_op_id, 'cancel')
-        async with self.pool.acquire() as conn:
-            self.assertEqual(json.loads(await conn.fetchval("SELECT preferences FROM assistant_preferences WHERE user_id='actor'")), {'nickname': 'ana'})
-            forget = await handle_preference(conn, self.pool, context=self.context, text='Esquece tudo')
-        await self.deliver_button(forget.pending_op_id)
-        async with self.pool.acquire() as conn:
-            self.assertEqual(json.loads(await conn.fetchval("SELECT preferences FROM assistant_preferences WHERE user_id='actor'")), {})
+            self.assertEqual(json.loads(await conn.fetchval("SELECT preferences FROM assistant_preferences WHERE user_id='actor'")), {'nickname': 'AppAlias', 'cup_ml': 350})
+            self.assertEqual(await conn.fetchval('SELECT status FROM pending_confirmations WHERE confirmation_code=$1', proposal.pending_op_id), 'cancelled')
 
     async def test_edit_preference_and_care_always_have_feedback_without_delivery(self):
         async with self.pool.acquire() as conn:
