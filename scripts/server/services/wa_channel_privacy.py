@@ -137,7 +137,8 @@ async def resolve_deletion(pool, phone, *, text='', button_id='', timestamp=None
                 return 'O vínculo mudou desde o pedido. Faça uma nova solicitação de exclusão.'
         if actor:
             current = await conn.fetchrow(
-                "SELECT id FROM profiles WHERE id=$1 AND regexp_replace(whatsapp_phone, '\\D', '', 'g')=$2 FOR UPDATE",
+                "SELECT id FROM profiles WHERE id=$1 AND regexp_replace(whatsapp_phone, '\\D', '', 'g')=$2 "
+                "AND (SELECT count(*) FROM profiles WHERE regexp_replace(whatsapp_phone, '\\D', '', 'g')=$2)=1 FOR UPDATE",
                 actor, normalize_phone_digits(phone))
             if not current:
                 return 'O vínculo mudou desde o pedido. Faça uma nova solicitação de exclusão.'
