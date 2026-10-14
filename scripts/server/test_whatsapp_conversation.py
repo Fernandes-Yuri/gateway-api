@@ -157,6 +157,14 @@ class WhatsAppPipelineTests(unittest.IsolatedAsyncioTestCase):
             {'role': 'assistant', 'content': 'Começou ontem, entendi.'},
             {'role': 'user', 'content': 'o que eu acabei de falar?'}])
 
+    async def test_linking_code_is_consumed_without_entering_history(self):
+        from services import wa_session_context as context
+        with patch.object(self.wa, 'HAS_WA_LINK', True), \
+             patch.object(self.wa, 'handle_link_attempt', AsyncMock(return_value=True)):
+            await self.deliver('123456')
+        self.assertEqual(len(context._sessions), 0)
+        self.client.post.assert_not_awaited()
+
     async def test_failed_transport_is_not_presented_as_assistant_history(self):
         from services import wa_session_context as context
         token = context.scope(('test-hash', 'test-account'))

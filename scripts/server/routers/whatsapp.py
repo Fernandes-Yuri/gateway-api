@@ -813,9 +813,6 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                     verified_link = identity.get("status") == STATUS_OK
                     user_id = identity.get("user_id") if verified_link else None
                     user_name = first_name(identity.get("full_name")) if verified_link else None
-                    if verified_link:
-                        dialogue.scope((channel_phone_hash(sender_phone), str(user_id)))
-                        dialogue.record('user', user_text)
 
 
                     # Passo 1.5: a identidade resolvida vira o contexto de
@@ -855,6 +852,11 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                                 continue
                         except Exception as _gate_err:
                             print(f"[WhatsApp Gate Error] {_gate_err}")
+
+                    # Códigos de vínculo são consumidos antes do histórico.
+                    if verified_link:
+                        dialogue.scope((channel_phone_hash(sender_phone), str(user_id)))
+                        dialogue.record('user', user_text)
 
                     # Identidade vem do vínculo confirmado, não da memória do modelo.
                     identity_text = identity_reply(
