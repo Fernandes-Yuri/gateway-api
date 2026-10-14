@@ -64,7 +64,7 @@ def trace_llm(channel: str, stage: str, trace_id=None, **fields) -> str:
         if channel == 'whatsapp':
             # Diagnostics carry neither dialogue, health values nor prompts.
             fields = {key: value for key, value in fields.items()
-                      if key in ('phone_hash', 'kind', 'status', 'type', 'finish_reason')
+                      if key in ('phone_hash', 'kind', 'status', 'type', 'finish_reason', 'context_messages')
                       and isinstance(value, (str, bool, int))}
         record = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),

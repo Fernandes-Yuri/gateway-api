@@ -138,6 +138,25 @@ class OperationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(create.await_args.kwargs['value_json']['patient_id'], 'mother')
         self.assertEqual(create.await_args.kwargs['value_json']['recipient_kind'], 'patient')
 
+    async def test_explicit_care_text_extracts_content_and_keeps_scheduling_separate(self):
+        conn = connection()
+        context = OperationContext(actor_id='actor', patient_id='actor')
+        with patch('services.care_messages.validate_actor', AsyncMock(return_value=None)), \
+             patch('core.confirmation.create_pending_confirmation', AsyncMock(return_value='CODE')) as create:
+            result = await prepare_care_message(conn, Pool(conn), context=context,
+                text='Envia agora uma mensagem de cuidado pra mim com o texto: "cuide-se bem amanhã"')
+            self.assertEqual(result.status, 'confirmation')
+            self.assertEqual(create.await_args.kwargs['value_json']['body'], 'cuide-se bem amanhã')
+            create.reset_mock()
+            result = await prepare_care_message(conn, Pool(conn), context=context,
+                text='Envia amanhã uma mensagem de cuidado com o texto: cuide-se bem hoje')
+            self.assertEqual(result.status, 'clarification')
+            create.assert_not_awaited()
+            result = await prepare_care_message(conn, Pool(conn), context=context,
+                text='Envia agora uma mensagem com o texto: ')
+            self.assertEqual(result.status, 'clarification')
+            create.assert_not_awaited()
+
     async def test_care_delivery_uses_exact_patient(self):
         conn = connection()
         conn.fetchrow.return_value = {'id': 'pending', 'value_json': json.dumps({'body': 'Beba água', 'patient_id': 'mother', 'recipient_kind': 'patient'})}
@@ -171,9 +190,9 @@ class OperationTests(unittest.IsolatedAsyncioTestCase):
              patch.object(whatsapp, 'send_whatsapp_text', AsyncMock()) as send, \
              patch.object(whatsapp, 'send_confirmation_buttons', AsyncMock()) as buttons, \
              patch.object(whatsapp, 'log_fine_tuning_sample'):
-            handled = await whatsapp.handle_wa_preference(sender_phone='test', user_id='actor', user_name='Ana', msg_type='text', db=Pool(conn), user_text='me chama de Ana')
+            handled = await whatsapp.handle_wa_preference(sender_phone='5500000000009', user_id='actor', user_name='Ana', msg_type='text', db=Pool(conn), user_text='me chama de Ana')
         self.assertTrue(handled)
-        self.assertIn('Não guardo apelidos nem preferências', send.await_args.args[1])
+        self.assertRegex(send.await_args.args[1], r'não salvo apelidos|Apelidos não ficam guardados')
         buttons.assert_not_awaited()
 
     async def test_biometry_rejects_wrong_owner_before_database(self):

@@ -22,6 +22,7 @@ from typing import Any, Awaitable, Callable, Optional
 from orb_router import detect_all
 from services.whatsapp_identity import (
     STATUS_OK,
+    STATUS_UNLINKED,
     is_confirmed,
     reply_for_status,
     resolve_linked_account,
@@ -77,5 +78,9 @@ async def gate_unregistered(
         return True
     # Mensagem do estado do vinculo (sem vinculo / ambiguo / indisponivel),
     # sempre da fonte unica do servico de identidade.
-    await send_text(sender_phone, reply_for_status(status))
+    if status == STATUS_UNLINKED:
+        from services.wa_onboarding import unlinked_reply
+        await send_text(sender_phone, unlinked_reply(user_text, sender_phone))
+    else:
+        await send_text(sender_phone, reply_for_status(status))
     return True

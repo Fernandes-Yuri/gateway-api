@@ -63,6 +63,8 @@ class IdentityTests(unittest.TestCase):
 class WhatsAppPipelineTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from routers import whatsapp
+        from services import wa_session_context
+        wa_session_context._sessions.clear()
         self.wa = whatsapp
         self.send = AsyncMock()
         conn = MagicMock()
@@ -134,6 +136,59 @@ class WhatsAppPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.client.post.return_value = response
         await self.deliver('Conte algo')
         self.send.assert_awaited_once_with('5500000000000', 'Resposta pública.')
+
+    async def test_router_response_and_followup_are_sent_to_llm_in_order(self):
+        response = MagicMock(status_code=200)
+        response.json.return_value = {'choices': [{'message': {'content': 'Começou ontem, entendi.'}, 'finish_reason': 'stop'}]}
+        self.client.post.return_value = response
+        with patch.object(self.wa, 'whatsapp_next', return_value={
+                'type': 'text', 'fala': 'Há quanto tempo começou?' }):
+            await self.deliver('vomitei duas vezes')
+        await self.deliver('desde ontem')
+        payload = self.client.post.await_args.kwargs['json']['messages']
+        self.assertEqual(payload[1:], [
+            {'role': 'user', 'content': 'vomitei duas vezes'},
+            {'role': 'assistant', 'content': 'Há quanto tempo começou?'},
+            {'role': 'user', 'content': 'desde ontem'}])
+        self.assertNotIn('Internal reasoning', str(payload))
+        await self.deliver('o que eu acabei de falar?')
+        next_payload = self.client.post.await_args.kwargs['json']['messages']
+        self.assertEqual(next_payload[-2:], [
+            {'role': 'assistant', 'content': 'Começou ontem, entendi.'},
+            {'role': 'user', 'content': 'o que eu acabei de falar?'}])
+
+    async def test_linking_code_is_consumed_without_entering_history(self):
+        from services import wa_session_context as context
+        with patch.object(self.wa, 'HAS_WA_LINK', True), \
+             patch.object(self.wa, 'handle_link_attempt', AsyncMock(return_value=True)):
+            await self.deliver('123456')
+        self.assertEqual(len(context._sessions), 0)
+        self.client.post.assert_not_awaited()
+
+    async def test_failed_transport_is_not_presented_as_assistant_history(self):
+        from services import wa_session_context as context
+        token = context.scope(('test-hash', 'test-account'))
+        try:
+            self.send.return_value = {'success': False}
+            await self.wa._send_context_text('5500000000000', 'not delivered')
+            self.assertNotIn('not delivered', str(context.messages('policy', 'oi')))
+        finally:
+            context.reset(token)
+
+    async def test_linked_download_uses_official_page_without_model(self):
+        from services.wa_onboarding import DOWNLOAD_URL, clear
+        clear('5500000000000')
+        with patch.object(self.wa, 'detect_all', return_value={'kind': 'app'}), \
+             patch.object(self.wa, 'whatsapp_next', return_value={'type': 'text', 'fala': 'legacy store promise'}):
+            await self.deliver('como baixar o aplicativo')
+            first = self.send.await_args.args[1]
+            await self.deliver('como baixar o aplicativo')
+            second = self.send.await_args.args[1]
+        self.assertIn(DOWNLOAD_URL, first)
+        self.assertIn(DOWNLOAD_URL, second)
+        self.assertNotEqual(first, second)
+        self.assertNotIn('legacy', first)
+        self.client.post.assert_not_awaited()
 
     async def test_audio_request_gets_only_text_without_model_or_media_upload(self):
         with patch.object(self.wa, 'match_fast_lane_intent', return_value='ask_audio'):
