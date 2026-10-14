@@ -14,6 +14,8 @@ Regras de segurança do roteador:
 """
 
 from services.emergency_reply import emergency_reply
+from services.wa_download_links import DOWNLOAD_REPLY
+
 import re
 import time
 import unicodedata
@@ -646,8 +648,7 @@ def route_chat(raw: str, model_name: str = None):
                 "acao": "ABRIR_LISTA_COMPRAS", "parametros": {"items": []}}
     if kind == "app":
         return _conversa(
-            "O aplicativo ainda está em desenvolvimento e em breve sai na Play Store. "
-            "Enquanto isso, vale a pena olhar os Termos de Uso e a Política de Privacidade no site do Braga Saúde."
+            DOWNLOAD_REPLY
         )
     if kind == "identity":
         return _conversa(
@@ -854,7 +855,7 @@ def whatsapp_next(raw: str, is_registered: bool, model_name: str = None) -> dict
                 "fala": "Combinado! Você pode anotar os itens na lista de compras do aplicativo, na tela de alimentação."}
     if kind == "app":
         return {"type": "text",
-                "fala": "O aplicativo ainda está em desenvolvimento e em breve sai na Play Store. Enquanto isso, vale a pena olhar os Termos de Uso e a Política de Privacidade no site do Braga Saúde."}
+                "fala": DOWNLOAD_REPLY}
     if kind == "identity":
         return {"type": "text",
                 "fala": "Eu sou o Braga, seu assistente de saúde e rotina. Acompanho seus sinais, água e refeições e oriento seu autocuidado."}

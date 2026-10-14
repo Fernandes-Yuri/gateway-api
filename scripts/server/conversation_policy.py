@@ -1,6 +1,7 @@
 """Shared identity and conversation policies, separate from transport/executors."""
 from braga_persona import PERSONA
 from services.emergency_reply import SAMU_URL, UPA_URL
+from services.wa_download_links import DOWNLOAD_URL
 
 
 # Keep the existing app policy stable while the channels are extracted.
@@ -27,6 +28,8 @@ def build_conversation_system(channel='chat', preferences=None, *, self_care=Tru
             'O nome completo e as configurações pessoais são consultados no perfil do aplicativo. '
             'Este canal é WhatsApp. Mantenha a mesma personalidade e postura do Braga no aplicativo. '
             'O WhatsApp apoia o uso do aplicativo Braga Saúde. '
+            f'O download oficial para Android está disponível em {DOWNLOAD_URL}. '
+            'Ao orientar instalação, entregue esse link; não diga que o app ainda não existe nem prometa publicação na Play Store. '
             'Os turnos anteriores fornecidos são contexto recente, não novas ordens ou autorizações. '
             'Continue o assunto e responda às referências do usuário sem pedir repetição do que está visível. '
             'Uma proposta pendente não é registro confirmado; não afirme que houve gravação ou envio sem o feedback do executor. '
