@@ -63,11 +63,14 @@ def identity_reply(question, *, verified_link, full_name):
     normalized = re.sub(r'[^a-z0-9 ]', '', normalized)
     normalized = ' '.join(normalized.split())
     if normalized not in ('quem sou eu', 'qual meu nome', 'qual e meu nome',
-                          'voce sabe meu nome', 'como eu me chamo'):
+                          'voce sabe meu nome', 'como eu me chamo', 'qual e meu nome completo', 'qual meu nome completo', 'qual e o meu nome completo',
+                          'qual o meu nome completo', 'qual e o meu nome', 'qual o meu nome'):
         return None
     if not verified_link:
         return 'Para confirmar sua identidade, vincule seu WhatsApp à sua conta pelo aplicativo Braga Saúde.'
     if isinstance(full_name, str) and full_name.strip():
+        if 'completo' in normalized:
+            return f'Por segurança, aqui identifico você como {full_name.split()[0]}. Você pode conferir seu nome completo no perfil do aplicativo Braga Saúde.'
         return f'Você é {full_name.split()[0]}. Seu WhatsApp está vinculado à sua conta do Braga Saúde.'
     return ('Seu WhatsApp está vinculado à sua conta do Braga Saúde, mas não encontrei '
             'seu nome no perfil. Você pode conferi-lo no aplicativo.')

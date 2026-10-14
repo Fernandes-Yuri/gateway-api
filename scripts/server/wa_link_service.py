@@ -118,7 +118,7 @@ async def _find_account_by_code(conn, code: str) -> Optional[Tuple[str, str]]:
             if verify_totp_code(r["totp_secret"], code):
                 return r["id"], r["full_name"] or "amigo(a)"
         except Exception as row_err:
-            print(f"[WhatsApp Link] Aviso: erro ao avaliar TOTP da conta {r.get('id')}: {row_err}")
+            print(f"[WhatsApp Link] Falha ao verificar código: {type(row_err).__name__}")
             continue
     return None
 
@@ -190,5 +190,5 @@ async def handle_link_attempt(
         )
         await _log_attempt(conn, sender_digits, code, user_id, STATUS_SUCCESS)
         await send_text(sender_phone, _MSG_SUCCESS)
-        print(f"[WhatsApp Link] Numero {sender_digits} vinculado a conta {user_id} ({user_name}).")
+        print("[WhatsApp Link] Vínculo confirmado.")
         return True

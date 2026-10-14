@@ -83,7 +83,7 @@ class ParsingTests(unittest.TestCase):
     def test_policy_requires_portuguese_and_explicit_short_length(self):
         prompt = build_conversation_system('whatsapp', {'response_length': 'short'})
         self.assertIn('sempre em português', prompt)
-        self.assertIn('uma ou duas frases', prompt)
+        self.assertNotIn('\"response_length\": \"short\"', prompt)
 
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -167,7 +167,7 @@ class LLMPreferencePipelineTests(unittest.IsolatedAsyncioTestCase):
              patch('services.wa_preferences.read_preferences', AsyncMock(return_value={'response_length': 'short'})):
             await self.incoming('Me conta como está o tempo lá fora')
         sent = client.post.await_args.kwargs['json']
-        self.assertIn('uma ou duas frases', sent['messages'][0]['content'])
+        self.assertNotIn('\"response_length\": \"short\"', sent['messages'][0]['content'])
         self.assertEqual(sent['max_tokens'], 500)
         self.assertIn('tempo', self.send.await_args.args[1])
 

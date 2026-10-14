@@ -69,7 +69,10 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         self.conn.fetchval.return_value = 'America/Sao_Paulo'
         self.pool = Pool(self.conn)
         self.send = AsyncMock()
-        for item in (patch.object(wa._state, 'db_pool', self.pool),
+        # Business pipeline tests start after the independent consent guard.
+        # Privacy/consent is exercised by test_wa_channel_privacy.
+        for item in (patch.object(wa, '_channel_privacy_guard', AsyncMock(return_value=False)),
+                     patch.object(wa._state, 'db_pool', self.pool),
                      patch.object(wa, 'send_whatsapp_text', self.send),
                      patch.object(wa, 'HAS_WHATSAPP', True), patch.object(wa, 'HAS_WA_LINK', False),
                      patch.object(wa, 'resolve_linked_account', AsyncMock(return_value={
@@ -117,7 +120,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
              patch.object(wa, 'handle_wa_care_message', AsyncMock()) as care:
             await self.incoming('O que voce lembra de mim?')
         self.assertTrue(self.send.await_count)
-        self.assertIn('Ana', self.send.await_args.args[1])
+        self.assertIn('Não guardo apelidos nem preferências', self.send.await_args.args[1])
         create.assert_not_awaited()
         care.assert_not_awaited()
 

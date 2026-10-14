@@ -44,11 +44,15 @@ class WhatsAppPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.pool = await asyncpg.create_pool(DSN, min_size=1, max_size=3, setup=setup)
         async with self.pool.acquire() as conn:
             await conn.execute((ROOT / 'scripts/docker/init_schema.sql').read_text())
-            for number in (3, 4, 9, 17, 18, 21, 52, 53, 54, 55):
+            for number in (3, 4, 9, 17, 18, 21, 51, 52, 53, 54, 55, 57):
                 migration = next(p for p in (ROOT / 'migrations').glob(f'{number:03d}_*.sql') if not p.stem.endswith('_rollback'))
                 await conn.execute(migration.read_text(encoding='utf-8-sig'))
             await conn.execute("INSERT INTO profiles(id,full_name,height,whatsapp_phone,timezone) VALUES ('actor','Ana',170,'test-actor','America/Manaus'),('patient','Maria',165,'test-patient','America/Sao_Paulo')")
             await conn.execute("INSERT INTO family_bindings(patient_id,caregiver_id,caregiver_name,caregiver_relation,connection_code,status,caregiver_role,expires_at) VALUES ('patient','actor','Ana','Filha','TEST','ACTIVE','ADMIN_CHILD',now()+interval '1 day')")
+            from services.wa_channel_privacy import phone_hash, TERMS_VERSION, PRIVACY_VERSION
+            await conn.execute(
+                "INSERT INTO whatsapp_channel_consents(phone_hash,terms_version,privacy_version,challenge,accepted_at) "
+                "VALUES($1,$2,$3,uuid_generate_v4(),NOW())", phone_hash('5500000000000'), TERMS_VERSION, PRIVACY_VERSION)
         self.context = OperationContext(actor_id='actor', patient_id='actor')
 
     async def cleanup_database(self):

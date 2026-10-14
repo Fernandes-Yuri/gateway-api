@@ -66,6 +66,7 @@ class WhatsAppPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.wa = whatsapp
         self.send = AsyncMock()
         conn = MagicMock()
+        conn.execute = AsyncMock()
         conn.fetch = AsyncMock(return_value=[{'id': 'test-account', 'full_name': 'Ana Silva', 'user_role': 'PATIENT'}])
         conn.fetchrow = AsyncMock(return_value={'id': 'test-account', 'full_name': 'Ana Silva',
                                                'user_role': 'PATIENT'})
@@ -77,6 +78,7 @@ class WhatsAppPipelineTests(unittest.IsolatedAsyncioTestCase):
         http_client.return_value.__aenter__.return_value = self.client
         import asyncio
         self.patches = [
+            patch.object(whatsapp, '_channel_privacy_guard', AsyncMock(return_value=False)),
             patch.object(whatsapp._state, 'db_pool', pool),
             patch.object(whatsapp._state, 'sem_wa', asyncio.Semaphore(1)),
             patch.multiple(whatsapp, HAS_WHATSAPP=True, HAS_WA_LINK=False, HAS_WA_GATE=False),
