@@ -499,6 +499,8 @@ async def startup():
                 id="cleanup_deleted_accounts", replace_existing=True, max_instances=1,
             )
             async def cleanup_whatsapp_channel_files():
+                from services.wa_session_context import expire
+                expire()
                 from services.wa_channel_storage import retry_channel_cleanup
                 await retry_channel_cleanup(db_pool, outbox_path=whatsapp_router.WEBHOOK_OUTBOX_PATH)
             retention_scheduler.add_job(

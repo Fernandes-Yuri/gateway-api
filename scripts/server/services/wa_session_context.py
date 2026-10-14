@@ -25,11 +25,19 @@ def clear(phone_hash):
             del _sessions[key]
 
 
-def _recent(key):
+def active():
+    return _current.get() is not None
+
+
+def expire():
     now = monotonic()
     for expired in [k for k, (seen, _) in _sessions.items() if now - seen >= TTL_SECONDS]:
         del _sessions[expired]
-    return _sessions.get(key, (now, []))[1]
+
+
+def _recent(key):
+    expire()
+    return _sessions.get(key, (monotonic(), []))[1]
 
 
 def record(role, content, *, phone_hash=None):

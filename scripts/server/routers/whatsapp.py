@@ -77,14 +77,14 @@ from services import wa_session_context as dialogue
 
 async def _send_context_text(phone, text):
     result = await send_whatsapp_text(phone, text)
-    if result is not False and (not isinstance(result, dict) or result.get('success') is not False):
+    if dialogue.active() and result is not False and (not isinstance(result, dict) or result.get('success') is not False):
         dialogue.record('assistant', text, phone_hash=channel_phone_hash(phone))
     return result
 
 
 async def _send_context_confirmation(**kwargs):
     result = await send_confirmation_buttons(**kwargs)
-    if result is not False and (not isinstance(result, dict) or result.get('success') is not False):
+    if dialogue.active() and result is not False and (not isinstance(result, dict) or result.get('success') is not False):
         from core.confirmation import format_confirmation_value
         metric = kwargs['metric_type']
         value, _icon = format_confirmation_value(metric, kwargs['values'])
