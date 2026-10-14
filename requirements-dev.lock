@@ -530,6 +530,7 @@ google-auth==2.62.0 \
     --hash=sha256:0bef0ce54bdf9ce226c5d66e4264413bd918141c31bbe49fb52eac882f513d69 \
     --hash=sha256:4ff4319aeb4ad128409759d397a9fcafad126d0031d241cc0dd6b9a00b43e3f3
     # via
+    #   -r requirements.txt
     #   google-api-core
     #   google-cloud-core
     #   google-cloud-firestore

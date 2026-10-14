@@ -44,6 +44,7 @@ APScheduler>=3.10
 
 # Firebase Admin (FCM push + auth) — so na EC2
 firebase-admin>=6.5
+google-auth>=2.0  # DT-001: validação OIDC da identidade do worker Google
 
 # Google reCAPTCHA server-side: validado via POST para a API do Google com
 # httpx; nao exige SDK adicional.
