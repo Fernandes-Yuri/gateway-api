@@ -215,7 +215,7 @@ _BP_RE = re.compile(
 )
 
 _EMERGENCY_WORDS = (
-    "dor no peito", "falta de ar", "desmaio", "desmai", "samu", "192",
+    "dor no peito", "falta de ar", "desmaio", "desmai", "samu",
     "derrame", "infarto", "avc", "convuls",
 )
 
@@ -265,11 +265,17 @@ def _to_int(num: str):
 
 
 def detect_emergency(norm: str) -> bool:
-    return any(w in norm for w in _EMERGENCY_WORDS)
+    # O número sozinho pode ser uma medição (glicemia 192).
+    return any(w in norm for w in _EMERGENCY_WORDS) or bool(
+        re.search(r"\b192\b", norm) and
+        re.search(r"\b(lig\w*|dis[cq]\w*|socorro|emergencia|ambulancia)\b", norm))
 
 
 def detect_bp(norm: str):
-    m = _BP_RE.search(norm)
+    # Remove datas completas antes de procurar pares de pressão. Preserva
+    # uma medição real na mesma mensagem que uma data.
+    without_dates = re.sub(r"(?<!\d)\d{1,4}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*\d{1,4}(?!\d)", " ", norm)
+    m = _BP_RE.search(without_dates)
     if not m:
         return None
     sys = _to_int(m.group(1))
@@ -292,30 +298,27 @@ def detect_bp(norm: str):
 def detect_glucose(norm: str):
     if not any(w in norm for w in _GLUCOSE_WORDS):
         return None
-    for m in re.finditer(r"(\d{2,3})", norm):
+    for m in re.finditer(r"(?<![\d.,])(\d+)(?![\d.,])", norm):
         val = int(m.group(1))
-        if 20 <= val <= 600:
-            return val
+        return val
     return None
 
 
 def detect_hr(norm: str):
     if not any(w in norm for w in _HR_WORDS):
         return None
-    for m in re.finditer(r"(\d{2,3})", norm):
+    for m in re.finditer(r"(?<![\d.,])(\d+)(?![\d.,])", norm):
         val = int(m.group(1))
-        if 30 <= val <= 250:
-            return val
+        return val
     return None
 
 
 def detect_spo2(norm: str):
     if not any(w in norm for w in _SPO2_WORDS):
         return None
-    for m in re.finditer(r"(\d{2,3})", norm):
+    for m in re.finditer(r"(?<![\d.,])(\d+)(?![\d.,])", norm):
         val = int(m.group(1))
-        if 50 <= val <= 100:
-            return val
+        return val
     return None
 
 
@@ -329,19 +332,17 @@ def detect_hydration(norm: str):
         per = {"ml": 1, "mililitro": 1, "litro": 1000, "l": 1000,
                "copo": 250, "garrafinha": 500, "garrafa": 1000,
                "xicara": 200, "caneca": 350}.get(unit, 250)
-        total = int(amount * per)
-        if 50 <= total <= 8000:
-            return total
-        return None
-    if "agua" in norm or "h2o" in norm or "hidrata" in norm:
-        return 250
+        # "1 litro e meio" refere-se a 1,5 litro, não a um litro.
+        if re.match(r"s?\s+e\s+mei[oa]\b", norm[m.end():]):
+            amount += 0.5
+        return int(amount * per)
     return None
 
 
 # ------------------------------------------------------------------
 # Peso (PR2, passo 2.4): reconhecimento deterministico com faixa clinica.
 # ------------------------------------------------------------------
-_WEIGHT_CONTEXT = re.compile(r"\bpeso\b|\bpesando\b|\bquilos?\b")
+_WEIGHT_CONTEXT = re.compile(r"\bpeso\b|\bpesando\b|\bpesei\b|\bbalanca\b|\bquilos?\b|\bkg\b")
 _WEIGHT_NUM = re.compile(r"(\d{1,3}(?:[.,]\d{1,2})?)")
 
 
@@ -356,9 +357,7 @@ def detect_weight(norm: str):
         val = float(m.group(1).replace(",", "."))
     except ValueError:
         return None
-    # Faixa do HEALTH_VALIDATION_RULES do core/confirmation (PESO).
-    if not (20 <= val <= 300):
-        return None
+    # A validação pertence ao executor, como nas demais métricas.
     return val
 
 
@@ -389,6 +388,9 @@ def detect_all(raw: str) -> dict:
 
     if detect_emergency(norm):
         return {"kind": "emergency"}
+    # Dor abdominal forte recebe orientação direta, sem depender da geração.
+    if re.search(r"\b(barriga|abdom\w*)\b", norm) and re.search(r"\b(dor|doendo)\b", norm) and re.search(r"\b(forte|intensa|insuportavel)\b", norm):
+        return {"kind": "abdominal_urgent"}
     # AUD-G17: a detecção de PA (X por Y) vinia ANTES da de data. "Que dia é
     # hoje, 20/09/2026?" casava o padrão "20/09" como pressão 200x90 e o
     # usuário ouvia um absurdo clínico. Perguntas de data/hora são resolvidas
@@ -397,6 +399,8 @@ def detect_all(raw: str) -> dict:
         return {"kind": "time"}
     if _DATE_RE.search(norm):
         return {"kind": "date"}
+    if re.search(r"\b(senha|password|credenciais)\b", norm) and re.search(r"\b(acesso|sabe|conhece|consultar|ver|mostrar)\b", norm):
+        return {"kind": "credential_access"}
     if _CODE_REQUEST.search(norm) or _LONG_OUTPUT_REQUEST.search(norm):
         return {"kind": "out_of_scope"}
     from services.wa_preferences import detect_preference_intent
@@ -407,6 +411,8 @@ def detect_all(raw: str) -> dict:
         return {"kind": "reminder"}
     if re.search(r"\b(?:vou|pretendo|quero|irei)\s+tomar\b", norm) and _MED_CONTEXT.search(norm):
         return {"kind": "med_plan"}
+    if re.search(r"\b(posso|devo|pode|deveria)\s+(?:\w+\s+){0,3}(tomar|tome|tom\w*)\b", norm) and _MED_CONTEXT.search(norm):
+        return {"kind": "meds"}
     if detect_medication_query(norm):
         return {"kind": "query_medication"}
     # Passo 3.3: tomada de dose é reconhecida ANTES da consulta — "tomei o
@@ -416,6 +422,21 @@ def detect_all(raw: str) -> dict:
         return {"kind": "med_take"}
     # Passo 2.3: consulta (pergunta sem valor) é respondida pelo serviço de
     # consultas, antes de qualquer conversa aberta.
+    # Dúvida sobre hábito não declara uma ingestão para registrar.
+    if re.search(r"\b(bebo|beber|agua|litros?)\b", norm) and re.search(
+            r"\b(por dia|por semana|e o certo|devo beber|quanto devo)\b", norm):
+        return {"kind": "topic"}
+    readings = [value for value in (detect_bp(norm), detect_glucose(norm),
+                detect_hydration(norm), detect_hr(norm), detect_spo2(norm),
+                detect_weight(norm)) if value is not None]
+    if len(readings) > 1:
+        return {"kind": "multiple_vitals"}
+    if re.search(r"\b(bebi|tomei|ingeri)\b.*\b(agua|h2o)\b", norm) and detect_hydration(norm) is None:
+        return {"kind": "hydration_missing"}
+    if re.search(r"\b(apagar|excluir|eliminar)\b.*\b(dados|conta)\b", norm):
+        return {"kind": "delete_account"}
+    if re.search(r"\b(quem|quais|lista|listar)\b.*\b(acompanho|familiares|vinculos|pessoas)\b", norm):
+        return {"kind": "family_list"}
     query = detect_query(norm)
     if query:
         return {"kind": query}
@@ -437,6 +458,8 @@ def detect_all(raw: str) -> dict:
     peso = detect_weight(norm)
     if peso:
         return {"kind": "weight", "peso_kg": peso}
+    if re.search(r"\b(respond\w*|resposta|fale|falar)\b.*\b(ingles|english)\b", norm):
+        return {"kind": "language_request"}
     if re.search(r"\bexame", norm):
         return {"kind": "exams"}
     if any(w in norm for w in _MED_WORDS):
@@ -485,11 +508,27 @@ def detect_all(raw: str) -> dict:
     return {"kind": "open"}
 
 
-def symptom_fala(kind: str) -> str:
+_CLARIFICATION_TEXT = {
+    "credential_access": "Não tenho acesso à sua senha e não posso consultá-la. Nunca envie senhas nesta conversa.",
+    "language_request": "Continuo em português do Brasil por aqui. Posso ajudar com saúde e rotina no Braga Saúde.",
+    "abdominal_urgent": "Dor forte na barriga precisa de avaliação presencial. Procure uma UPA ou pronto atendimento e informe quando a dor começou.",
+    "multiple_vitals": "Você enviou mais de uma medição. Envie cada uma em uma mensagem separada para eu preparar as confirmações sem perder nenhum valor.",
+    "hydration_missing": "Quanto de água você bebeu? Me diga a quantidade em ml ou litros para preparar a confirmação.",
+    "delete_account": "Para apagar sua conta e os dados do servidor, use a opção de exclusão de conta no aplicativo Braga Saúde. Não apaguei nada por esta mensagem.",
+}
+
+
+def symptom_fala(kind: str, raw: str = "") -> str:
     """Orientação geral por domínio de sintoma (sem diagnóstico, sem remédio)."""
     if kind == "symptom_gi":
-        return ("Entendi. Na diarreia, o mais importante é não desidratar: beba água e soro caseiro aos poucos. "
-                "Se tiver sangue nas fezes, febre alta ou durar mais de dois dias, procure uma UBS ou UPA.")
+        if re.search(r"\b(diarreia|diarreias|coco|cagando|fezes)\b", normalize(raw)):
+            return ("Entendi. Na diarreia, o mais importante é não desidratar: beba água aos poucos. "
+                    "Se tiver sangue nas fezes, febre alta ou durar mais de dois dias, procure uma UBS ou UPA.")
+        if re.search(r"\bvomit\w*", normalize(raw)):
+            return ("Entendi que você vomitou. Há quanto tempo começou? "
+                    "Se os vômitos forem persistentes ou houver dor forte na barriga, procure uma UPA ou pronto atendimento.")
+        return ("Entendi o desconforto digestivo. Conte qual sintoma está sentindo e há quanto tempo. "
+                "Se os sintomas forem fortes, persistirem ou piorarem, procure atendimento em uma UBS ou UPA.")
     if kind == "symptom_headache":
         return ("Entendi, dor de cabeça é muito incômoda. Descanse em local calmo, beba água e evite se automedicar. "
                 "Se for súbita e muito forte, com febre ou rigidez na nuca, procure emergência.")
@@ -544,6 +583,8 @@ def route_chat(raw: str, model_name: str = None):
     if kind == "model_identity":
         suffix = f" Neste canal, o modelo configurado é {model_name}." if model_name else ""
         return _conversa("Sou o Braga, assistente virtual do Braga Saúde." + suffix)
+    if kind in _CLARIFICATION_TEXT:
+        return _conversa(_CLARIFICATION_TEXT[kind])
     if kind in {"time", "date"}:
         from services.calendar_reply import calendar_reply
         return _conversa(calendar_reply(raw, kind))
@@ -556,6 +597,8 @@ def route_chat(raw: str, model_name: str = None):
             "Você pode anotar na tela de pressão do aplicativo, e se preferir é só chamar o assistente de voz que ele preenche rapidinho com você."
         )
     if kind == "glucose":
+        if not 20 <= det["valor"] <= 600:
+            return _conversa("Confira o valor da glicemia e a unidade indicada no aparelho. Se estiver se sentindo mal, procure atendimento.")
         band = classify_glucose(det["valor"])
         return _conversa(
             f"Entendi: {det['valor']} de glicemia. De acordo com a Sociedade Brasileira de Diabetes, esse valor está {band}. "
@@ -611,7 +654,7 @@ def route_chat(raw: str, model_name: str = None):
             "Sou um assistente virtual. Não tenho experiências ou sentimentos próprios, mas posso conversar e ajudar com sua rotina."
         )
     if kind in SYMPTOM_KINDS:
-        return _conversa(symptom_fala(kind))
+        return _conversa(symptom_fala(kind, raw))
     # topic, smalltalk e qualquer kind desconhecido → LLM responde naturalmente
     return None
 
@@ -738,6 +781,8 @@ def whatsapp_next(raw: str, is_registered: bool, model_name: str = None) -> dict
     if kind == "model_identity":
         suffix = f" Neste canal, o modelo configurado é {model_name}." if model_name else ""
         return {"type": "text", "fala": "Sou o Braga, assistente virtual do Braga Saúde." + suffix}
+    if kind in _CLARIFICATION_TEXT:
+        return {"type": "text", "fala": _CLARIFICATION_TEXT[kind]}
     if kind in {"date", "time"}:
         from services.calendar_reply import calendar_reply
         return {"type": "text", "fala": calendar_reply(raw, kind)}
@@ -811,6 +856,6 @@ def whatsapp_next(raw: str, is_registered: bool, model_name: str = None) -> dict
         return {"type": "text",
                 "fala": "Sou um assistente virtual. Não tenho experiências ou sentimentos próprios, mas posso conversar e ajudar com sua rotina."}
     if kind in SYMPTOM_KINDS:
-        return {"type": "text", "fala": symptom_fala(kind)}
+        return {"type": "text", "fala": symptom_fala(kind, raw)}
     # topic e qualquer kind não tratado → LLM responde naturalmente
     return {"type": "llm"}

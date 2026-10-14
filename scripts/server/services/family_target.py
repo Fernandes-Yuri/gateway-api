@@ -56,10 +56,17 @@ def _explicit_person_name(text: str) -> Optional[str]:
                 "avisar", "avisa", "enviar", "envia", "mandar", "manda", "registrar", "anotar",
                 "consultar", "lembrar", "confirmar", "cuidado", "mensagem",
                 "mamae", "papai", "mae", "pai", "familiar", "paciente", "senhor", "senhora"}
-    for match in re.finditer(r"\b(?:do|da|de|para|pra|o|a)\s+(?:dona\s+|seu\s+)?([a-z]+)\b", _norm(text)):
-        name = match.group(1)
-        if name not in stopwords:
+    # Artigos e preposições comuns não provam um nome de pessoa.
+    for match in re.finditer(r"\b(?:do|da|de|para|pra|o|a)\s+(?:dona\s+|seu\s+)?([^\W\d_]+)\b", text or "", re.UNICODE):
+        raw_name = match.group(1)
+        name = _norm(raw_name)
+        if raw_name[0].isupper() and name not in stopwords:
             return name
+    # Em consultas, a posição de dono da métrica também identifica nomes
+    # em minúsculas. Nome desconhecido pede escolha, nunca retorna autocuidado.
+    match = re.search(r"\b(?:pressao|glicemia|glicose|batimentos|saturacao|peso|saude)\s+(?:do|da|de)\s+([a-z]+)\b", _norm(text))
+    if match and match.group(1) not in stopwords:
+        return match.group(1)
     return None
 
 
@@ -182,8 +189,30 @@ async def resolve_target_context(conn: Any, context: OperationContext,
     o contexto original intacto.
     """
     if not mentions_other_person(text):
-        return context, None
+        # Nome em minúsculas precisa corresponder a um vínculo real.
+        norm = _norm(text)
+        named = re.search(r"\b(?:do|da|para|pra)\s+([^\W\d_]+)\b", norm)
+        if not named:
+            return context, None
+        try:
+            rows = await list_active_relations(conn, context.actor_id)
+        except Exception:
+            return None, OperationResult.unavailable("Não consegui verificar seus vínculos agora. Tente novamente em instantes.")
+        if not any(named.group(1) in _name_tokens(row["full_name"]) for row in rows):
+            return context, None
     result = await resolve_family_target(conn, context, text)
     if not result.is_success or not result.data:
         return None, result
     return target_context(context, result.data), None
+
+
+async def active_relations_reply(conn: Any, context: OperationContext) -> OperationResult:
+    """Lista apenas os vínculos ativos da conta autenticada."""
+    try:
+        rows = await list_active_relations(conn, context.actor_id)
+    except Exception:
+        return OperationResult.unavailable("Não consegui consultar seus vínculos agora. Tente novamente em instantes.")
+    if not rows:
+        return OperationResult.missing_data("Você ainda não acompanha ninguém por aqui. Convide um familiar em 'Vínculos de cuidado' no aplicativo.")
+    return OperationResult.success("Você acompanha pelo WhatsApp:\n" + "\n".join(
+        "• " + label for label in choice_labels(rows)))

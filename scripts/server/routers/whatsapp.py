@@ -65,7 +65,7 @@ from orb_router import (
 )
 from security_defense import is_prompt_injection
 from trace_llm import trace_llm
-from whatsapp_conversation import identity_reply, parse_conversation_reply
+from whatsapp_conversation import FALLBACK_REPLY, identity_reply, parse_conversation_reply, retry_public_reply
 
 router = APIRouter()
 
@@ -898,6 +898,13 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         await send_whatsapp_text(sender_phone, dedupe_fala(_WA_LASTFALA, key, reply, alternative))
                         continue
 
+                    if user_id and wa_kind == "family_list":
+                        from services.family_target import active_relations_reply
+                        async with db_pool.acquire() as conn:
+                            result = await active_relations_reply(conn, wa_ctx or context_from_identity(identity, message_id=msg_id))
+                        await send_whatsapp_text(sender_phone, result.message)
+                        continue
+
                     # 2.7. Respostas rápidas em texto
                     # (somente após portão de conta: anônimo já respondeu antes)
                     fast_intent = (match_fast_lane_intent(user_text)
@@ -1106,11 +1113,11 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     data = {
                         "model": MODEL_WHATSAPP,
                         "messages": messages_payload,
-                        "max_tokens": 500,
+                        "max_tokens": 200 if _wa_prefs.get("response_length") == "short" else 500,
                         "temperature": 0.6
                     }
                     trace_llm('whatsapp', 'llm_request', wa_tid, model=MODEL_ID,
-                              max_tokens=500, temperature=0.6, messages=messages_payload)
+                              max_tokens=data["max_tokens"], temperature=0.6, messages=messages_payload)
 
                     async with _state.sem_wa:
                         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -1120,6 +1127,12 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             reply_text, action_name, action_params = parse_conversation_reply(
                                 r_json["choices"][0]["message"]["content"]
                             )
+                            if reply_text == FALLBACK_REPLY:
+                                # Somente metadados: não expõe texto interno ou dados clínicos.
+                                print("[WhatsApp LLM] Sem resposta pública; tentando novamente uma vez")
+                                async with httpx.AsyncClient(timeout=20.0) as client:
+                                    reply_text, action_name, action_params = await retry_public_reply(
+                                        client, GROQ_API_URL, headers, data)
                             trace_llm('whatsapp', 'llm_response', wa_tid, reply_text=reply_text,
                                       action=action_name, params=action_params)
 
