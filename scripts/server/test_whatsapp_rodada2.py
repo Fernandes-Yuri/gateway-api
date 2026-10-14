@@ -120,7 +120,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
              patch.object(wa, 'handle_wa_care_message', AsyncMock()) as care:
             await self.incoming('O que voce lembra de mim?')
         self.assertTrue(self.send.await_count)
-        self.assertIn('Não guardo apelidos nem preferências', self.send.await_args.args[1])
+        self.assertRegex(self.send.await_args.args[1], r'Não mantenho apelidos nem preferências|não salvo preferências ou apelidos')
         create.assert_not_awaited()
         care.assert_not_awaited()
 

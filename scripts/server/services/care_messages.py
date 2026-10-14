@@ -74,12 +74,17 @@ async def prepare_care_message(conn: Any, db_pool: Any, *,
     if denied:
         return denied
 
-    normalized = ''.join(c for c in unicodedata.normalize('NFD', (text or '').lower()) if not unicodedata.combining(c))
-    if detect_hour(text or '') or re.search(r'\b(?:amanha|depois|daqui|diariamente|todo dia|todos os dias)\b|\b(?:as|das)\s+\d|\b\d{1,2}:\d{2}\b', normalized):
+    explicit = re.search(r'\b(?:com\s+(?:o\s+)?texto|texto|mensagem)\s*:\s*(.*)\Z', text or '', re.IGNORECASE | re.DOTALL)
+    request = (text or '')[:explicit.start()] if explicit else text
+    content = explicit.group(1).strip() if explicit else text
+    if content and len(content) >= 2 and content[0] == content[-1] and content[0] in ('\"', "'"):
+        content = content[1:-1].strip()
+    normalized = ''.join(c for c in unicodedata.normalize('NFD', (request or '').lower()) if not unicodedata.combining(c))
+    if detect_hour(request or '') or re.search(r'\b(?:amanha|depois|daqui|diariamente|todo dia|todos os dias)\b|\b(?:as|das)\s+\d|\b\d{1,2}:\d{2}\b', normalized):
         return OperationResult.clarification(
             "Para um lembrete em horário futuro, configure-o no aplicativo Braga Saúde.")
 
-    corpo = _validate_content(text)
+    corpo = _validate_content(content)
     if not corpo:
         return OperationResult.clarification(
             "Não entendi o que você quer enviar. Escreva a mensagem de "

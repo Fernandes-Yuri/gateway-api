@@ -72,6 +72,27 @@ from whatsapp_conversation import FALLBACK_REPLY, identity_reply, parse_conversa
 router = APIRouter()
 
 
+from services import wa_session_context as dialogue
+
+
+async def _send_context_text(phone, text):
+    result = await send_whatsapp_text(phone, text)
+    if result is not False and (not isinstance(result, dict) or result.get('success') is not False):
+        dialogue.record('assistant', text, phone_hash=channel_phone_hash(phone))
+    return result
+
+
+async def _send_context_confirmation(**kwargs):
+    result = await send_confirmation_buttons(**kwargs)
+    if result is not False and (not isinstance(result, dict) or result.get('success') is not False):
+        from core.confirmation import format_confirmation_value
+        metric = kwargs['metric_type']
+        value, _icon = format_confirmation_value(metric, kwargs['values'])
+        dialogue.record('assistant', f'Proposta de {metric}: {value}. Aguarda confirmação; ainda não é um registro confirmado.',
+                        phone_hash=channel_phone_hash(kwargs['to_number']))
+    return result
+
+
 # =============================================================
 # SERVICOS DEFENSIVOS (espelham o try/except do server.py)
 # =============================================================
@@ -350,7 +371,7 @@ async def _send_family_clarification(phone, result):
     key = "".join(filter(str.isdigit, phone or "")) or phone
     message = result.message
     alternative = "Para continuar com segurança, escolha pelo nome ou número. " + message
-    await send_whatsapp_text(phone, dedupe_fala(_WA_LASTFALA, key, message, alternative))
+    await _send_context_text(phone, dedupe_fala(_WA_LASTFALA, key, message, alternative))
 
 
 def _operation_followup(user_id, text):
@@ -412,7 +433,7 @@ async def _wa_send_router_text(sender_phone: str, msg_type: str, fala: str,
         )
     except Exception:
         pass
-    await send_whatsapp_text(sender_phone, fala)
+    await _send_context_text(sender_phone, fala)
 
 
 async def handle_wa_health_confirmation(*, sender_phone: str, user_id: str, user_name,
@@ -450,7 +471,7 @@ async def handle_wa_health_confirmation(*, sender_phone: str, user_id: str, user
         return False
     is_valid, error_msg, validated_params = validate_health_data(metric_type, action_params)
     if not is_valid:
-        await send_whatsapp_text(sender_phone,
+        await _send_context_text(sender_phone,
             f"⚠️ *Valor inválido:*\n{error_msg}\n\n"
             f"Por favor, envie novamente o valor correto."
         )
@@ -466,7 +487,7 @@ async def handle_wa_health_confirmation(*, sender_phone: str, user_id: str, user
                     _conn, message_id=_op_message_id, kind=_op_kind, actor_id=actor_id)
             if not _claimed:
                 print(f"[WhatsApp Confirmation] Operação já pendente: {_op_kind} {_op_message_id}")
-                await send_whatsapp_text(
+                await _send_context_text(
                     sender_phone,
                     "Você já me enviou este valor. Estou aguardando a confirmação nos botões. 💚")
                 return True
@@ -480,7 +501,7 @@ async def handle_wa_health_confirmation(*, sender_phone: str, user_id: str, user
     )
     if confirmation_code:
         await mark_channel_pending(db, confirmation_code, sender_phone, actor_id)
-        await send_confirmation_buttons(
+        await _send_context_confirmation(
             to_number=sender_phone,
             metric_type=metric_type,
             values=validated_params,
@@ -532,7 +553,7 @@ async def handle_wa_medication_take(*, sender_phone: str, user_id: str, user_nam
             take_ctx, error = await _WA_FAMILY_RESOLVER(conn, take_ctx, user_text)
         if error:
             _remember_operation(user_id, user_text, error, "med_take")
-            await send_whatsapp_text(sender_phone, error.message)
+            await _send_context_text(sender_phone, error.message)
             return True
     _op_message_id = getattr(take_ctx, "message_id", None)
 
@@ -545,7 +566,7 @@ async def handle_wa_medication_take(*, sender_phone: str, user_id: str, user_nam
                 actor_id=take_ctx.actor_id)
         if not _claimed:
             print(f"[WhatsApp Med Take] Tomada já pendente: {_op_message_id}")
-            await send_whatsapp_text(
+            await _send_context_text(
                 sender_phone,
                 "Você já me enviou essa tomada. Estou aguardando a confirmação nos botões. 💚")
             return True
@@ -566,8 +587,8 @@ async def handle_wa_medication_take(*, sender_phone: str, user_id: str, user_nam
 
     if take_result.is_confirmation and take_result.pending_op_id:
         await mark_channel_pending(db, take_result.pending_op_id, sender_phone, take_ctx.actor_id)
-        await send_whatsapp_text(sender_phone, take_result.message)
-        await send_confirmation_buttons(
+        await _send_context_text(sender_phone, take_result.message)
+        await _send_context_confirmation(
             to_number=sender_phone,
             metric_type="MED_TOMADA",
             values=take_result.data or {},
@@ -578,7 +599,7 @@ async def handle_wa_medication_take(*, sender_phone: str, user_id: str, user_nam
     else:
         # clarification (vários remédios ou horário ambíguo), missing_data
         # (nenhum remédio cadastrado) ou indisponibilidade: texto do serviço.
-        await send_whatsapp_text(sender_phone, take_result.message)
+        await _send_context_text(sender_phone, take_result.message)
 
     # Log sem dado clínico (nome do remédio e horário não entram): registra
     # a intenção e o resultado estruturado, como no fluxo de consultas.
@@ -612,7 +633,7 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
     """
     from services.care_intent import is_care_request, is_reminder_request, REMINDER_APP_REPLY
     if is_reminder_request(user_text):
-        await send_whatsapp_text(sender_phone, REMINDER_APP_REPLY)
+        await _send_context_text(sender_phone, REMINDER_APP_REPLY)
         return True
     if not is_care_request(user_text):
         return False
@@ -650,8 +671,8 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
 
     if care_result.is_confirmation and care_result.pending_op_id:
         await mark_channel_pending(db, care_result.pending_op_id, sender_phone, care_ctx.actor_id)
-        await send_whatsapp_text(sender_phone, care_result.message)
-        await send_confirmation_buttons(
+        await _send_context_text(sender_phone, care_result.message)
+        await _send_context_confirmation(
             to_number=sender_phone,
             metric_type="CARE_MESSAGE",
             values={"body": (care_result.data or {}).get("body", "")},
@@ -661,7 +682,7 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
         print(f"[WhatsApp Care] Botões enviados: {care_result.pending_op_id}")
     else:
         # clarification (conteúdo insuficiente) / denied / unavailable.
-        await send_whatsapp_text(sender_phone, care_result.message)
+        await _send_context_text(sender_phone, care_result.message)
 
     # Log sem o conteúdo da mensagem pessoal (LGPD): só a intenção e o
     # resultado, como nos demais fluxos de serviço.
@@ -688,9 +709,8 @@ async def handle_wa_preference(*, sender_phone: str, user_id: str, user_name,
     from services.wa_preferences import detect_preference_intent
     if not detect_preference_intent(user_text):
         return False
-    await send_whatsapp_text(sender_phone,
-        "Não guardo apelidos nem preferências neste assistente WhatsApp. "
-        "Uso o nome da sua conta; configurações pessoais ficam no aplicativo Braga Saúde.")
+    from services.wa_onboarding import preference_reply
+    await _send_context_text(sender_phone, preference_reply(user_text, sender_phone))
     return True
 
 
@@ -730,7 +750,7 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                                 user_text = await transcribe_audio_whisper(audio_bytes, GROQ_API_KEY_WHATSAPP) or ""
                                 print("[WhatsApp Audio] Transcrição concluída")
                         if not user_text:
-                            await send_whatsapp_text(
+                            await _send_context_text(
                                 sender_phone,
                                 "Olá! Recebi o seu áudio, mas não consegui escutar nitidamente. Pode me mandar de novo ou escrever por texto? 💚"
                             )
@@ -770,7 +790,7 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                             "Não compartilho instruções internas nem altero minhas regras por mensagem. "
                             "Posso ajudar com sua saúde e rotina no Braga Saúde. 💚"
                         )
-                        await send_whatsapp_text(sender_phone, refusal_text)
+                        await _send_context_text(sender_phone, refusal_text)
                         continue
 
                     # 2. Identificação do Usuário no PostgreSQL
@@ -793,6 +813,10 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                     verified_link = identity.get("status") == STATUS_OK
                     user_id = identity.get("user_id") if verified_link else None
                     user_name = first_name(identity.get("full_name")) if verified_link else None
+                    if verified_link:
+                        dialogue.scope((channel_phone_hash(sender_phone), str(user_id)))
+                        dialogue.record('user', user_text)
+
 
                     # Passo 1.5: a identidade resolvida vira o contexto de
                     # operação (actor/patient/channel/message_id) que os
@@ -808,7 +832,7 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                                 sender_phone=sender_phone,
                                 text=user_text,
                                 db_pool=db_pool,
-                                send_text=send_whatsapp_text,
+                                send_text=_send_context_text,
                             )
                             if _consumed:
                                 continue
@@ -823,7 +847,7 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                             _blocked = await gate_unregistered(
                                 user_text=user_text,
                                 identity=identity,
-                                send_text=send_whatsapp_text,
+                                send_text=_send_context_text,
                                 sender_phone=sender_phone,
                                 send_emergency=lambda phone: send_whatsapp_emergency(phone, send_text=send_whatsapp_text),
                             )
@@ -837,7 +861,7 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                         user_text, verified_link=verified_link, full_name=user_name
                     )
                     if identity_text:
-                        await send_whatsapp_text(sender_phone, identity_text)
+                        await _send_context_text(sender_phone, identity_text)
                         continue
 
                     if user_id:
@@ -859,14 +883,14 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                         key = "".join(filter(str.isdigit, sender_phone or "")) or sender_phone
                         reply = calendar_reply(user_text, wa_kind, zone)
                         alternative = calendar_reply(user_text, wa_kind, zone, alternate=True) if wa_kind == "time" else None
-                        await send_whatsapp_text(sender_phone, dedupe_fala(_WA_LASTFALA, key, reply, alternative))
+                        await _send_context_text(sender_phone, dedupe_fala(_WA_LASTFALA, key, reply, alternative))
                         continue
 
                     if user_id and wa_kind == "family_list":
                         from services.family_target import active_relations_reply
                         async with db_pool.acquire() as conn:
                             result = await active_relations_reply(conn, wa_ctx or context_from_identity(identity, message_id=msg_id))
-                        await send_whatsapp_text(sender_phone, result.message)
+                        await _send_context_text(sender_phone, result.message)
                         continue
 
                     # 2.7. Respostas rápidas em texto
@@ -890,9 +914,9 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                             action_params={"intent": fast_intent}
                         )
 
-                        await send_whatsapp_text(sender_phone, reply_text)
+                        await _send_context_text(sender_phone, reply_text)
                         if "link_text" in FAST_LANE_INTENTS[fast_intent]:
-                            await send_whatsapp_text(sender_phone, FAST_LANE_INTENTS[fast_intent]["link_text"])
+                            await _send_context_text(sender_phone, FAST_LANE_INTENTS[fast_intent]["link_text"])
                         continue
 
                     # 2.8. Consultas de saúde (PR2, passo 2.3): o serviço
@@ -939,10 +963,10 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                             except Exception:
                                 pass
                             _remember_operation(user_id, user_text, _q_result, wa_kind)
-                            await send_whatsapp_text(sender_phone, _q_result.message)
+                            await _send_context_text(sender_phone, _q_result.message)
                             continue
 
-                        await send_whatsapp_text(sender_phone,
+                        await _send_context_text(sender_phone,
                             "Não consegui consultar seus registros agora. Tente novamente em instantes.")
                         continue
 
@@ -1002,13 +1026,16 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                         async with db_pool.acquire() as conn:
                             target, error = await _WA_FAMILY_RESOLVER(conn, wa_ctx, user_text)
                         if error or (target and not target.is_self_care):
-                            await send_whatsapp_text(sender_phone, error.message if error else
+                            await _send_context_text(sender_phone, error.message if error else
                                 "Para registrar essa medição do familiar, use o aplicativo. "
                                 "Aqui posso consultar os dados dele e registrar medicamentos com confirmação.")
                             continue
                     wa_route = whatsapp_next(user_text, bool(user_id), model_name=MODEL_WHATSAPP)
                     trace_llm('whatsapp', 'router_hit', wa_tid, route={k: (str(v)[:200]) for k, v in wa_route.items()})
                     if wa_route["type"] == "text":
+                        if wa_kind == "app":
+                            from services.wa_onboarding import linked_download_reply
+                            wa_route["fala"] = linked_download_reply(sender_phone)
                         if wa_kind == "nutrition":
                             remember(_WA_MEMORY, wa_mem_key, "nutrition")
                         if wa_kind in SYMPTOM_KINDS:
@@ -1048,10 +1075,7 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                         "Authorization": f"Bearer {GROQ_API_KEY_WHATSAPP}",
                         "Content-Type": "application/json"
                     }
-                    messages_payload = [
-                        {"role": "system", "content": conv_prompt},
-                        {"role": "user", "content": user_text}
-                    ]
+                    messages_payload = dialogue.messages(conv_prompt, user_text)
                     data = {
                         "model": MODEL_WHATSAPP,
                         "messages": messages_payload,
@@ -1060,7 +1084,8 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
                         "temperature": 0.6
                     }
                     trace_llm('whatsapp', 'llm_request', wa_tid, model=MODEL_ID,
-                              max_tokens=data["max_tokens"], temperature=0.6, messages=messages_payload)
+                              max_tokens=data["max_tokens"], temperature=0.6, messages=messages_payload,
+                              context_messages=len(messages_payload) - 1)
 
                     async with _state.sem_wa:
                         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -1109,11 +1134,11 @@ async def _process_authorized_whatsapp_payload(payload: Dict[str, Any]):
 
                             # Envia resposta por texto (com links formatados se houver)
                             if links_to_send:
-                                await send_whatsapp_text(sender_phone, f"{spoken_text}\n\n{links_to_send[0]}")
+                                await _send_context_text(sender_phone, f"{spoken_text}\n\n{links_to_send[0]}")
                             else:
-                                await send_whatsapp_text(sender_phone, spoken_text)
+                                await _send_context_text(sender_phone, spoken_text)
                         else:
-                            await send_whatsapp_text(
+                            await _send_context_text(
                                 sender_phone,
                                 "Olá! Recebi sua mensagem com carinho, mas meu sistema está processando muitas informações agora. Já já volto a te responder!"
                             )
@@ -1131,7 +1156,7 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
         # Extrair ação e código do button_id (formato: action_code)
         parts = button_id.split("_", 1)
         if len(parts) != 2 or not parts[1] or parts[0].lower() not in {"confirm", "edit", "cancel"}:
-            await send_whatsapp_text(sender_phone, "Não reconheci esta confirmação. Envie novamente o pedido.")
+            await _send_context_text(sender_phone, "Não reconheci esta confirmação. Envie novamente o pedido.")
             return
 
         action, confirmation_code = parts
@@ -1140,7 +1165,7 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
         # Buscar pool de conexão
         if not db_pool:
             print("[Callback Error] db_pool não disponível")
-            await send_whatsapp_text(sender_phone, "Não consegui verificar a confirmação agora. Tente novamente em instantes.")
+            await _send_context_text(sender_phone, "Não consegui verificar a confirmação agora. Tente novamente em instantes.")
             return
 
         # AUD-G(M): a função expire_pending_confirmations() existia no banco
@@ -1165,7 +1190,7 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
 
         if not user_id:
             print("[Callback] Sem vínculo confirmado")
-            await send_whatsapp_text(
+            await _send_context_text(
                 sender_phone,
                 "Não encontrei uma conta vinculada a este WhatsApp. "
                 "Vincule seu número no aplicativo Braga Saúde ('Vincular WhatsApp') "
@@ -1181,12 +1206,12 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
                    FROM pending_confirmations WHERE confirmation_code=$1 AND user_id=$2""",
                 confirmation_code, user_id)
         if not proposal:
-            await send_whatsapp_text(sender_phone, "Não encontrei esta proposta na sua conta. Envie novamente o pedido.")
+            await _send_context_text(sender_phone, "Não encontrei esta proposta na sua conta. Envie novamente o pedido.")
             return
         if proposal['status'] != 'pending' or not proposal['active']:
             labels = {'confirmed': 'já foi confirmada', 'cancelled': 'já foi cancelada', 'expired': 'expirou'}
             label = labels.get(proposal['status'], 'expirou')
-            await send_whatsapp_text(sender_phone, f"Esta proposta {label}. Nenhuma nova ação foi executada.")
+            await _send_context_text(sender_phone, f"Esta proposta {label}. Nenhuma nova ação foi executada.")
             return
 
         # Processar ação
@@ -1201,16 +1226,16 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
                     from services.medication_take import confirm_pending_medication_take
                     _mt_result = await confirm_pending_medication_take(
                         db_pool, confirmation_code=confirmation_code, actor_id=user_id)
-                    await send_whatsapp_text(
+                    await _send_context_text(
                         sender_phone,
                         _mt_result.message or "Não foi possível registrar a tomada agora.")
                 except ImportError:  # pragma: no cover
-                    await send_whatsapp_text(
+                    await _send_context_text(
                         sender_phone,
                         "Não foi possível registrar a tomada agora. Tente novamente.")
                 except Exception as _mt_err:
                     print(f"[Callback] Falha na tomada: {_mt_err}")
-                    await send_whatsapp_text(
+                    await _send_context_text(
                         sender_phone,
                         "Não foi possível registrar a tomada agora. Tente novamente em instantes.")
                 return
@@ -1221,20 +1246,20 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
             if _mt_metric == "CARE_MESSAGE":
                 try:
                     from services.care_messages import confirm_pending_care_message
-                    await send_whatsapp_text(sender_phone, "Envio da mensagem de cuidado em andamento. Vou informar o resultado aqui.")
+                    await _send_context_text(sender_phone, "Envio da mensagem de cuidado em andamento. Vou informar o resultado aqui.")
                     _cm_result = await confirm_pending_care_message(
                         db_pool, _state.send_care_message,
                         confirmation_code=confirmation_code, actor_id=user_id)
-                    await send_whatsapp_text(
+                    await _send_context_text(
                         sender_phone,
                         _cm_result.message or "Não foi possível enviar a mensagem agora.")
                 except ImportError:  # pragma: no cover
-                    await send_whatsapp_text(
+                    await _send_context_text(
                         sender_phone,
                         "Não foi possível enviar a mensagem agora. Tente novamente.")
                 except Exception as _cm_err:
                     print(f"[Callback] Falha na mensagem de cuidado: {_cm_err}")
-                    await send_whatsapp_text(
+                    await _send_context_text(
                         sender_phone,
                         "Não foi possível enviar a mensagem agora. Tente novamente em instantes.")
                 return
@@ -1243,7 +1268,7 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
             # na mesma conta do app. Reenvio do botão não duplica.
             if _mt_metric == "PREFERENCE":
                 await cancel_pending_confirmation(confirmation_code, user_id, db_pool)
-                await send_whatsapp_text(sender_phone,
+                await _send_context_text(sender_phone,
                     "Esta proposta de preferência foi encerrada. Não guardo apelidos nem preferências neste assistente WhatsApp.")
                 return
 
@@ -1271,7 +1296,7 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
                             confirmed_at = confirmed_at.replace(tzinfo=timezone.utc)
                         local_time = confirmed_at.astimezone(zone).strftime('%d/%m/%Y %H:%M')
 
-                        await send_whatsapp_text(sender_phone,
+                        await _send_context_text(sender_phone,
                             f"✅ *Registro confirmado por você!*\n\n"
                             f"📋 Código: `{confirmation_code}`\n"
                             f"{icon} {metric_type}: {value_display}\n"
@@ -1287,7 +1312,7 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
                     message = "Não consegui gravar o registro agora. A proposta continua pendente; tente confirmar novamente."
                 else:
                     message = "Esta proposta já foi processada ou expirou. Consulte seus registros antes de enviar novamente."
-                await send_whatsapp_text(sender_phone, message)
+                await _send_context_text(sender_phone, message)
 
         elif action == "edit":
             # Buscar tipo de métrica para orientar o usuário
@@ -1300,30 +1325,30 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
                 if row:
                     metric_type = row['metric_type']
                     if not await cancel_pending_confirmation(confirmation_code, user_id, db_pool):
-                        await send_whatsapp_text(sender_phone, "Esta proposta já foi processada ou expirou. Envie novamente o pedido.")
+                        await _send_context_text(sender_phone, "Esta proposta já foi processada ou expirou. Envie novamente o pedido.")
                         return
                     await conn.execute("DELETE FROM assistant_preference_pending WHERE user_id=$1 AND proposal_id IN (SELECT COALESCE(value_json->>'proposal_id', confirmation_code) FROM pending_confirmations WHERE user_id=$1 AND confirmation_code=$2)", user_id, confirmation_code)
 
                     if metric_type == "PRESSAO":
-                        await send_whatsapp_text(sender_phone,
+                        await _send_context_text(sender_phone,
                             "✏️ *Edição de Pressão*\n\n"
                             "Por favor, envie novamente o valor correto.\n"
                             "Exemplo: *130 por 85*"
                         )
                     elif metric_type == "GLICEMIA":
-                        await send_whatsapp_text(sender_phone,
+                        await _send_context_text(sender_phone,
                             "✏️ *Edição de Glicose*\n\n"
                             "Por favor, envie novamente o valor correto.\n"
                             "Exemplo: *glicose 120*"
                         )
                     elif metric_type == "AGUA":
-                        await send_whatsapp_text(sender_phone,
+                        await _send_context_text(sender_phone,
                             "✏️ *Edição de Água*\n\n"
                             "Por favor, envie novamente a quantidade correta.\n"
                             "Exemplo: *bebi 300ml de água*"
                         )
                     elif metric_type == "PESO":
-                        await send_whatsapp_text(sender_phone,
+                        await _send_context_text(sender_phone,
                             "✏️ *Edição de Peso*\n\n"
                             "Por favor, envie novamente o valor correto.\n"
                             "Exemplo: *meu peso 75kg*"
@@ -1332,17 +1357,17 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
                         # Passo 3.3: editar a tomada cancela a pendência —
                         # nenhum registro é feito. O usuário reenvia remédio e
                         # horário; o serviço re-identifica do cadastro.
-                        await send_whatsapp_text(sender_phone,
+                        await _send_context_text(sender_phone,
                             "✏️ *Edição de Tomada*\n\n"
                             "A tomada anterior foi descartada (nada foi registrado).\n"
                             "Envie novamente o remédio e o horário correto.\n"
                             "Exemplo: *tomei o remédio das 20h*"
                         )
                     else:
-                        await send_whatsapp_text(sender_phone,
+                        await _send_context_text(sender_phone,
                             "✏️ A proposta anterior foi cancelada. Envie novamente o pedido com os dados corretos.")
                 else:
-                    await send_whatsapp_text(sender_phone,
+                    await _send_context_text(sender_phone,
                         "Esta proposta já foi processada ou expirou. Envie novamente o pedido.")
 
         elif action == "cancel":
@@ -1350,13 +1375,13 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
             if success:
                 async with db_pool.acquire() as conn:
                     await conn.execute("DELETE FROM assistant_preference_pending WHERE user_id=$1 AND proposal_id IN (SELECT COALESCE(value_json->>'proposal_id', confirmation_code) FROM pending_confirmations WHERE user_id=$1 AND confirmation_code=$2)", user_id, confirmation_code)
-                await send_whatsapp_text(sender_phone,
+                await _send_context_text(sender_phone,
                     "❌ *Registro cancelado.*\n\n"
                     "Seus dados não foram salvos.\n"
                     "Se precisar, pode enviar novamente a qualquer momento."
                 )
             else:
-                await send_whatsapp_text(sender_phone,
+                await _send_context_text(sender_phone,
                     "Não foi possível cancelar. O registro pode já ter sido processado."
                 )
 
@@ -1365,7 +1390,7 @@ async def _handle_authorized_confirmation_callback(button_id: str, sender_phone:
 
     except Exception as e:
         print(f"[Callback Error] Falha ao processar callback: {e}")
-        await send_whatsapp_text(sender_phone,
+        await _send_context_text(sender_phone,
             "Desculpe, tive um problema ao processar sua solicitação.\n"
             "Por favor, tente novamente."
         )
@@ -1394,7 +1419,7 @@ async def send_whatsapp_direct(req: WhatsAppSendRequest, uid: str = Depends(fire
     if req.templateName:
         res = await send_whatsapp_template(req.phone, req.templateName, req.languageCode or "en_US")
     else:
-        res = await send_whatsapp_text(req.phone, req.message or "Olá! Mensagem do ecossistema Braga Saúde.")
+        res = await _send_context_text(req.phone, req.message or "Olá! Mensagem do ecossistema Braga Saúde.")
     return res
 
 
@@ -1570,7 +1595,7 @@ async def _send_channel_prompt(phone, text, buttons):
         if isinstance(result, dict) and result.get('success') is True:
             return
     if text:
-        await send_whatsapp_text(phone, text)
+        await _send_context_text(phone, text)
 
 
 async def _channel_privacy_guard(phone, *, text='', button_id='', timestamp=None):
@@ -1584,7 +1609,7 @@ async def _channel_privacy_guard(phone, *, text='', button_id='', timestamp=None
         return True
     pool = _state.db_pool
     if not pool:
-        await send_whatsapp_text(phone, UNAVAILABLE_TEXT)
+        await _send_context_text(phone, UNAVAILABLE_TEXT)
         return True
     cleanup_started = False
     try:
@@ -1594,11 +1619,14 @@ async def _channel_privacy_guard(phone, *, text='', button_id='', timestamp=None
         if pending_cleanup is True:
             cleanup_started = True
             await finish_channel_cleanup(pool, channel_phone_hash(phone), outbox_path=WEBHOOK_OUTBOX_PATH)
-            await send_whatsapp_text(phone, DELETED_TEXT)
+            await _send_context_text(phone, DELETED_TEXT)
             return True
         result = await resolve_deletion(pool, phone, text=text, button_id=button_id, timestamp=timestamp)
         if isinstance(result, dict) and result.get('deleted'):
             cleanup_started = True
+            dialogue.clear(channel_phone_hash(phone))
+            from services.wa_onboarding import clear as clear_onboarding
+            clear_onboarding(phone)
             _WA_OPERATION_MEMORY.pop(result.get('actor_id'), None)
             for memory in (_WA_MEMORY, _WA_LASTFALA, _WA_SYMPTOM):
                 memory.pop(''.join(filter(str.isdigit, phone)), None)
@@ -1610,16 +1638,16 @@ async def _channel_privacy_guard(phone, *, text='', button_id='', timestamp=None
                     filtered.append({**event, 'payload': {'events': items, 'content_redacted': True}})
             WHATSAPP_EVENT_LOG[:] = filtered
             await finish_channel_cleanup(pool, channel_phone_hash(phone), outbox_path=WEBHOOK_OUTBOX_PATH)
-            await send_whatsapp_text(phone, result['message'])
+            await _send_context_text(phone, result['message'])
             return True
         if result is not None:
-            await send_whatsapp_text(phone, result)
+            await _send_context_text(phone, result)
             return True
         if deletion_request(text):
             async with pool.acquire() as conn:
                 identity = await resolve_linked_account(conn, phone)
             if identity.get('status') in (STATUS_UNAVAILABLE, 'ambiguous'):
-                await send_whatsapp_text(phone, UNAVAILABLE_TEXT)
+                await _send_context_text(phone, UNAVAILABLE_TEXT)
                 return True
             message, buttons = await prepare_deletion(pool, phone, identity.get('user_id'))
             await _send_channel_prompt(phone, message, buttons)
@@ -1627,13 +1655,14 @@ async def _channel_privacy_guard(phone, *, text='', button_id='', timestamp=None
         blocked, message, buttons = await consent_gate(pool, phone, text=text,
             button_id=button_id, timestamp=timestamp)
         if blocked:
+            dialogue.clear(channel_phone_hash(phone))
             await _send_channel_prompt(phone, message, buttons)
         return blocked
     except Exception:
         print('[WhatsApp Privacy] Operação indisponível')
         message = ('Seu número foi desvinculado. A limpeza dos dados do canal ainda está em andamento. '
                    'Sua conta e histórico no app foram preservados.' if cleanup_started else UNAVAILABLE_TEXT)
-        await send_whatsapp_text(phone, message)
+        await _send_context_text(phone, message)
         return True
 
 
@@ -1650,11 +1679,26 @@ async def process_incoming_whatsapp_payload(payload):
                     if await _channel_privacy_guard(phone, text=text, timestamp=message.get('timestamp')):
                         continue
                     single = {'entry': [{**entry, 'changes': [{**change, 'value': {**value, 'messages': [message]}}]}]}
-                    await _process_authorized_whatsapp_payload(single)
+                    token = dialogue.scope(None)
+                    try:
+                        await _process_authorized_whatsapp_payload(single)
+                    finally:
+                        dialogue.reset(token)
 
 
 async def handle_confirmation_callback(button_id, sender_phone, timestamp=None):
     async with _channel_serialized(sender_phone):
         if await _channel_privacy_guard(sender_phone, button_id=button_id, timestamp=timestamp):
             return
-        await _handle_authorized_confirmation_callback(button_id, sender_phone)
+        token = dialogue.scope(None)
+        try:
+            async with _state.db_pool.acquire() as conn:
+                identity = await resolve_linked_account(conn, sender_phone)
+            if identity.get('status') == STATUS_OK:
+                dialogue.scope((channel_phone_hash(sender_phone), str(identity['user_id'])))
+                action = button_id.split('_', 1)[0]
+                if action in ('confirm', 'edit', 'cancel'):
+                    dialogue.record('user', f'Ação no cartão: {action}.')
+            await _handle_authorized_confirmation_callback(button_id, sender_phone)
+        finally:
+            dialogue.reset(token)
