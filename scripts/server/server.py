@@ -1,5 +1,6 @@
 import os
 import asyncio
+from datetime import datetime, timezone
 from typing import List, Optional, Any
 from fastapi import BackgroundTasks, FastAPI, HTTPException as HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -482,7 +483,7 @@ async def startup():
                 retention_scheduler.add_job(
                     reconcile_accounts, 'interval', minutes=5, args=[db_pool],
                     id="reconcile_firebase_accounts", replace_existing=True,
-                    max_instances=1, coalesce=True, next_run_time=datetime.now(),
+                    max_instances=1, coalesce=True, next_run_time=datetime.now(timezone.utc),
                 )
             async def purge_expired_blocked_ips():
                 if db_pool:
