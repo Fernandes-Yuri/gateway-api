@@ -21,6 +21,7 @@ def build_conversation_system(channel='chat', preferences=None, *, self_care=Tru
         base = APP_SYSTEM
     elif channel == 'whatsapp':
         base = PERSONA + '\n' + (
+            'Responda sempre em português do Brasil, mesmo quando pedirem outro idioma. '
             'Este canal é WhatsApp. Mantenha a mesma personalidade e postura do Braga no aplicativo. '
             'Aqui não há telas do app abertas por você. Nunca diga que abriu uma tela. '
             'A confirmação de registro é conduzida pelo executor em mensagens ou botões. '
@@ -45,4 +46,7 @@ def build_conversation_system(channel='chat', preferences=None, *, self_care=Tru
             )
     else:
         raise ValueError('Canal desconhecido')
+    if channel == 'whatsapp' and (preferences or {}).get('response_length') == 'short':
+        base += (' A preferência confirmada é por respostas curtas: use uma ou duas frases '
+                 'diretas. Amplie somente quando o pedido exigir detalhes ou para uma orientação de emergência. ')
     return base + context_prompt(preferences)

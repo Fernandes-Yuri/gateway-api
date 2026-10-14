@@ -598,3 +598,53 @@ if __name__ == "__main__":
         res = asyncio.run(send_whatsapp_text(target_phone, custom_text))
 
     print(json.dumps(res, indent=2, ensure_ascii=False))
+
+
+async def send_whatsapp_cta_url(to_number: str, body_text: str,
+                                button_text: str, url: str) -> Dict[str, Any]:
+    """Botão nativo que abre uma URL; não é botão reply de confirmação.
+
+    https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-cta-url-messages/
+    """
+    from urllib.parse import urlsplit
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return {"success": False, "error": "invalid_https_url"}
+    if not 1 <= len(button_text) <= 20 or not 1 <= len(body_text) <= 1024:
+        return {"success": False, "error": "invalid_cta_text"}
+    payload = {
+        "messaging_product": "whatsapp", "recipient_type": "individual",
+        "to": sanitize_phone_number(to_number), "type": "interactive",
+        "interactive": {
+            "type": "cta_url", "body": {"text": body_text},
+            "action": {"name": "cta_url", "parameters": {
+                "display_text": button_text, "url": url}},
+        },
+    }
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}",
+               "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(WHATSAPP_API_URL, headers=headers, json=payload)
+        print(f"[WhatsApp CTA] Status: {response.status_code}")
+        return {"success": response.status_code in (200, 201),
+                "status_code": response.status_code}
+    except Exception as exc:
+        print(f"[WhatsApp CTA] Falha de transporte: {type(exc).__name__}")
+        return {"success": False, "status_code": None, "error": "transport_error"}
+
+
+async def send_whatsapp_emergency(to_number: str, *, send_text=None) -> Dict[str, Any]:
+    """Socorro em cartão com CTA; falha da Meta preserva o texto completo."""
+    from config import PUBLIC_API_BASE_URL
+    from services.emergency_reply import emergency_reply
+    result = await send_whatsapp_cta_url(
+        to_number,
+        "Isso parece urgente. Ligue para o SAMU 192 agora.\n\n"
+        "Abra as opções abaixo para ligar pelo celular ou buscar uma UPA. "
+        "Não adie o pedido de socorro.",
+        "Opções de socorro", PUBLIC_API_BASE_URL + "/socorro")
+    if result.get("success"):
+        return result
+    sender = send_text or send_whatsapp_text
+    return await sender(to_number, emergency_reply())

@@ -65,7 +65,7 @@ from orb_router import (
 )
 from security_defense import is_prompt_injection
 from trace_llm import trace_llm
-from whatsapp_conversation import identity_reply, parse_conversation_reply
+from whatsapp_conversation import FALLBACK_REPLY, identity_reply, parse_conversation_reply, retry_public_reply
 
 router = APIRouter()
 
@@ -79,6 +79,7 @@ try:
         download_whatsapp_media,
         mark_whatsapp_message_read,
         send_whatsapp_interactive,
+        send_whatsapp_emergency,
         send_whatsapp_reaction,
         send_whatsapp_template,
         send_whatsapp_text,
@@ -91,6 +92,10 @@ except ImportError:
 
     async def send_whatsapp_text(*args, **kwargs):  # type: ignore
         return {"success": False, "error": "whatsapp_service ausente"}
+
+    async def send_whatsapp_emergency(to_number, *, send_text=None):  # type: ignore
+        from services.emergency_reply import emergency_reply
+        return await (send_text or send_whatsapp_text)(to_number, emergency_reply())
 
     async def send_whatsapp_template(*args, **kwargs):  # type: ignore
         return {"success": False, "error": "whatsapp_service ausente"}
@@ -865,6 +870,7 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                                 identity=identity,
                                 send_text=send_whatsapp_text,
                                 sender_phone=sender_phone,
+                                send_emergency=lambda phone: send_whatsapp_emergency(phone, send_text=send_whatsapp_text),
                             )
                             if _blocked:
                                 continue
@@ -883,6 +889,9 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         user_text = _operation_followup(user_id, user_text)
 
                     wa_kind = detect_all(user_text).get("kind")
+                    if wa_kind == "emergency":
+                        await send_whatsapp_emergency(sender_phone, send_text=send_whatsapp_text)
+                        continue
                     if wa_kind in {"date", "time"}:
                         from services.calendar_reply import calendar_reply
                         zone = None
@@ -896,6 +905,13 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                         reply = calendar_reply(user_text, wa_kind, zone)
                         alternative = calendar_reply(user_text, wa_kind, zone, alternate=True) if wa_kind == "time" else None
                         await send_whatsapp_text(sender_phone, dedupe_fala(_WA_LASTFALA, key, reply, alternative))
+                        continue
+
+                    if user_id and wa_kind == "family_list":
+                        from services.family_target import active_relations_reply
+                        async with db_pool.acquire() as conn:
+                            result = await active_relations_reply(conn, wa_ctx or context_from_identity(identity, message_id=msg_id))
+                        await send_whatsapp_text(sender_phone, result.message)
                         continue
 
                     # 2.7. Respostas rápidas em texto
@@ -1106,11 +1122,11 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     data = {
                         "model": MODEL_WHATSAPP,
                         "messages": messages_payload,
-                        "max_tokens": 500,
+                        "max_tokens": 200 if _wa_prefs.get("response_length") == "short" else 500,
                         "temperature": 0.6
                     }
                     trace_llm('whatsapp', 'llm_request', wa_tid, model=MODEL_ID,
-                              max_tokens=500, temperature=0.6, messages=messages_payload)
+                              max_tokens=data["max_tokens"], temperature=0.6, messages=messages_payload)
 
                     async with _state.sem_wa:
                         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -1120,6 +1136,12 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             reply_text, action_name, action_params = parse_conversation_reply(
                                 r_json["choices"][0]["message"]["content"]
                             )
+                            if reply_text == FALLBACK_REPLY:
+                                # Somente metadados: não expõe texto interno ou dados clínicos.
+                                print("[WhatsApp LLM] Sem resposta pública; tentando novamente uma vez")
+                                async with httpx.AsyncClient(timeout=20.0) as client:
+                                    reply_text, action_name, action_params = await retry_public_reply(
+                                        client, GROQ_API_URL, headers, data)
                             trace_llm('whatsapp', 'llm_response', wa_tid, reply_text=reply_text,
                                       action=action_name, params=action_params)
 
@@ -1576,3 +1598,16 @@ def configure_state(*, db_pool=None, sem_wa=None, send_care_message=None):
     _state.db_pool = db_pool
     _state.sem_wa = sem_wa
     _state.send_care_message = send_care_message
+
+
+@router.get("/socorro", include_in_schema=False)
+async def emergency_options_page():
+    """Acesso público: não depende de login, vínculo, banco ou modelo."""
+    from fastapi.responses import HTMLResponse
+    from services.emergency_page import emergency_page
+    return HTMLResponse(emergency_page(), headers={
+        "Cache-Control": "public, max-age=300",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+    })

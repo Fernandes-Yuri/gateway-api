@@ -74,7 +74,8 @@ class RouterTests(unittest.TestCase):
 
     def test_water_bare(self):
         r = self.assertAction("bebi água", "CONVERSA")
-        self.assertIn("250", r["fala"])
+        self.assertIn("Quanto", r["fala"])
+        self.assertNotIn("250", r["fala"])
 
     # ---- FC / SpO2 ----
     def test_hr(self):
@@ -247,7 +248,9 @@ class DetectAllTests(unittest.TestCase):
                 self.assertEqual(det["kind"], "symptom_gi", text)
                 env = route_chat(text)
                 self.assertEqual(env["acao"], "CONVERSA")
-                self.assertIn("desidratar", env["fala"])
+                self.assertIn("UPA", env["fala"])
+                if "vomit" in text:
+                    self.assertNotIn("diarreia", env["fala"])
 
     def test_headache_and_fever_guidance(self):
         env = route_chat("tô com dor de cabeça também")
