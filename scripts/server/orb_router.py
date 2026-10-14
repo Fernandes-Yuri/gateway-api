@@ -325,6 +325,10 @@ def detect_spo2(norm: str):
 def detect_hydration(norm: str):
     if not any(w in norm for w in _HYDR_WORDS):
         return None
+    # Copos de café/suco não são um relato de água. Não inferir volume
+    # de água a partir de uma bebida diferente.
+    if re.search(r"\b(cafe|cha|suco|leite|cerveja|refrigerante)\b", norm):
+        return None
     m = re.search(r"(\d+(?:[.,]\d+)?)\s*(ml|mililitro|litro|l|copo|garrafinha|garrafa|xicara|caneca)", norm)
     if m:
         amount = float(m.group(1).replace(",", "."))

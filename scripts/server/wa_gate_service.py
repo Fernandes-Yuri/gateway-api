@@ -57,6 +57,7 @@ async def gate_unregistered(
     identity: Optional[dict],
     send_text: Callable[[str, str], Awaitable[Any]],
     sender_phone: str,
+    send_emergency=None,
 ) -> bool:
     """
     True se consumiu a mensagem (respondeu e o webhook para por aqui).
@@ -69,7 +70,10 @@ async def gate_unregistered(
     if status == STATUS_OK:
         return False
     if is_emergency(user_text):
-        await send_text(sender_phone, emergency_reply())
+        if send_emergency is not None:
+            await send_emergency(sender_phone)
+        else:
+            await send_text(sender_phone, emergency_reply())
         return True
     # Mensagem do estado do vinculo (sem vinculo / ambiguo / indisponivel),
     # sempre da fonte unica do servico de identidade.
