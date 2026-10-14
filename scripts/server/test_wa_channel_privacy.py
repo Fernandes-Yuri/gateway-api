@@ -203,7 +203,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Aceite registrado', self.send.await_args.args[1])
 
     async def test_cleanup_failure_does_not_claim_completed_deletion(self):
-        with patch.object(wa, 'resolve_deletion', AsyncMock(return_value={
+        with patch('services.wa_channel_privacy.resolve_deletion', AsyncMock(return_value={
                 'deleted': True, 'actor_id': 'actor', 'message': DELETED_TEXT})), \
              patch('services.wa_channel_storage.finish_channel_cleanup', AsyncMock(side_effect=OSError)):
             await wa._channel_privacy_guard(PHONE, text='sim')
