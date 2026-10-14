@@ -1398,21 +1398,3 @@ async def delete_user_data(body: DeleteAccountRequest, request: Request, _auth=D
     await auth_limit(pool, 'moderation_delete', email, 5, 60)
     from services.account_deletion import delete_account
     return await delete_account(pool, body.userId, actor=email, ip=get_client_ip(request))
-
-
-# Contrato de máquina separado da sessão humana do portal (DT-001).
-from services.firebase_deletion_identity import require_deletion_worker, require_deleted_firebase_user
-
-
-@router.post("/api/admin/firebase-auth-deletion")
-async def firebase_auth_deletion(
-    body: DeleteAccountRequest, _identity=Depends(require_deletion_worker)
-):
-    pool = _require_pool()
-    await require_deleted_firebase_user(body.userId)
-    from services.account_deletion import delete_account
-    result = await delete_account(pool, body.userId, actor="Firebase Auth deletion worker")
-    if result.get("success") is not True or result.get("storageCleanupPending") is not False:
-        # A fila local de arquivos e o job Firebase continuam pendentes.
-        raise HTTPException(503, "Expurgo de arquivos pendente; repetir a operação.")
-    return result

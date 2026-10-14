@@ -10,13 +10,18 @@ from config import STORAGE_DIR
 
 async def cleanup_account_files(pool, user_id: str) -> bool:
     async with pool.acquire() as conn:
-        job = await conn.fetchrow("SELECT prescription_filenames FROM account_storage_cleanup WHERE user_id=$1", user_id)
+        job = await conn.fetchrow("SELECT prescription_filenames,firebase_cleanup_required FROM account_storage_cleanup WHERE user_id=$1", user_id)
         if not job:
             return True
         names = job["prescription_filenames"]
         if isinstance(names, str):
             names = json.loads(names)
         try:
+            if job.get("firebase_cleanup_required"):
+                from services.firebase_account_reconciliation import account_exists
+                if await account_exists(user_id):
+                    # Um retry antigo não pode apagar arquivos de uma conta recriada.
+                    return False
             for root in (os.path.join(STORAGE_DIR, "avatars"), os.path.join(STORAGE_DIR, "medications")):
                 path = os.path.realpath(os.path.join(root, user_id))
                 if os.path.commonpath([os.path.realpath(root), path]) != os.path.realpath(root):
@@ -29,14 +34,17 @@ async def cleanup_account_files(pool, user_id: str) -> bool:
                 path = os.path.join(STORAGE_DIR, "prescriptions", name)
                 if os.path.isfile(path):
                     os.remove(path)
-        except (OSError, ValueError):
+            if job.get("firebase_cleanup_required"):
+                from services.firebase_account_reconciliation import cleanup_legacy_firebase_storage
+                await cleanup_legacy_firebase_storage(user_id)
+        except Exception:
             # Não confirma expurgo incompleto; a fila permite uma nova tentativa.
             return False
         await conn.execute("DELETE FROM account_storage_cleanup WHERE user_id=$1", user_id)
     return True
 
 
-async def delete_account(pool, user_id: str, *, actor: str, ip: str = "") -> dict:
+async def delete_account(pool, user_id: str, *, actor: str, ip: str = "", firebase_cleanup: bool = False) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", user_id):
         raise HTTPException(422, "Identificador de conta inválido.")
     async with pool.acquire() as conn:
@@ -45,8 +53,10 @@ async def delete_account(pool, user_id: str, *, actor: str, ip: str = "") -> dic
             if profile:
                 files = await conn.fetch("SELECT filename FROM prescription_files WHERE patient_id=$1", user_id)
                 await conn.execute(
-                    "INSERT INTO account_storage_cleanup(user_id,prescription_filenames) VALUES ($1,$2::jsonb) ON CONFLICT (user_id) DO NOTHING",
-                    user_id, json.dumps([r["filename"] for r in files]))
+                    "INSERT INTO account_storage_cleanup(user_id,prescription_filenames,firebase_cleanup_required) "
+                    "VALUES ($1,$2::jsonb,$3) ON CONFLICT (user_id) DO UPDATE SET "
+                    "firebase_cleanup_required=account_storage_cleanup.firebase_cleanup_required OR EXCLUDED.firebase_cleanup_required",
+                    user_id, json.dumps([r["filename"] for r in files]), firebase_cleanup)
                 # Feedbacks não possuem FK de perfil no esquema original.
                 await conn.execute("DELETE FROM feedbacks WHERE user_id=$1", user_id)
                 for table in ("medical_access_tokens", "emergency_access_tokens"):
