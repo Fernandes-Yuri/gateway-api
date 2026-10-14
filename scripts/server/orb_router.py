@@ -410,8 +410,8 @@ def detect_all(raw: str) -> dict:
     from services.wa_preferences import detect_preference_intent
     if detect_preference_intent(raw):
         return {"kind": "preference"}
-    from services.care_intent import is_care_request
-    if is_care_request(raw) or re.search(r"\b(?:abrir|ver|mostrar|meus|minhas)\s+(?:meus\s+)?lembretes\b", norm):
+    from services.care_intent import is_care_request, is_reminder_request
+    if is_reminder_request(raw) or is_care_request(raw) or re.search(r"\b(?:abrir|ver|mostrar|meus|minhas)\s+(?:meus\s+)?lembretes\b", norm):
         return {"kind": "reminder"}
     if re.search(r"\b(?:vou|pretendo|quero|irei)\s+tomar\b", norm) and _MED_CONTEXT.search(norm):
         return {"kind": "med_plan"}
@@ -835,8 +835,8 @@ def whatsapp_next(raw: str, is_registered: bool, model_name: str = None) -> dict
                     "Para acompanhar, vale conhecer o aplicativo Braga Saúde.")
         return {"type": "text", "fala": fala}
     if kind == "reminder":
-        return {"type": "text",
-                "fala": "Lembretes de remédio ficam no aplicativo, na tela de lembretes. Quer que eu te explique como ativar?"}
+        from services.care_intent import REMINDER_APP_REPLY
+        return {"type": "text", "fala": REMINDER_APP_REPLY}
     if kind == "exams":
         return {"type": "text",
                 "fala": "No aplicativo, Organizar exames prepara um PDF para a consulta. A sessão é temporária: salve o PDF fora do app. Os documentos não são enviados ao servidor."}
@@ -844,6 +844,8 @@ def whatsapp_next(raw: str, is_registered: bool, model_name: str = None) -> dict
         return {"type": "text",
                 "fala": "Entendi. Eu não receito nem ajusto remédio, isso é com seu médico. Se quiser ajuda para organizar os horários, me fala quais são."}
     if kind == "nutrition":
+        if re.search(r"\bbebi\b.*\bcafe\b", normalize(raw)):
+            return {"type": "text", "fala": "Entendi que você bebeu café. Para acompanhar suas refeições e bebidas, use a área de alimentação no aplicativo Braga Saúde."}
         return {"type": "text",
                 "fala": "Sobre alimentação posso orientar de forma geral, sem inventar nada do que você comeu. Me conta o que foi que eu te explico com carinho."}
     if kind == "grocery":

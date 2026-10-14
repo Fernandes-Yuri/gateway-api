@@ -606,7 +606,10 @@ async def handle_wa_care_message(*, sender_phone: str, user_id: str, user_name,
     Retorna True quando respondeu (proposta com botões ou esclarecimento do
     serviço); False caso contrário, e o pipeline segue.
     """
-    from services.care_intent import is_care_request
+    from services.care_intent import is_care_request, is_reminder_request, REMINDER_APP_REPLY
+    if is_reminder_request(user_text):
+        await send_whatsapp_text(sender_phone, REMINDER_APP_REPLY)
+        return True
     if not is_care_request(user_text):
         return False
     if not user_id:
@@ -1122,7 +1125,8 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                     data = {
                         "model": MODEL_WHATSAPP,
                         "messages": messages_payload,
-                        "max_tokens": 200 if _wa_prefs.get("response_length") == "short" else 500,
+                        # A extensão é definida pela política, não cortando a geração.
+                        "max_tokens": 500,
                         "temperature": 0.6
                     }
                     trace_llm('whatsapp', 'llm_request', wa_tid, model=MODEL_ID,
@@ -1133,12 +1137,13 @@ async def process_incoming_whatsapp_payload(payload: Dict[str, Any]):
                             resp = await client.post(GROQ_API_URL, headers=headers, json=data)
                         if resp.status_code == 200:
                             r_json = resp.json()
+                            choice = r_json["choices"][0]
                             reply_text, action_name, action_params = parse_conversation_reply(
-                                r_json["choices"][0]["message"]["content"]
+                                choice["message"]["content"]
                             )
-                            if reply_text == FALLBACK_REPLY:
+                            if reply_text == FALLBACK_REPLY or choice.get("finish_reason") == "length":
                                 # Somente metadados: não expõe texto interno ou dados clínicos.
-                                print("[WhatsApp LLM] Sem resposta pública; tentando novamente uma vez")
+                                print("[WhatsApp LLM] Resposta vazia ou incompleta; tentando novamente uma vez")
                                 async with httpx.AsyncClient(timeout=20.0) as client:
                                     reply_text, action_name, action_params = await retry_public_reply(
                                         client, GROQ_API_URL, headers, data)

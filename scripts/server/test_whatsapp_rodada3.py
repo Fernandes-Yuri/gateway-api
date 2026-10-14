@@ -168,7 +168,7 @@ class LLMPreferencePipelineTests(unittest.IsolatedAsyncioTestCase):
             await self.incoming('Me conta como está o tempo lá fora')
         sent = client.post.await_args.kwargs['json']
         self.assertIn('uma ou duas frases', sent['messages'][0]['content'])
-        self.assertEqual(sent['max_tokens'], 200)
+        self.assertEqual(sent['max_tokens'], 500)
         self.assertIn('tempo', self.send.await_args.args[1])
 
     async def test_empty_reasoning_is_retried_in_real_whatsapp_pipeline(self):

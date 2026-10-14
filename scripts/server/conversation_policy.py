@@ -23,6 +23,10 @@ def build_conversation_system(channel='chat', preferences=None, *, self_care=Tru
         base = PERSONA + '\n' + (
             'Responda sempre em português do Brasil, mesmo quando pedirem outro idioma. '
             'Este canal é WhatsApp. Mantenha a mesma personalidade e postura do Braga no aplicativo. '
+            'O WhatsApp apoia o uso do aplicativo Braga Saúde. '
+            'Lembretes e acompanhamento recorrente ficam no app; não proponha envio imediato como substituto de um lembrete. '
+            'Mantenha as consultas, registros com confirmação e socorro disponíveis neste canal. '
+            'Oriente ao app quando ele for necessário ao pedido, sem repetir uma promoção a cada resposta. '
             'Aqui não há telas do app abertas por você. Nunca diga que abriu uma tela. '
             'A confirmação de registro é conduzida pelo executor em mensagens ou botões. '
             'Nesta etapa de geração de conversa você responde em texto puro; não executa nem confirma registros. '
