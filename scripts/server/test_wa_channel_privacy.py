@@ -63,6 +63,15 @@ class ConsentTests(unittest.IsolatedAsyncioTestCase):
         conn.fetchrow.return_value = row
         self.assertEqual((await consent_gate(Pool(conn), PHONE, text='Li e aceito', timestamp=old))[1], CONSENT_TEXT)
 
+    async def test_acceptance_with_second_precision_timestamp_is_not_discarded(self):
+        conn = connection()
+        row = consent_row()
+        row['presented_at'] = datetime.now(timezone.utc)
+        conn.fetchrow.return_value = row
+        message = (await consent_gate(Pool(conn), PHONE, text='Li e aceito',
+            timestamp=str(int(row['presented_at'].timestamp()))))[1]
+        self.assertIn('Aceite registrado', message)
+
     async def test_decline_and_missing_database_never_authorize(self):
         conn = connection()
         conn.fetchrow.return_value = consent_row()
@@ -192,3 +201,11 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             await wa.handle_confirmation_callback('wa_accept_' + str(row['challenge']), PHONE)
         handler.assert_not_awaited()
         self.assertIn('Aceite registrado', self.send.await_args.args[1])
+
+    async def test_cleanup_failure_does_not_claim_completed_deletion(self):
+        with patch.object(wa, 'resolve_deletion', AsyncMock(return_value={
+                'deleted': True, 'actor_id': 'actor', 'message': DELETED_TEXT})), \
+             patch('services.wa_channel_storage.finish_channel_cleanup', AsyncMock(side_effect=OSError)):
+            await wa._channel_privacy_guard(PHONE, text='sim')
+        self.assertIn('ainda está em andamento', self.send.await_args.args[1])
+        self.assertNotIn('Apaguei os dados ativos', self.send.await_args.args[1])
