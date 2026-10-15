@@ -36,6 +36,8 @@ jobs:
       - run: pip install --require-hashes -r requirements-dev.lock
       - run: ruff check scripts/server/ scripts/ migrate.py
       - run: python -m unittest discover scripts/server/ "test_*.py"
+      - name: Validar packs editoriais e publicação em PostgreSQL
+        run: PYTHONPATH=.:scripts/server python -m pytest -q scripts/server/test_grocery_editorial.py scripts/server/test_grocery_editorial_postgres.py scripts/server/test_grocery_publications.py scripts/server/test_grocery_cards.py scripts/server/test_grocery_retail_admin.py scripts/server/test_basket_comparison.py
       - run: PYTHONPATH=scripts/server python -m unittest discover research/ "test_*.py"
 
   ensaio-migracoes:

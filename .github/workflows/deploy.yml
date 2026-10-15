@@ -52,6 +52,7 @@ jobs:
       - name: Run unit tests
         run: |
           python -m unittest discover scripts/server/ "test_*.py"
+          PYTHONPATH=.:scripts/server python -m pytest -q scripts/server/test_grocery_editorial.py scripts/server/test_grocery_editorial_postgres.py scripts/server/test_grocery_publications.py scripts/server/test_grocery_cards.py scripts/server/test_grocery_retail_admin.py scripts/server/test_basket_comparison.py
 
       - name: Run research tests
         run: |
