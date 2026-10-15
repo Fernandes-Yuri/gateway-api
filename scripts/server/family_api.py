@@ -10,6 +10,10 @@ from core.devices import load_devices_by_user
 from family_contract import validate_acceptance, validate_consultation_acceptance
 from security_defense import get_client_ip, sanitize_zero_trust_text
 
+JOKER_CONNECTION_CODE = "TESTFAM1"
+JOKER_PATIENT_UID = "patient-demo-testfam"
+JOKER_PATIENT_NAME = "Carlos Braga (Paciente Teste)"
+
 
 class AcceptInvitation(BaseModel):
     code: str
@@ -157,17 +161,87 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                     raise HTTPException(409, 'Convite indisponível. Gere um novo código.')
             return {'status': 'success', 'id': str(row['id'])}
 
+    @app.get('/api/family/find-by-code/{code}')
+    async def find_by_code(code: str, uid: str = Depends(firebase_uid)):
+        clean_code = code.strip().upper()
+        if clean_code == JOKER_CONNECTION_CODE:
+            now = datetime.now(timezone.utc)
+            return {
+                "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, "testfam1-joker")),
+                "patient_id": JOKER_PATIENT_UID,
+                "patient_name": JOKER_PATIENT_NAME,
+                "connection_code": JOKER_CONNECTION_CODE,
+                "status": "PENDING",
+                "caregiver_name": "",
+                "caregiver_relation": "",
+                "caregiver_role": "CAREGIVER_VIEWER",
+                "permissions": ["ALL"],
+                "created_at": now.isoformat(),
+                "expires_at": (now + timedelta(days=3650)).isoformat()
+            }
+        async with pool().acquire() as conn:
+            row = await conn.fetchrow('''
+                SELECT b.*, p.full_name AS patient_name
+                FROM family_bindings b
+                LEFT JOIN profiles p ON p.id = b.patient_id
+                WHERE b.connection_code = $1 AND b.status = 'PENDING' AND b.expires_at > now()
+            ''', clean_code)
+            if not row:
+                raise HTTPException(404, 'Código indisponível ou expirado.')
+            return serialize_binding(row)
+
     @app.post('/api/family/accept')
     async def accept_invitation(p: AcceptInvitation, request: Request, uid: str = Depends(firebase_uid)):
         client_ip = get_client_ip(request)
         if rate_limiter:
-            await rate_limiter.check("family_accept_ip", client_ip, limit=5, window_seconds=60, ip=client_ip, pool=pool())
-        caregiver_name = sanitize_zero_trust_text(p.caregiverName, max_length=100, field_name="caregiverName", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
-        caregiver_relation = sanitize_zero_trust_text(p.caregiverRelation, max_length=50, field_name="caregiverRelation", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
+            await rate_limiter.check("family_accept_ip", client_ip, limit=10, window_seconds=60, ip=client_ip, pool=pool())
+        caregiver_name = sanitize_zero_trust_text(p.caregiverName, max_length=100, field_name="caregiverName", ip=client_ip, rate_limiter=rate_limiter, pool=get_pool())
+        caregiver_relation = sanitize_zero_trust_text(p.caregiverRelation, max_length=50, field_name="caregiverRelation", ip=client_ip, rate_limiter=rate_limiter, pool=get_pool())
         if not caregiver_name.strip() or not caregiver_relation.strip():
             raise HTTPException(422, 'Informe nome e relação com o familiar.')
+        
+        clean_code = p.code.strip().upper()
+        if clean_code == JOKER_CONNECTION_CODE:
+            if uid == JOKER_PATIENT_UID:
+                raise HTTPException(409, 'Você não pode acompanhar seu próprio perfil.')
+            async with pool().acquire() as conn, conn.transaction():
+                # Garante que o perfil do paciente modelo de teste exista e esteja completo
+                await conn.execute('''
+                    INSERT INTO profiles(id, full_name, self_care_complete, role, created_at, updated_at)
+                    VALUES ($1, $2, true, 'PATIENT', now(), now())
+                    ON CONFLICT (id) DO UPDATE SET self_care_complete=true
+                ''', JOKER_PATIENT_UID, JOKER_PATIENT_NAME)
+                
+                # Garante stub do perfil do cuidador
+                await conn.execute('INSERT INTO profiles(id, full_name) VALUES($1,$2) ON CONFLICT DO NOTHING', uid, caregiver_name)
+                
+                # Idempotência: se já tiver vínculo ativo para esse cuidador com o paciente coringa, retorna
+                existing = await conn.fetchrow('''
+                    SELECT b.*, p.full_name AS patient_name
+                    FROM family_bindings b
+                    LEFT JOIN profiles p ON p.id = b.patient_id
+                    WHERE b.patient_id=$1 AND b.caregiver_id=$2 AND b.status='ACTIVE'
+                ''', JOKER_PATIENT_UID, uid)
+                if existing:
+                    return serialize_binding(existing)
+                
+                now = datetime.now(timezone.utc)
+                binding_id = uuid.uuid4()
+                created = await conn.fetchrow('''
+                    INSERT INTO family_bindings (
+                        id, patient_id, caregiver_id, caregiver_name, caregiver_relation,
+                        connection_code, status, created_at, expires_at, caregiver_role, permissions
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, 'ACTIVE', $7, $8, 'CAREGIVER_VIEWER', '["ALL"]'::jsonb
+                    ) RETURNING *
+                ''', binding_id, JOKER_PATIENT_UID, uid, caregiver_name, caregiver_relation, JOKER_CONNECTION_CODE, now, now + timedelta(days=3650))
+                
+                res = dict(created)
+                res['patient_name'] = JOKER_PATIENT_NAME
+                return serialize_binding(res)
+
         async with pool().acquire() as conn, conn.transaction():
-            row = await conn.fetchrow('SELECT * FROM family_bindings WHERE connection_code=$1 FOR UPDATE', p.code.strip().upper())
+            row = await conn.fetchrow('SELECT * FROM family_bindings WHERE connection_code=$1 FOR UPDATE', clean_code)
             if not row:
                 raise HTTPException(404, 'Código indisponível ou expirado.')
             try:
