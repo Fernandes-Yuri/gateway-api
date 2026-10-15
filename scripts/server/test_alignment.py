@@ -117,6 +117,23 @@ class RouteTests(unittest.TestCase):
         # id malformado: 422 sem tocar no banco
         self.assertEqual(422, self.client.post('/api/family/message/delete', json=dict(id='nao-e-uuid')).status_code)
 
+    def test_joker_connection_code_preview_and_self_accept_rejection(self):
+        self.app.dependency_overrides[firebase_uid] = lambda: 'test-caregiver-uid'
+        res = self.client.get('/api/family/find-by-code/TESTFAM1')
+        self.assertEqual(200, res.status_code)
+        data = res.json()
+        self.assertEqual("TESTFAM1", data["connection_code"])
+        self.assertEqual("Carlos Braga (Paciente Teste)", data["patient_name"])
+        self.assertEqual("PENDING", data["status"])
+
+        # Self-pairing rejected
+        self.app.dependency_overrides[firebase_uid] = lambda: 'patient-demo-testfam'
+        res_self = self.client.post('/api/family/accept', json=dict(
+            code='TESTFAM1', caregiverName='Carlos Braga', caregiverRelation='Proprio'
+        ))
+        self.assertEqual(409, res_self.status_code)
+
+
 
 if __name__ == '__main__':
     unittest.main()
