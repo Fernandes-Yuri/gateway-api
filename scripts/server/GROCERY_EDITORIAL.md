@@ -149,3 +149,10 @@ Verificações adicionais: `test_grocery_publications.py` e
 `portal-auth.test.cjs`, e `PublishedGroceryPackPersistenceTest` no Android.
 Build, migração Room e testes Android devem rodar no GitHub Actions, conforme
 AGENTS.md; não executar Gradle neste ambiente.
+
+
+## Ambiente de homologação e autonomia do catálogo
+
+AWS e painel online são ambientes de testes operacionais, sem usuários reais, conforme decisão do fundador em 15/10/2026. Merges e deploys desta entrega são para homologação; não autorizam lançamento final nem release público do Android.
+
+O catálogo atual do APK acompanha cadastro, edição e retirada/reativação de produtos pelo webservice. A retirada é lógica (`active=false`), preservando históricos. Packs publicados mantêm o snapshot: alterações editoriais exigem republicar; retirar uma publicação remove a oferta da vitrine, sem apagar listas já adotadas. O fundador fará testes com login real no painel e APK debug antes de qualquer release.

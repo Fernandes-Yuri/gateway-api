@@ -10,6 +10,7 @@ from unittest.mock import patch
 from services.grocery_publications import publish, public_feed, change_publication
 from services.grocery_editorial import preview_edition
 from services.grocery_cards import load_cards
+from services.grocery_retail_admin import save_record
 from services.grocery_editorial import create_edition, mutate_edition, edition_snapshot, EditorialConflict
 
 DSN = os.getenv('TEST_POSTGRES_URL')
@@ -78,6 +79,24 @@ async def test_weekly_workspace_clone_isolation_and_transactional_rollback():
             async with conn.transaction(isolation='repeatable_read'):
                 released = await publish(conn, edition_id, body)
             publication_id = released['current_publication_id']
+            source_card = dict((await load_cards(conn))[0])
+            source_card.pop('markets', None)
+            source_card['active'] = False
+            await save_record(conn, 'card', source_card)
+            assert await load_cards(conn) == []
+            # An editorial withdrawal removes the live card without corrupting a published snapshot.
+            assert (await public_feed(conn))['publications'][0]['packs'][0]['items'][0]['product']['id'] == 'rice'
+            source_card.update(id='new-product', name='Novo produto', active=True, image_url='https://example.org/new.png')
+            await save_record(conn, 'card', source_card)
+            assert (await load_cards(conn))[0]['id'] == 'new-product'
+            source_card.update(id='rice', name='Arroz editado', image_url='https://example.org/edited.png')
+            await save_record(conn, 'card', source_card)
+            current = next(c for c in await load_cards(conn) if c['id'] == 'rice')
+            assert current['name'] == 'Arroz editado'
+            assert current['image_url'] == 'https://example.org/edited.png'
+            frozen_card = (await public_feed(conn))['publications'][0]['packs'][0]['items'][0]['product']
+            assert frozen_card['name'] == 'Arroz'
+            assert frozen_card['image_url'] == 'https://example.org/rice'
             assert (await public_feed(conn))['publications'][0]['packs'][0]['total_brl'] == '19.80'
             async with conn.transaction():
                 await mutate_edition(conn, edition_id, EditorialMutation(expected_revision=3, operation='quote', payload=dict(
@@ -96,7 +115,7 @@ async def test_weekly_workspace_clone_isolation_and_transactional_rollback():
             assert (await public_feed(conn))['publications'][0]['packs'][0]['total_brl'] == '19.80'
         await conn.execute((ROOT / 'migrations/060_grocery_editorial_publications_rollback.sql').read_text())
         await conn.execute((ROOT / 'migrations/059_grocery_editorial_workspace_rollback.sql').read_text())
-        assert await conn.fetchval('SELECT COUNT(*) FROM grocery_retail_cards') == 1
+        assert await conn.fetchval('SELECT COUNT(*) FROM grocery_retail_cards') == 2
     finally:
         await conn.execute('ROLLBACK')
         await conn.execute('SET search_path TO public')
