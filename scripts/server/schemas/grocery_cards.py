@@ -34,6 +34,7 @@ class GroceryRetailCardIn(BaseModel):
     kcal_per_package: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
     carbs_g: Decimal = Field(default=Decimal('0'), ge=0, max_digits=12, decimal_places=2)
     protein_g: Decimal = Field(default=Decimal('0'), ge=0, max_digits=12, decimal_places=2)
+    fiber_g: Optional[Decimal] = Field(default=None, ge=0, max_digits=12, decimal_places=2)
     fat_g: Decimal = Field(default=Decimal('0'), ge=0, max_digits=12, decimal_places=2)
     price_avg: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
     linked_ingredient_slug: Optional[str] = None

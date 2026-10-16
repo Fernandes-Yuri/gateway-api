@@ -29,6 +29,7 @@ async def test_weekly_workspace_clone_isolation_and_transactional_rollback():
         await conn.execute(f'SET search_path TO "{schema}"')
         await conn.execute('CREATE TABLE grocery_ingredients(slug TEXT PRIMARY KEY)')
         await conn.execute((ROOT / 'migrations/058_grocery_retail_cards_and_markets.sql').read_text())
+        await conn.execute((ROOT / 'migrations/061_grocery_dietary_fiber.sql').read_text())
         await conn.execute((ROOT / 'migrations/059_grocery_editorial_workspace.sql').read_text())
         await conn.execute("INSERT INTO grocery_markets(id,name,logo_url,website_url) VALUES('a','Mercado A','https://example.org/logo','https://example.org')")
         await conn.execute("""INSERT INTO grocery_retail_cards(id,name,category,image_url,package_display,package_net_value,package_unit,kcal_per_package,price_avg)
@@ -116,6 +117,74 @@ async def test_weekly_workspace_clone_isolation_and_transactional_rollback():
         await conn.execute((ROOT / 'migrations/060_grocery_editorial_publications_rollback.sql').read_text())
         await conn.execute((ROOT / 'migrations/059_grocery_editorial_workspace_rollback.sql').read_text())
         assert await conn.fetchval('SELECT COUNT(*) FROM grocery_retail_cards') == 2
+    finally:
+        await conn.execute('ROLLBACK')
+        await conn.execute('SET search_path TO public')
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+async def test_food_rename_is_atomic_in_both_directions_and_keeps_prices():
+    from services.ingredient_admin import update_ingredient
+
+    parsed = urlparse(DSN)
+    if parsed.hostname not in ('127.0.0.1', 'localhost') or parsed.path != '/braga_privacy_test':
+        raise RuntimeError('Somente banco efêmero local braga_privacy_test')
+    conn = await asyncpg.connect(DSN)
+    schema = 'names_' + uuid4().hex
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute("""CREATE TABLE grocery_ingredients(
+            slug TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL,
+            details JSONB NOT NULL DEFAULT '{}', active BOOLEAN NOT NULL DEFAULT TRUE);
+            CREATE TABLE nutrition_catalog_settings(id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
+            INSERT INTO nutrition_catalog_settings VALUES(1,1);
+            CREATE TABLE grocery_price_cache(food_name TEXT PRIMARY KEY, ingredient_slug TEXT,
+                price_unit TEXT, price_avg NUMERIC, updated_at TIMESTAMPTZ DEFAULT now());
+            INSERT INTO grocery_ingredients(slug,name,unit) VALUES('avocado','Abacate Manteiga','kg');
+            INSERT INTO grocery_price_cache(food_name,price_unit,price_avg)
+                VALUES('Abacate Manteiga','kg',6.0);""")
+        await conn.execute((ROOT / 'migrations/058_grocery_retail_cards_and_markets.sql').read_text())
+        await conn.execute((ROOT / 'migrations/061_grocery_dietary_fiber.sql').read_text())
+        await conn.execute("""INSERT INTO grocery_retail_cards
+            (id,name,category,image_url,package_display,package_net_value,package_unit,kcal_per_package,price_avg,linked_ingredient_slug)
+            VALUES('avocado-430','Abacate','Frutas','https://example.org/a.jpg','430 g',430,'g',412,2.58,'avocado'),
+                  ('avocado-500','Abacate Manteiga','Frutas','https://example.org/b.jpg','500 g',500,'g',479,3.0,'avocado');
+            INSERT INTO grocery_markets(id,name,logo_url,website_url)
+                VALUES('market','Mercado','https://example.org/logo.png','https://example.org');
+            INSERT INTO grocery_market_prices(card_id,market_id,price,product_store_url)
+                VALUES('avocado-430','market',2.58,'https://example.org/a');""")
+        price_before = dict(await conn.fetchrow('SELECT * FROM grocery_market_prices'))
+        cache_before = dict(await conn.fetchrow('SELECT * FROM grocery_price_cache'))
+        product = dict(id='avocado-430', name='Abacate Selecionado', category='Frutas',
+                       image_url='https://example.org/a.jpg', package_display='430 g',
+                       package_net_value=430, package_unit='g', kcal_per_package=412,
+                       price_avg=2.58, fiber_g=12.5, linked_ingredient_slug='avocado')
+        async with conn.transaction():
+            await save_record(conn, 'card', product)
+        assert await conn.fetchval("SELECT name FROM grocery_ingredients WHERE slug='avocado'") == 'Abacate Selecionado'
+        assert {r['name'] for r in await conn.fetch('SELECT name FROM grocery_retail_cards')} == {'Abacate Selecionado'}
+        assert dict(await conn.fetchrow('SELECT * FROM grocery_market_prices')) == price_before
+        cache_after = dict(await conn.fetchrow('SELECT * FROM grocery_price_cache'))
+        assert cache_after['ingredient_slug'] == 'avocado'
+        assert cache_after['price_avg'] == cache_before['price_avg']
+        assert cache_after['updated_at'] == cache_before['updated_at']
+        async with conn.transaction():
+            await update_ingredient(conn, 'avocado', {'name': 'Abacate Especial'})
+        assert {r['name'] for r in await conn.fetch('SELECT name FROM grocery_retail_cards')} == {'Abacate Especial'}
+        assert await conn.fetchval("SELECT kcal_per_package FROM grocery_retail_cards WHERE id='avocado-430'") == 412
+        assert await conn.fetchval("SELECT package_net_value FROM grocery_retail_cards WHERE id='avocado-430'") == 430
+        assert await conn.fetchval("SELECT fiber_g FROM grocery_retail_cards WHERE id='avocado-430'") == 12.5
+        revision = await conn.fetchval('SELECT revision FROM nutrition_catalog_settings WHERE id=1')
+        with pytest.raises(RuntimeError, match='falha deliberada'):
+            async with conn.transaction():
+                await save_record(conn, 'card', {**product, 'name': 'Abacate Temporário'})
+                raise RuntimeError('falha deliberada')
+        assert await conn.fetchval("SELECT name FROM grocery_ingredients WHERE slug='avocado'") == 'Abacate Especial'
+        assert {r['name'] for r in await conn.fetch('SELECT name FROM grocery_retail_cards')} == {'Abacate Especial'}
+        assert await conn.fetchval('SELECT revision FROM nutrition_catalog_settings WHERE id=1') == revision
+        assert dict(await conn.fetchrow('SELECT * FROM grocery_market_prices')) == price_before
     finally:
         await conn.execute('ROLLBACK')
         await conn.execute('SET search_path TO public')

@@ -237,12 +237,19 @@ async def update_ingredient(conn, slug, data, *, bump=True):
     if "unit" in payload and unit != current["unit"]:
         avisos.append(f"Unidade alterada de {current['unit']} para {unit}: preços manuais e médias da comunidade ligados à unidade antiga deixam de valer e o item volta a ficar pendente.")
     if "name" in payload and name != current["name"]:
-        avisos.append("Nome alterado: o preço manual antigo fica no cache legado, mas deixa de ser aplicado a este ingrediente.")
+        # Bind old name-based prices to the stable ingredient before renaming.
+        # Values, packaging and research dates stay untouched.
+        await conn.execute("""UPDATE grocery_price_cache SET ingredient_slug=$1
+            WHERE ingredient_slug IS NULL AND food_name=$2 AND price_unit=$3""",
+            slug, current["name"], current["unit"])
     if not active and current["active"]:
         avisos.append("Ingrediente desativado: some da lista de compras e do app; reative quando quiser.")
     await conn.execute(
         "UPDATE grocery_ingredients SET name=$2, unit=$3, details=$4::jsonb, active=$5 WHERE slug=$1",
         slug, name, unit, _as_json(details), active)
+    if "name" in payload:
+        await conn.execute("UPDATE grocery_retail_cards SET name=$2 WHERE linked_ingredient_slug=$1 AND name IS DISTINCT FROM $2",
+                           slug, name)
     revision = await bump_revision(conn) if bump else None
     print(f"[ADMIN-CATALOG] Ingrediente editado: {slug} ({name}) campos={sorted(payload)}")
     return {"slug": slug, "name": name, "unit": unit, "active": active, "revision": revision,

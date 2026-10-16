@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from pydantic import ValidationError
 from schemas.grocery_cards import GroceryRetailCardIn, MarketIn, PriceIn
+from services.ingredient_admin import update_ingredient
 
 
 async def save_record(conn, kind, payload):
@@ -23,7 +24,7 @@ async def save_record(conn, kind, payload):
             'image_url': 'imagem', 'logo_url': 'logotipo', 'website_url': 'site da loja',
             'package_display': 'apresentação da embalagem', 'package_net_value': 'conteúdo da embalagem',
             'package_unit': 'unidade da embalagem', 'kcal_per_package': 'calorias por embalagem',
-            'carbs_g': 'carboidratos', 'protein_g': 'proteínas', 'fat_g': 'gorduras',
+            'carbs_g': 'carboidratos', 'protein_g': 'proteínas', 'fat_g': 'gorduras', 'fiber_g': 'fibras alimentares',
             'price_avg': 'preço de referência', 'price': 'preço pesquisado',
             'last_updated': 'data da pesquisa', 'product_store_url': 'link do produto',
             'card_id': 'produto', 'market_id': 'supermercado',
@@ -32,6 +33,8 @@ async def save_record(conn, kind, payload):
             if err['loc'] else 'dados do cadastro' for err in exc.errors()))
         raise ValueError('Revise os campos: ' + fields) from exc
     data = record.model_dump()
+    if kind == 'card' and 'fiber_g' not in payload:
+        data.pop('fiber_g', None)
     if kind in ('card', 'market') and (not data['id'].strip() or not data['name'].strip()):
         raise ValueError('Identificador e nome não podem estar vazios.')
     if kind == 'card':
@@ -39,11 +42,18 @@ async def save_record(conn, kind, payload):
             if not data[field].strip():
                 raise ValueError('Categoria e apresentação da embalagem são obrigatórias.')
         if data['linked_ingredient_slug']:
-            unit = await conn.fetchval('SELECT unit FROM grocery_ingredients WHERE slug=$1', data['linked_ingredient_slug'])
+            unit = await conn.fetchval('SELECT unit FROM grocery_ingredients WHERE slug=$1 FOR UPDATE', data['linked_ingredient_slug'])
             if unit is None:
                 raise ValueError('Ingrediente de despensa não encontrado.')
             if (unit, data['package_unit']) not in {('kg', 'g'), ('L', 'ml'), ('un', 'un')}:
                 raise ValueError('A unidade da embalagem deve corresponder ao ingrediente: g/kg, ml/L ou un/un.')
+            previous = await conn.fetchrow('SELECT name,linked_ingredient_slug FROM grocery_retail_cards WHERE id=$1', data['id'])
+            # A name edit (or explicit new link) updates the ingredient and its
+            # sibling packages in the same transaction as the product itself.
+            if previous is None or previous['name'] != data['name'] or previous['linked_ingredient_slug'] != data['linked_ingredient_slug']:
+                updated = await update_ingredient(conn, data['linked_ingredient_slug'], {'name': data['name']})
+                data['name'] = updated['name']
+
     if kind == 'quote':
         if data['last_updated'] > datetime.now(timezone.utc):
             raise ValueError('A data da pesquisa não pode estar no futuro.')
