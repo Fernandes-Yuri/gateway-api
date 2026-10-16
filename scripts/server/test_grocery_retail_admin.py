@@ -57,6 +57,7 @@ def test_admin_snapshot_includes_inactive_records_and_ingredient_choices(admin_c
 async def test_saves_photo_packaging_nutrition_and_ingredient_without_kg_rounding():
     conn = AsyncMock()
     conn.fetchval.return_value = 'kg'
+    conn.fetchrow.return_value = {'name': 'Manteiga', 'linked_ingredient_slug': 'butter'}
     await save_record(conn, 'card', product())
     args = conn.execute.call_args.args
     assert '200' not in args[0]  # Values must be bound, never interpolated.
@@ -107,3 +108,18 @@ async def test_market_retirement_keeps_quotes_and_only_updates_editorial_record(
     assert args[0].startswith('INSERT INTO grocery_markets')
     assert False in args[1:]
     assert 'DELETE' not in args[0]
+
+
+@pytest.mark.parametrize('fiber', [None, 0, '12.50'])
+def test_dietary_fiber_accepts_unknown_zero_and_measured_values(fiber):
+    from schemas.grocery_cards import GroceryRetailCardIn
+    item = GroceryRetailCardIn(**product(fiber_g=fiber))
+    assert item.fiber_g is None if fiber is None else item.fiber_g == Decimal(str(fiber))
+
+
+@pytest.mark.parametrize('fiber', [-1, '1.234', 'NaN', 'Infinity'])
+async def test_dietary_fiber_rejects_invalid_values_without_writing(fiber):
+    conn = AsyncMock()
+    with pytest.raises(ValueError, match='fibras alimentares'):
+        await save_record(conn, 'card', product(fiber_g=fiber))
+    conn.execute.assert_not_awaited()

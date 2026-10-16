@@ -92,3 +92,12 @@ No Android, `GroceryWeeklyGoalTest` cobre meta e embalagens;
 `GroceryRetailPersistenceTest` cobre cache, reabertura do Room, normalização e
 estorno de estoque. Execute build/testes e exportação do schema Room 55 no GitHub
 Actions, conforme AGENTS.md do app. Gradle local é proibido neste ambiente.
+
+O nome do alimento é compartilhado pelo ingrediente e suas embalagens vinculadas.
+Uma edição do nome, em qualquer ficha, atualiza esses registros na mesma transação.
+IDs, preços pesquisados e publicações anteriores são preservados.
+
+A partir da migração 061, fiber_g informa fibras alimentares em gramas para a
+embalagem inteira, no estado de venda. NULL significa não informado e zero é um
+valor medido. O campo é opcional; omiti-lo numa atualização preserva o valor
+existente. Enviar NULL explicitamente limpa o dado.

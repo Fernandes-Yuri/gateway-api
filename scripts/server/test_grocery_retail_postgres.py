@@ -28,6 +28,7 @@ async def test_migration_import_dimension_validation_and_rollback():
         await conn.execute("CREATE TABLE grocery_ingredients(slug TEXT PRIMARY KEY, unit TEXT NOT NULL)")
         await conn.execute("INSERT INTO grocery_ingredients VALUES ('butter','kg')")
         await conn.execute((ROOT / 'migrations/058_grocery_retail_cards_and_markets.sql').read_text())
+        await conn.execute((ROOT / 'migrations/061_grocery_dietary_fiber.sql').read_text())
         data = dict(id='butter-200g', name='Manteiga', category='Laticínios',
             image_url='https://example.org/image.png', package_display='Pote 200g',
             package_net_value=200, package_unit='g', kcal_per_package=1400, price_avg='12.90',
@@ -43,6 +44,7 @@ async def test_migration_import_dimension_validation_and_rollback():
             await conn.execute(import_sql(GroceryImport(cards=[data])))
         await conn.execute('ROLLBACK')
         assert (await load_cards(conn))[0]['package_unit'] == 'g'
+        await conn.execute((ROOT / 'migrations/061_grocery_dietary_fiber_rollback.sql').read_text())
         await conn.execute((ROOT / 'migrations/058_grocery_retail_cards_and_markets_rollback.sql').read_text())
         assert await conn.fetchval("SELECT COUNT(*) FROM grocery_ingredients") == 1
     finally:
