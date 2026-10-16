@@ -751,7 +751,12 @@ async def get_admin_grocery_retail(_auth=Depends(require_service_token)):
         async with conn.transaction(readonly=True, isolation="repeatable_read"):
             cards = await load_cards(conn, include_inactive=True)
             markets = await conn.fetch("SELECT * FROM grocery_markets ORDER BY name,id")
-            ingredients = await conn.fetch("SELECT slug,name,unit FROM grocery_ingredients ORDER BY name")
+            ingredients = await conn.fetch("""SELECT slug,name,unit,active,details->>'group' AS group,
+                COALESCE((details->>'minimum')::numeric,0) AS minimum,
+                COALESCE((details->>'step')::numeric,1) AS step,
+                (details->>'grams_per_unit')::numeric AS grams_per_unit,
+                COALESCE(details->'aliases','[]'::jsonb) AS aliases
+                FROM grocery_ingredients ORDER BY name""")
     return {"cards": cards, "markets": [dict(m) for m in markets],
             "ingredients": [dict(i) for i in ingredients]}
 
