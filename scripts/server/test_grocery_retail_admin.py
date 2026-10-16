@@ -66,6 +66,7 @@ async def test_saves_photo_packaging_nutrition_and_ingredient_without_kg_roundin
     assert Decimal('12.90') in args[1:]
     assert 'https://example.org/image.png' in args[1:]
     assert 'Pote 200g' in args[1:]
+    assert 'updated_at=now()' in args[0]
 
 
 async def test_incompatible_pantry_unit_rejected_before_mutation():

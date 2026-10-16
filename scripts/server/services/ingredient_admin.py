@@ -248,7 +248,7 @@ async def update_ingredient(conn, slug, data, *, bump=True):
         "UPDATE grocery_ingredients SET name=$2, unit=$3, details=$4::jsonb, active=$5 WHERE slug=$1",
         slug, name, unit, _as_json(details), active)
     if "name" in payload:
-        await conn.execute("UPDATE grocery_retail_cards SET name=$2 WHERE linked_ingredient_slug=$1 AND name IS DISTINCT FROM $2",
+        await conn.execute("UPDATE grocery_retail_cards SET name=$2,updated_at=now() WHERE linked_ingredient_slug=$1 AND name IS DISTINCT FROM $2",
                            slug, name)
     revision = await bump_revision(conn) if bump else None
     print(f"[ADMIN-CATALOG] Ingrediente editado: {slug} ({name}) campos={sorted(payload)}")

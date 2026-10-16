@@ -99,7 +99,12 @@ async def save_record(conn, kind, payload):
             raise ValueError('Use uma URL HTTPS pública para a imagem ou o logotipo.')
     columns = list(data)
     # Table and columns come only from the fixed mapping and validated model.
-    await conn.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES (" +
-        ','.join(f'${i}' for i in range(1, len(columns)+1)) + ') ON CONFLICT (' + ','.join(keys) +
-        ') DO UPDATE SET ' + ','.join(f'{c}=EXCLUDED.{c}' for c in columns if c not in keys),
-        *(data[c] for c in columns))
+    updates = [f'{column}=EXCLUDED.{column}' for column in columns if column not in keys]
+    if kind == 'card':
+        updates.append('updated_at=now()')
+    await conn.execute(
+        f"INSERT INTO {table} ({','.join(columns)}) VALUES ("
+        + ','.join(f'${i}' for i in range(1, len(columns) + 1))
+        + ') ON CONFLICT (' + ','.join(keys) + ') DO UPDATE SET ' + ','.join(updates),
+        *(data[column] for column in columns),
+    )

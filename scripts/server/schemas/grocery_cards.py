@@ -65,6 +65,7 @@ class GroceryRetailCardIn(BaseModel):
 
 
 class GroceryRetailCardOut(GroceryRetailCardIn):
+    updated_at: AwareDatetime
     markets: list[MarketQuote] = Field(default_factory=list)
 
 
