@@ -18,7 +18,8 @@ pytestmark = pytest.mark.skipif(not DSN, reason='PostgreSQL efêmero disponível
 ROOT = Path(__file__).resolve().parents[2]
 
 
-async def test_weekly_workspace_clone_isolation_and_transactional_rollback():
+@pytest.mark.parametrize('planning_days', [7, 14, 30])
+async def test_weekly_workspace_clone_isolation_and_transactional_rollback(planning_days):
     parsed = urlparse(DSN)
     if parsed.hostname not in ('127.0.0.1', 'localhost') or parsed.path != '/braga_privacy_test':
         raise RuntimeError('Somente banco efêmero local braga_privacy_test')
@@ -31,6 +32,7 @@ async def test_weekly_workspace_clone_isolation_and_transactional_rollback():
         await conn.execute((ROOT / 'migrations/058_grocery_retail_cards_and_markets.sql').read_text())
         await conn.execute((ROOT / 'migrations/061_grocery_dietary_fiber.sql').read_text())
         await conn.execute((ROOT / 'migrations/059_grocery_editorial_workspace.sql').read_text())
+        await conn.execute((ROOT / 'migrations/062_grocery_planning_periods.sql').read_text())
         await conn.execute("INSERT INTO grocery_markets(id,name,logo_url,website_url) VALUES('a','Mercado A','https://example.org/logo','https://example.org')")
         await conn.execute("""INSERT INTO grocery_retail_cards(id,name,category,image_url,package_display,package_net_value,package_unit,kcal_per_package,price_avg)
             VALUES('rice','Arroz','Mercearia','https://example.org/rice','Pacote 1kg',1000,'g',3500,10)""")
@@ -43,7 +45,7 @@ async def test_weekly_workspace_clone_isolation_and_transactional_rollback():
                 product_store_url='https://example.org/rice', minimum_quantity=1, conditions='Loja do bairro')))
         async with conn.transaction():
             original = await mutate_edition(conn, edition_id, EditorialMutation(expected_revision=2, operation='pack', payload=dict(
-                market_id='a', name='Pack A', items=[dict(card_id='rice', quantity=2)])))
+                market_id='a', name='Pack A', planning_days=planning_days, items=[dict(card_id='rice', quantity=2)])))
         async with conn.transaction():
             clone = await create_edition(conn, EditionCreate(title='Semana B', starts_on='2026-10-26', ends_on='2026-11-01',
                 region='Rio', source_edition_id=edition_id))
@@ -51,6 +53,7 @@ async def test_weekly_workspace_clone_isolation_and_transactional_rollback():
         assert clone['quotes'][0]['confirmed'] is False
         assert clone['quotes'][0]['researched_at'] == original['quotes'][0]['researched_at']
         assert clone['packs'][0]['id'] != original['packs'][0]['id']
+        assert clone['packs'][0]['planning_days'] == planning_days
         assert clone['packs'][0]['items'] == original['packs'][0]['items']
         async with conn.transaction():
             await mutate_edition(conn, clone['edition']['id'], EditorialMutation(expected_revision=1, operation='quote', payload=dict(
@@ -80,6 +83,8 @@ async def test_weekly_workspace_clone_isolation_and_transactional_rollback():
             async with conn.transaction(isolation='repeatable_read'):
                 released = await publish(conn, edition_id, body)
             publication_id = released['current_publication_id']
+            assert (await public_feed(conn, planning_days))['publications'][0]['packs'][0]['pack']['planning_days'] == planning_days
+            assert (await public_feed(conn, 14 if planning_days != 14 else 30))['publications'] == []
             source_card = dict((await load_cards(conn))[0])
             source_card.pop('markets', None)
             source_card['active'] = False
@@ -115,6 +120,7 @@ async def test_weekly_workspace_clone_isolation_and_transactional_rollback():
                     expected_publication_id=None))
             assert (await public_feed(conn))['publications'][0]['packs'][0]['total_brl'] == '19.80'
         await conn.execute((ROOT / 'migrations/060_grocery_editorial_publications_rollback.sql').read_text())
+        await conn.execute((ROOT / 'migrations/062_grocery_planning_periods_rollback.sql').read_text())
         await conn.execute((ROOT / 'migrations/059_grocery_editorial_workspace_rollback.sql').read_text())
         assert await conn.fetchval('SELECT COUNT(*) FROM grocery_retail_cards') == 2
     finally:

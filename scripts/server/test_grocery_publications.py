@@ -133,3 +133,33 @@ def test_public_feed_is_readable_without_admin_session_and_administration_is_pri
     assert http.get('/api/admin/grocery/editions/week-a/publications').status_code == 401
     assert http.post('/api/admin/grocery/editions/week-a/publications', json={}).status_code == 401
     assert http.put('/api/admin/grocery/editions/week-a/publications', json={}).status_code == 401
+
+
+async def test_feed_filters_periods_and_normalizes_legacy_without_mutating_snapshots():
+    _, _, _, preview = reviewed()
+    frozen = freeze_preview(preview, ['pack-a'])
+    monthly = json.loads(json.dumps(frozen, default=str))['packs'][0]
+    monthly['pack']['id'] = 'monthly'
+    monthly['pack']['planning_days'] = 30
+    frozen['packs'].append(monthly)
+    original = json.dumps(frozen, default=str)
+    conn = AsyncMock()
+    conn.fetchval.return_value = 1
+    conn.fetch.return_value = [dict(id='publication', version=1, published_at='2026-10-16', snapshot=original)]
+    all_periods = await public_feed(conn)
+    assert all_periods['planning_period_options'] == [7, 14, 30]
+    assert [p['pack']['planning_days'] for p in all_periods['publications'][0]['packs']] == [7, 30]
+    assert [p['pack']['id'] for p in (await public_feed(conn, 30))['publications'][0]['packs']] == ['monthly']
+    assert (await public_feed(conn, 14))['publications'] == []
+    assert conn.fetch.return_value[0]['snapshot'] == original
+    conn.execute.assert_not_awaited()
+
+
+def test_public_feed_accepts_supported_query_period_and_rejects_other_values(client):
+    http, conn = client
+    conn.fetchval.return_value = 1
+    conn.fetch.return_value = []
+    for days in [7, 14, 30]:
+        assert http.get(f'/api/catalog/grocery/publications?planning_days={days}').status_code == 200
+    for days in ['15', '0', 'abc']:
+        assert http.get(f'/api/catalog/grocery/publications?planning_days={days}').status_code == 422

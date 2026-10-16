@@ -1,9 +1,9 @@
-"""Weekly editorial work is private and independent from live retail prices."""
+"""Editorial work is private and independent from live retail prices."""
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 from typing import Literal
-from pydantic import BaseModel, Field, AwareDatetime, HttpUrl, ConfigDict, model_validator
+from pydantic import BaseModel, Field, AwareDatetime, HttpUrl, ConfigDict, model_validator, field_validator
 
 
 class EditionFields(BaseModel):
@@ -67,9 +67,17 @@ class PackDraft(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default='', max_length=4000)
     cover_url: HttpUrl | None = None
+    planning_days: Literal[7, 14, 30] = 7
     pack_type: Literal['complete', 'category'] = 'complete'
     category: str | None = Field(default=None, max_length=100)
     items: list[PackItem] = Field(default_factory=list, max_length=500)
+
+    @field_validator('planning_days', mode='before')
+    @classmethod
+    def valid_planning_days(cls, value):
+        if type(value) is not int:
+            raise ValueError('O período deve ser 7, 14 ou 30 dias, em número inteiro.')
+        return value
 
     @model_validator(mode='after')
     def composition(self):

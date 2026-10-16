@@ -156,3 +156,14 @@ AGENTS.md; não executar Gradle neste ambiente.
 AWS e painel online são ambientes de testes operacionais, sem usuários reais, conforme decisão do fundador em 15/10/2026. Merges e deploys desta entrega são para homologação; não autorizam lançamento final nem release público do Android.
 
 O catálogo atual do APK acompanha cadastro, edição e retirada/reativação de produtos pelo webservice. A retirada é lógica (`active=false`), preservando históricos. Packs publicados mantêm o snapshot: alterações editoriais exigem republicar; retirar uma publicação remove a oferta da vitrine, sem apagar listas já adotadas. O fundador fará testes com login real no painel e APK debug antes de qualquer release.
+
+Cada pack possui planning_days (7, 14 ou 30). O período descreve o horizonte de
+planejamento da composição revisada, independentemente das datas starts_on/ends_on
+da edição, que limitam a exibição dos preços pesquisados. Mudar o período não
+multiplica quantidades nem estende a validade das ofertas. Packs de períodos
+diferentes podem coexistir na mesma edição e compartilhar as cotações.
+
+A migração 062 classifica rascunhos existentes como 7 dias. Duplicação, prévia e
+publicação preservam o período. O feed público informa planning_period_options e
+aceita planning_days=7, 14 ou 30 para filtrar packs. Snapshots históricos sem esse
+campo são apresentados como 7 dias sem reescrever o histórico imutável.

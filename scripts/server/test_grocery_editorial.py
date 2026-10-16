@@ -184,3 +184,21 @@ def test_unknown_edition_is_404_and_database_unavailable_is_503(client):
     assert http.get('/api/admin/grocery/editions/missing', headers=AUTH).status_code == 404
     catalog.configure_state()
     assert http.get('/api/admin/grocery/editions', headers=AUTH).status_code == 503
+
+
+@pytest.mark.parametrize('days', [7, 14, 30])
+def test_pack_period_is_independent_of_price_validity_and_keeps_exact_quantities(days):
+    pack = PackDraft(name='Compra', market_id='a', planning_days=days,
+                     items=[dict(card_id='rice', quantity=2)])
+    data = snapshot([quote('rice', 'a', '10')], items=[dict(card_id='rice', quantity=2)])
+    data['packs'][0]['planning_days'] = pack.planning_days
+    result = preview_edition(data, [card('rice')], [market('a')])
+    assert result['packs'][0]['pack']['planning_days'] == days
+    assert result['packs'][0]['total_brl'] == 20
+    assert result['packs'][0]['total_planned_kcal'] == 640
+
+
+@pytest.mark.parametrize('days', [0, 1, 15, 31, True, 7.0, '14', None])
+def test_pack_rejects_unsupported_or_coerced_period(days):
+    with pytest.raises(ValidationError):
+        PackDraft(name='Compra', market_id='a', planning_days=days)

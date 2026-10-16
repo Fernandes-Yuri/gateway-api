@@ -14,7 +14,7 @@ def build_router(get_pool, require_admin):
     def pool():
         result = get_pool()
         if result is None:
-            raise HTTPException(503, 'Edições semanais indisponíveis.')
+            raise HTTPException(503, 'Edições de compras indisponíveis.')
         return result
 
     def translate(exc):
@@ -103,17 +103,19 @@ def build_router(get_pool, require_admin):
 def build_public_router(get_pool):
     router = APIRouter(prefix='/api/catalog/grocery/publications')
 
-    async def read(response, revision_only):
+    async def read(response, revision_only, planning_days=None):
         response.headers['Cache-Control'] = 'no-store'
         if get_pool() is None:
             raise HTTPException(503, 'Packs publicados indisponíveis.')
         async with get_pool().acquire() as conn:
             async with conn.transaction(readonly=True, isolation='repeatable_read'):
-                return await (releases.public_revision(conn) if revision_only else releases.public_feed(conn))
+                return await (releases.public_revision(conn) if revision_only else releases.public_feed(conn, planning_days))
 
     @router.get('')
-    async def feed(response: Response):
-        return await read(response, False)
+    async def feed(response: Response, planning_days: int | None = None):
+        if planning_days is not None and planning_days not in (7, 14, 30):
+            raise HTTPException(422, 'Escolha 7, 14 ou 30 dias.')
+        return await read(response, False, planning_days)
 
     @router.get('/revision')
     async def revision(response: Response):
