@@ -69,7 +69,7 @@ def test_cards_return_package_totals_and_market_research_date(client):
         image_url='https://example.org/image.png', package_display='Pote 200g',
         package_net_value=200, package_unit='g', kcal_per_package=1400,
         carbs_g=0, protein_g=1, fat_g=160, price_avg='12.90', linked_ingredient_slug=None,
-        clinical_tags=[], active=True)
+        clinical_tags=[], active=True, updated_at=datetime(2026, 9, 1, tzinfo=timezone.utc))
     quote = dict(card_id=card['id'], market_id='a', market_name='A',
         market_logo_url='https://example.org/logo.png', website_url='https://example.org',
         product_store_url=None, price='12.90', last_updated=datetime(2026, 10, 1, tzinfo=timezone.utc))
@@ -80,6 +80,7 @@ def test_cards_return_package_totals_and_market_research_date(client):
     assert product['package_unit'] == 'g'
     assert float(product['package_net_value']) == 200
     assert float(product['kcal_per_package']) == 1400
+    assert product['updated_at'].startswith('2026-09-01')
     assert product['markets'][0]['last_updated'].startswith('2026-10-01')
     assert float(product['markets'][0]['price']) == 12.90
 
