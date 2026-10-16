@@ -36,10 +36,26 @@ class GroceryRetailCardIn(BaseModel):
     protein_g: Decimal = Field(default=Decimal('0'), ge=0, max_digits=12, decimal_places=2)
     fiber_g: Optional[Decimal] = Field(default=None, ge=0, max_digits=12, decimal_places=2)
     fat_g: Decimal = Field(default=Decimal('0'), ge=0, max_digits=12, decimal_places=2)
+    nutrition_facts: list[dict] = Field(default_factory=list, max_length=50)
     price_avg: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
     linked_ingredient_slug: Optional[str] = None
     clinical_tags: list[str] = Field(default_factory=list)
     active: bool = True
+
+    @model_validator(mode='before')
+    @classmethod
+    def nutrition_facts_compat(cls, value):
+        if isinstance(value, dict) and 'nutrition_facts' not in value:
+            facts = [
+                {'key': 'calories', 'label': 'Calorias', 'unit': 'kcal', 'value': value.get('kcal_per_package', 0)},
+                {'key': 'carbohydrates', 'label': 'Carboidratos', 'unit': 'g', 'value': value.get('carbs_g', 0)},
+                {'key': 'protein', 'label': 'Proteínas', 'unit': 'g', 'value': value.get('protein_g', 0)},
+                {'key': 'fat', 'label': 'Gorduras', 'unit': 'g', 'value': value.get('fat_g', 0)},
+            ]
+            if value.get('fiber_g') is not None:
+                facts.append({'key': 'fiber', 'label': 'Fibras alimentares', 'unit': 'g', 'value': value['fiber_g']})
+            return {**value, 'nutrition_facts': facts}
+        return value
 
     @model_validator(mode='after')
     def whole_units(self):
@@ -94,5 +110,5 @@ class BasketComparisonResult(BaseModel):
 
 
 class GroceryAdminMutation(BaseModel):
-    kind: Literal['card', 'market', 'quote', 'remove_quote']
+    kind: Literal['card', 'card_with_ingredient', 'market', 'quote', 'remove_quote']
     payload: dict

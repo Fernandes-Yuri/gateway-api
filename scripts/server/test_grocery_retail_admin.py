@@ -93,6 +93,38 @@ async def test_remove_quote_is_scoped_to_both_card_and_market():
     conn.execute.assert_awaited_once_with('DELETE FROM grocery_market_prices WHERE card_id=$1 AND market_id=$2', 'a', 'b')
 
 
+async def test_composite_card_update_saves_pantry_fields_and_product_together(monkeypatch):
+    from services import grocery_retail_admin
+    update = AsyncMock()
+    monkeypatch.setattr(grocery_retail_admin, 'update_ingredient', update)
+    conn = AsyncMock()
+    conn.fetchval.return_value = 'kg'
+    conn.fetchrow.return_value = {'name': 'Manteiga', 'linked_ingredient_slug': 'butter'}
+    nutrition = [
+        {'key': 'calories', 'label': 'Calorias', 'unit': 'kcal', 'value': 1400},
+        {'key': 'fiber', 'label': 'Fibras alimentares', 'unit': 'g', 'value': 12},
+        {'key': 'sodium', 'label': 'Sódio', 'unit': 'mg', 'value': 20},
+    ]
+    await grocery_retail_admin.save_record(conn, 'card_with_ingredient', {
+        'card': product(nutrition_facts=nutrition),
+        'ingredient': {'slug': 'butter', 'changes': {'unit': 'kg', 'group': 'laticinios',
+            'minimum': 100, 'step': 50, 'grams_per_unit': None, 'aliases': ['manteiga sem sal'], 'active': True}},
+    })
+    update.assert_awaited_once_with(conn, 'butter', {'unit': 'kg', 'group': 'laticinios',
+        'minimum': 100, 'step': 50, 'grams_per_unit': None, 'aliases': ['manteiga sem sal'], 'active': True})
+    execute_args = conn.execute.call_args.args
+    assert 'nutrition_facts' in execute_args[0]
+    assert any('sodium' in str(value) for value in execute_args)
+
+
+async def test_composite_card_update_rejects_mismatched_ingredient_before_write():
+    conn = AsyncMock()
+    with pytest.raises(ValueError, match='mesmo alimento'):
+        await save_record(conn, 'card_with_ingredient', {
+            'card': product(), 'ingredient': {'slug': 'other', 'changes': {'unit': 'kg'}}})
+    conn.execute.assert_not_awaited()
+
+
 def test_admin_validation_returns_422_without_writing(admin_client):
     http, conn = admin_client
     response = http.put('/api/admin/grocery/retail', headers=AUTH, json={'kind': 'quote', 'payload': {'price': -1}})

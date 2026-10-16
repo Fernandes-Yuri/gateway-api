@@ -1,5 +1,6 @@
 """Consistent retail snapshots and comparison of complete baskets only."""
 from decimal import Decimal
+import json
 from schemas.grocery_cards import BasketComparisonResult, MarketBasketTotal
 
 
@@ -14,7 +15,25 @@ async def load_cards(conn, category=None, q=None, *, include_inactive=False):
     by_card = {}
     for quote in quotes:
         by_card.setdefault(quote['card_id'], []).append(dict(quote))
-    return [dict(row, markets=by_card.get(row['id'], [])) for row in rows]
+    result = []
+    for row in rows:
+        card = dict(row)
+        facts = card.get('nutrition_facts')
+        if isinstance(facts, str):
+            facts = json.loads(facts)
+        if facts is None:
+            facts = [
+                {'key': 'calories', 'label': 'Calorias', 'unit': 'kcal', 'value': card.get('kcal_per_package', 0)},
+                {'key': 'carbohydrates', 'label': 'Carboidratos', 'unit': 'g', 'value': card.get('carbs_g', 0)},
+                {'key': 'protein', 'label': 'Proteínas', 'unit': 'g', 'value': card.get('protein_g', 0)},
+                {'key': 'fat', 'label': 'Gorduras', 'unit': 'g', 'value': card.get('fat_g', 0)},
+            ]
+            if card.get('fiber_g') is not None:
+                facts.append({'key': 'fiber', 'label': 'Fibras alimentares', 'unit': 'g', 'value': card['fiber_g']})
+        card['nutrition_facts'] = facts
+        card['markets'] = by_card.get(card['id'], [])
+        result.append(card)
+    return result
 
 
 def compare_basket(items, cards, markets):
