@@ -96,7 +96,7 @@ async def public_revision(conn):
     return dict(revision=revision, business_date=today().isoformat())
 
 
-async def public_feed(conn):
+async def public_feed(conn, planning_days=None):
     state = await public_revision(conn)
     rows = await conn.fetch("""SELECT p.id,p.version,p.published_at,p.source_revision,p.snapshot
         FROM grocery_publication_heads h JOIN grocery_publications p ON p.id=h.publication_id
@@ -104,5 +104,10 @@ async def public_feed(conn):
     publications = []
     for row in rows:
         frozen = json.loads(row['snapshot']) if isinstance(row['snapshot'], str) else row['snapshot']
-        publications.append(dict(id=row['id'], version=row['version'], published_at=row['published_at'], **frozen))
-    return dict(**state, publications=publications)
+        # Normalize old immutable snapshots in the response without rewriting history.
+        packs = [dict(p, pack={**p['pack'], 'planning_days': p['pack'].get('planning_days', 7)}) for p in frozen['packs']]
+        if planning_days is not None:
+            packs = [p for p in packs if p['pack']['planning_days'] == planning_days]
+        if packs:
+            publications.append(dict(id=row['id'], version=row['version'], published_at=row['published_at'], **{**frozen, 'packs': packs}))
+    return dict(**state, planning_period_options=[7, 14, 30], publications=publications)

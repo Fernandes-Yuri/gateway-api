@@ -1,4 +1,4 @@
-"""Private weekly drafts. No mutation writes public prices or published content."""
+"""Private planning drafts. No mutation writes public prices or published content."""
 from decimal import Decimal
 import hashlib
 import json
@@ -44,9 +44,9 @@ async def create_edition(conn, body):
             FROM grocery_edition_quotes WHERE edition_id=$2""", edition_id, body.source_edition_id)
         for pack in source['packs']:
             new_id = str(uuid4())
-            await conn.execute("""INSERT INTO grocery_editorial_packs(id,edition_id,market_id,name,description,cover_url,pack_type,category)
-                VALUES($1,$2,$3,$4,$5,$6,$7,$8)""", new_id, edition_id, pack['market_id'], pack['name'],
-                pack['description'], pack['cover_url'], pack['pack_type'], pack['category'])
+            await conn.execute("""INSERT INTO grocery_editorial_packs(id,edition_id,market_id,name,description,cover_url,pack_type,category,planning_days)
+                VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)""", new_id, edition_id, pack['market_id'], pack['name'],
+                pack['description'], pack['cover_url'], pack['pack_type'], pack['category'], pack['planning_days'])
             await conn.execute("""INSERT INTO grocery_editorial_pack_items(pack_id,card_id,quantity,position)
                 SELECT $1,card_id,quantity,position FROM grocery_editorial_pack_items WHERE pack_id=$2""", new_id, pack['id'])
     return await edition_snapshot(conn, edition_id)
@@ -95,11 +95,11 @@ async def mutate_edition(conn, edition_id, body):
             existing = await conn.fetchval('SELECT edition_id FROM grocery_editorial_packs WHERE id=$1', data.id)
             if existing != edition_id:
                 raise LookupError('Pack não encontrado nesta edição.')
-        await conn.execute("""INSERT INTO grocery_editorial_packs(id,edition_id,market_id,name,description,cover_url,pack_type,category)
-            VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET market_id=EXCLUDED.market_id,
+        await conn.execute("""INSERT INTO grocery_editorial_packs(id,edition_id,market_id,name,description,cover_url,pack_type,category,planning_days)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO UPDATE SET market_id=EXCLUDED.market_id,
             name=EXCLUDED.name,description=EXCLUDED.description,cover_url=EXCLUDED.cover_url,
-            pack_type=EXCLUDED.pack_type,category=EXCLUDED.category""", pack_id, edition_id, data.market_id,
-            data.name, data.description, str(data.cover_url) if data.cover_url else None, data.pack_type, data.category)
+            pack_type=EXCLUDED.pack_type,category=EXCLUDED.category,planning_days=EXCLUDED.planning_days""", pack_id, edition_id, data.market_id,
+            data.name, data.description, str(data.cover_url) if data.cover_url else None, data.pack_type, data.category, data.planning_days)
         await conn.execute('DELETE FROM grocery_editorial_pack_items WHERE pack_id=$1', pack_id)
         if data.items:
             await conn.executemany('INSERT INTO grocery_editorial_pack_items(pack_id,card_id,quantity,position) VALUES($1,$2,$3,$4)',
