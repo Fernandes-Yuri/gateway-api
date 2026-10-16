@@ -31,6 +31,7 @@ async def test_weekly_workspace_clone_isolation_and_transactional_rollback(plann
         await conn.execute('CREATE TABLE grocery_ingredients(slug TEXT PRIMARY KEY)')
         await conn.execute((ROOT / 'migrations/058_grocery_retail_cards_and_markets.sql').read_text())
         await conn.execute((ROOT / 'migrations/061_grocery_dietary_fiber.sql').read_text())
+        await conn.execute((ROOT / 'migrations/063_grocery_retail_nutrition_facts.sql').read_text())
         await conn.execute((ROOT / 'migrations/059_grocery_editorial_workspace.sql').read_text())
         await conn.execute((ROOT / 'migrations/062_grocery_planning_periods.sql').read_text())
         await conn.execute("INSERT INTO grocery_markets(id,name,logo_url,website_url) VALUES('a','Mercado A','https://example.org/logo','https://example.org')")
@@ -153,6 +154,7 @@ async def test_food_rename_is_atomic_in_both_directions_and_keeps_prices():
                 VALUES('Abacate Manteiga','kg',6.0);""")
         await conn.execute((ROOT / 'migrations/058_grocery_retail_cards_and_markets.sql').read_text())
         await conn.execute((ROOT / 'migrations/061_grocery_dietary_fiber.sql').read_text())
+        await conn.execute((ROOT / 'migrations/063_grocery_retail_nutrition_facts.sql').read_text())
         await conn.execute("""INSERT INTO grocery_retail_cards
             (id,name,category,image_url,package_display,package_net_value,package_unit,kcal_per_package,price_avg,linked_ingredient_slug)
             VALUES('avocado-430','Abacate','Frutas','https://example.org/a.jpg','430 g',430,'g',412,2.58,'avocado'),

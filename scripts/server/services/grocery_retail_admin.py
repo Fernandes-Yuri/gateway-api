@@ -68,7 +68,7 @@ async def save_record(conn, kind, payload):
             data[column] = Decimal(str(fact['value'])) if fact else Decimal('0')
         fiber = next((item for item in facts if item['key'] == 'fiber'), None)
         data['fiber_g'] = Decimal(str(fiber['value'])) if fiber else None
-        data['nutrition_facts'] = json.dumps(facts)
+        data['nutrition_facts'] = json.dumps(facts, default=float)
     if kind in ('card', 'market') and (not data['id'].strip() or not data['name'].strip()):
         raise ValueError('Identificador e nome não podem estar vazios.')
     if kind == 'card':
