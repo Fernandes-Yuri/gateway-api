@@ -28,6 +28,8 @@ def import_sql(payload):
         seen = set()
         for row in rows:
             data = row.model_dump()
+            if table == 'grocery_retail_cards':
+                data['nutrition_facts'] = json.dumps(data['nutrition_facts'], default=float)
             identity = tuple(data[k] for k in keys)
             if identity in seen:
                 raise ValueError(f'Duplicate {table}: {identity}')
