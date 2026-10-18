@@ -23,8 +23,8 @@ from services.ingredient_catalog import (admin_price_rows, load_ingredients, key
                                         sale_unit_options)
 from services.grocery_contributions import GroceryPriceContribution, AVERAGES_SQL, UPSERT_SQL
 
-from schemas.grocery_cards import GroceryRetailCardOut, BasketComparisonRequest, BasketComparisonResult
-from services.grocery_cards import load_cards, compare_basket
+from schemas.grocery_cards import GroceryRetailCardOut
+from services.grocery_cards import load_cards
 from services.grocery_retail_admin import save_record
 from schemas.grocery_cards import GroceryAdminMutation
 
@@ -729,20 +729,6 @@ async def list_grocery_retail_cards(category: Optional[str] = None, q: Optional[
             return await load_cards(conn, category, q)
 
 
-@router.post("/api/catalog/grocery/basket-comparison", response_model=BasketComparisonResult)
-async def compare_grocery_basket(payload: BasketComparisonRequest):
-    if not _state.db_pool:
-        raise HTTPException(503, "Comparação indisponível.")
-    async with _state.db_pool.acquire() as conn:
-        async with conn.transaction(readonly=True, isolation="repeatable_read"):
-            cards = await load_cards(conn)
-            markets = await conn.fetch("SELECT * FROM grocery_markets WHERE active ORDER BY id")
-    try:
-        return compare_basket(payload.items, cards, markets)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
 @router.get("/api/admin/grocery/retail")
 async def get_admin_grocery_retail(_auth=Depends(require_service_token)):
     if not _state.db_pool:
@@ -774,9 +760,3 @@ async def put_admin_grocery_retail(body: GroceryAdminMutation, _auth=Depends(req
     except ForeignKeyViolationError as exc:
         raise HTTPException(422, "Produto, mercado ou ingrediente não encontrado. Atualize o catálogo.") from exc
     return {"success": True}
-
-
-from routers.grocery_editorial import build_router as build_editorial_router, build_public_router
-router.include_router(build_editorial_router(lambda: _state.db_pool, require_service_token))
-
-router.include_router(build_public_router(lambda: _state.db_pool))

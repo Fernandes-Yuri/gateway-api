@@ -38,14 +38,7 @@ def test_offline_service_returns_503(client):
     http, _ = client
     catalog.configure_state()
     assert http.get('/api/catalog/grocery/cards').status_code == 503
-    assert http.post('/api/catalog/grocery/basket-comparison', json={'items': []}).status_code == 503
-
-
-def test_comparison_route_rejects_unknown_product(client):
-    http, conn = client
-    conn.fetch.side_effect = [[], [], []]
-    result = http.post('/api/catalog/grocery/basket-comparison', json={'items': [{'card_id': 'missing', 'quantity': 1}]})
-    assert result.status_code == 422
+    assert http.post('/api/catalog/grocery/basket-comparison', json={'items': []}).status_code == 404
 
 
 def test_editorial_import_is_escaped_and_transactional():
@@ -89,3 +82,48 @@ def test_editorial_import_requires_real_research_timestamp_with_timezone():
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         GroceryImport(prices=[dict(card_id='a', market_id='b', price='1.00', last_updated='2026-10-01T12:00:00')])
+
+
+def test_basic_food_without_photo_is_valid():
+    from schemas.grocery_cards import GroceryRetailCardIn
+    card = GroceryRetailCardIn(id='arroz', name='Arroz', category='Cereais',
+        package_display='1 kg', package_net_value=1000, package_unit='g',
+        kcal_per_package=3600, price_avg='7.50')
+    assert card.image_url == ''
+
+
+def test_supplied_image_still_requires_valid_url():
+    from schemas.grocery_cards import GroceryRetailCardIn
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        GroceryRetailCardIn(id='arroz', name='Arroz', category='Cereais', image_url='invalid',
+            package_display='1 kg', package_net_value=1000, package_unit='g',
+            kcal_per_package=3600, price_avg='7.50')
+
+
+@pytest.mark.asyncio
+async def test_latest_observation_is_reference_even_when_more_expensive():
+    from services.grocery_cards import load_cards
+    conn = AsyncMock()
+    conn.fetch.side_effect = [
+        [dict(id='arroz', price_avg='7.50')],
+        [dict(card_id='arroz', market_id='new', price='9.00'),
+         dict(card_id='arroz', market_id='old', price='6.00')],
+    ]
+    cards = await load_cards(conn)
+    assert cards[0]['price_avg'] == '9.00'
+    assert cards[0]['markets'][0]['market_id'] == 'new'
+    assert 'ORDER BY p.last_updated DESC,m.id' in conn.fetch.call_args_list[1].args[0]
+
+
+def test_pack_endpoints_are_retired(client):
+    http, _ = client
+    assert http.get('/api/catalog/grocery/publications').status_code == 404
+    assert http.get('/api/admin/grocery/editions').status_code == 404
+
+
+def test_market_source_only_requires_identification():
+    from schemas.grocery_cards import MarketIn
+    market = MarketIn(id='bairro', name='Mercado do Bairro')
+    assert market.logo_url == ''
+    assert market.website_url == ''
