@@ -118,7 +118,7 @@ async def save_food(conn, payload):
     """One food form: the canonical food and its package are saved in one transaction.
 
     The route owns the transaction. Preserve recipe links and physical metadata;
-    derive the base dimension only when creating a new canonical food.
+    correct the base dimension without treating existing quantities as conversions.
     """
     if set(payload) - {'card', 'reference'} or not isinstance(payload.get('card'), dict):
         raise ValueError('Informe os dados do alimento.')
@@ -139,8 +139,6 @@ async def save_food(conn, payload):
         same_name = next((item for item in await load_ingredients(conn, active_only=False)
                           if key(item['name']) == key(card['name'])), None)
         if same_name:
-            if same_name['unit'] != unit:
-                raise ValueError('Esse alimento já usa outra medida. Peso e volume não são convertidos sem densidade.')
             slug = same_name['slug']
         else:
             created = await create_ingredient(conn, {'name': card['name'], 'unit': unit,
@@ -149,13 +147,19 @@ async def save_food(conn, payload):
     current_unit = await conn.fetchval('SELECT unit FROM grocery_ingredients WHERE slug=$1 FOR UPDATE', slug)
     if current_unit is None:
         raise ValueError('Alimento não encontrado. Atualize o catálogo.')
+    unit_changes = {}
     if current_unit != unit:
-        raise ValueError('A embalagem deve manter a medida do alimento. Peso e volume não são convertidos sem densidade.')
+        incompatible = await conn.fetchval(
+            'SELECT EXISTS(SELECT 1 FROM grocery_retail_cards WHERE linked_ingredient_slug=$1 AND id<>$2 AND package_unit<>$3)',
+            slug, card['id'], card['package_unit'])
+        if incompatible:
+            raise ValueError('Este alimento tem outras embalagens em outra unidade. Ajuste essas embalagens antes de mudar a medida. Peso e volume não são convertidos automaticamente.')
+        unit_changes = {'unit': unit, 'minimum': 1, 'step': 1}
     # Retiring one package must not retire another active package of the same food.
     has_other_packages = await conn.fetchval(
         'SELECT EXISTS(SELECT 1 FROM grocery_retail_cards WHERE linked_ingredient_slug=$1 AND id<>$2 AND active)',
         slug, card['id'])
-    await update_ingredient(conn, slug, {'name': card['name'], 'group': card['category'],
+    await update_ingredient(conn, slug, {**unit_changes, 'name': card['name'], 'group': card['category'],
                                         'active': card['active'] or bool(has_other_packages)})
     await conn.execute('UPDATE grocery_retail_cards SET category=$2,updated_at=now() WHERE linked_ingredient_slug=$1 AND category IS DISTINCT FROM $2',
                        slug, card['category'])
