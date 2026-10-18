@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field, HttpUrl, AwareDatetime, model_validator
 class MarketIn(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=200)
-    logo_url: HttpUrl
-    website_url: HttpUrl
+    logo_url: HttpUrl | Literal[""] = ""
+    website_url: HttpUrl | Literal[""] = ""
     active: bool = True
 
 
@@ -27,7 +27,7 @@ class GroceryRetailCardIn(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=200)
     category: str = Field(min_length=1, max_length=100)
-    image_url: HttpUrl
+    image_url: HttpUrl | Literal[""] = ""
     package_display: str = Field(min_length=1, max_length=100)
     package_net_value: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
     package_unit: Literal['g', 'ml', 'un']
@@ -81,33 +81,6 @@ class GroceryImport(BaseModel):
     markets: list[MarketIn] = Field(default_factory=list, max_length=100)
     cards: list[GroceryRetailCardIn] = Field(default_factory=list, max_length=5000)
     prices: list[PriceIn] = Field(default_factory=list, max_length=20000)
-
-
-class BasketItemIn(BaseModel):
-    card_id: str = Field(min_length=1, max_length=100)
-    quantity: int = Field(gt=0, le=999, strict=True)
-
-
-class BasketComparisonRequest(BaseModel):
-    items: list[BasketItemIn] = Field(max_length=500)
-
-
-class MarketBasketTotal(BaseModel):
-    market_id: str
-    market_name: str
-    market_logo_url: str
-    website_url: str
-    total_brl: Decimal
-    missing_items_count: int = 0
-    is_best_deal: bool = False
-    savings_vs_highest_brl: Decimal = Decimal('0')
-
-
-class BasketComparisonResult(BaseModel):
-    total_items: int
-    total_planned_kcal: Decimal
-    best_market: Optional[MarketBasketTotal] = None
-    market_rankings: list[MarketBasketTotal] = Field(default_factory=list)
 
 
 class GroceryAdminMutation(BaseModel):
