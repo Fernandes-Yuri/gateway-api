@@ -84,5 +84,5 @@ class GroceryImport(BaseModel):
 
 
 class GroceryAdminMutation(BaseModel):
-    kind: Literal['card', 'card_with_ingredient', 'market', 'quote', 'remove_quote']
+    kind: Literal['food', 'card', 'card_with_ingredient', 'market', 'quote', 'remove_quote']
     payload: dict

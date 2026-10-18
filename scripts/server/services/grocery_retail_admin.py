@@ -4,10 +4,14 @@ from decimal import Decimal
 import json
 from pydantic import ValidationError
 from schemas.grocery_cards import GroceryRetailCardIn, MarketIn, PriceIn
-from services.ingredient_admin import update_ingredient
+from services.ingredient_admin import update_ingredient, create_ingredient
+from services.ingredient_catalog import key, load_ingredients
 
 
 async def save_record(conn, kind, payload):
+    if kind == 'food':
+        await save_food(conn, payload)
+        return
     if kind == 'card_with_ingredient':
         if set(payload) != {'card', 'ingredient'} or not isinstance(payload['card'], dict) or not isinstance(payload['ingredient'], dict):
             raise ValueError('Informe os dados do produto e do alimento.')
@@ -108,3 +112,54 @@ async def save_record(conn, kind, payload):
         + ') ON CONFLICT (' + ','.join(keys) + ') DO UPDATE SET ' + ','.join(updates),
         *(data[column] for column in columns),
     )
+
+
+async def save_food(conn, payload):
+    """One food form: the canonical food and its package are saved in one transaction.
+
+    The route owns the transaction. Preserve recipe links and physical metadata;
+    derive the base dimension only when creating a new canonical food.
+    """
+    if set(payload) - {'card', 'reference'} or not isinstance(payload.get('card'), dict):
+        raise ValueError('Informe os dados do alimento.')
+    card = GroceryRetailCardIn.model_validate(payload['card']).model_dump()
+    unit = {'g': 'kg', 'ml': 'L', 'un': 'un'}[card['package_unit']]
+    reference = payload.get('reference')
+    quote = None
+    if reference is not None:
+        if not isinstance(reference, dict) or set(reference) != {'market_id', 'last_updated'}:
+            raise ValueError('Informe o mercado de origem e a data da referência.')
+        quote = PriceIn.model_validate({**reference, 'card_id': card['id'], 'price': card['price_avg']})
+        if quote.last_updated > datetime.now(timezone.utc):
+            raise ValueError('A data da pesquisa não pode estar no futuro.')
+    previous = await conn.fetchrow('SELECT linked_ingredient_slug FROM grocery_retail_cards WHERE id=$1', card['id'])
+    slug = card['linked_ingredient_slug'] or (previous['linked_ingredient_slug'] if previous else None)
+    if not slug:
+        # Exact canonical identity only. No fuzzy matching or repeated manual linking.
+        same_name = next((item for item in await load_ingredients(conn, active_only=False)
+                          if key(item['name']) == key(card['name'])), None)
+        if same_name:
+            if same_name['unit'] != unit:
+                raise ValueError('Esse alimento já usa outra medida. Peso e volume não são convertidos sem densidade.')
+            slug = same_name['slug']
+        else:
+            created = await create_ingredient(conn, {'name': card['name'], 'unit': unit,
+                                                     'group': card['category'], 'minimum': 1, 'step': 1})
+            slug = created['slug']
+    current_unit = await conn.fetchval('SELECT unit FROM grocery_ingredients WHERE slug=$1 FOR UPDATE', slug)
+    if current_unit is None:
+        raise ValueError('Alimento não encontrado. Atualize o catálogo.')
+    if current_unit != unit:
+        raise ValueError('A embalagem deve manter a medida do alimento. Peso e volume não são convertidos sem densidade.')
+    # Retiring one package must not retire another active package of the same food.
+    has_other_packages = await conn.fetchval(
+        'SELECT EXISTS(SELECT 1 FROM grocery_retail_cards WHERE linked_ingredient_slug=$1 AND id<>$2 AND active)',
+        slug, card['id'])
+    await update_ingredient(conn, slug, {'name': card['name'], 'group': card['category'],
+                                        'active': card['active'] or bool(has_other_packages)})
+    await conn.execute('UPDATE grocery_retail_cards SET category=$2,updated_at=now() WHERE linked_ingredient_slug=$1 AND category IS DISTINCT FROM $2',
+                       slug, card['category'])
+    card['linked_ingredient_slug'] = slug
+    await save_record(conn, 'card', card)
+    if quote:
+        await save_record(conn, 'quote', quote.model_dump())

@@ -156,3 +156,22 @@ async def test_dietary_fiber_rejects_invalid_values_without_writing(fiber):
     with pytest.raises(ValueError, match='fibras alimentares'):
         await save_record(conn, 'card', product(fiber_g=fiber))
     conn.execute.assert_not_awaited()
+
+
+async def test_food_rejects_future_reference_before_creating_records():
+    from datetime import timedelta
+    conn = AsyncMock()
+    with pytest.raises(ValueError, match='futuro'):
+        await save_record(conn, 'food', {'card': product(), 'reference': {
+            'market_id': 'fonte', 'last_updated': (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()}})
+    conn.execute.assert_not_awaited()
+    conn.fetchrow.assert_not_awaited()
+
+
+async def test_food_rejects_incompatible_dimension_before_changing_the_food():
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {'linked_ingredient_slug': 'butter'}
+    conn.fetchval.return_value = 'L'
+    with pytest.raises(ValueError, match='Peso e volume'):
+        await save_record(conn, 'food', {'card': product()})
+    conn.execute.assert_not_awaited()
