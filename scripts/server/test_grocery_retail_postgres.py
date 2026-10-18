@@ -114,6 +114,18 @@ async def test_single_food_save_derives_units_and_preserves_existing_recipe_meta
             async with conn.transaction():
                 await save_record(conn, 'food', {'card': {**card, 'package_unit': 'g'}})
         assert await conn.fetchval("SELECT package_unit FROM grocery_retail_cards WHERE id='oleo-900'") == 'ml'
+        await conn.execute("DELETE FROM grocery_retail_cards WHERE id='oleo-500'")
+        async with conn.transaction():
+            await save_record(conn, 'food', {'card': {**card, 'package_unit': 'un', 'package_net_value': 20,
+                                                    'package_display': '20 un'}})
+        corrected = await conn.fetchrow('SELECT * FROM grocery_ingredients')
+        assert corrected['unit'] == 'un'
+        corrected_details = json.loads(corrected['details'])
+        assert corrected_details['minimum'] == 1
+        assert corrected_details['step'] == 1
+        assert corrected_details['food_ids'] == metadata['food_ids']
+        assert await conn.fetchval("SELECT package_net_value FROM grocery_retail_cards WHERE id='oleo-900'") == 20
+        assert await conn.fetchval("SELECT package_unit FROM grocery_retail_cards WHERE id='oleo-900'") == 'un'
     finally:
         await conn.execute('ROLLBACK')
         await conn.execute('SET search_path TO public')
