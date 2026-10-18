@@ -175,3 +175,32 @@ async def test_food_rejects_incompatible_dimension_before_changing_the_food():
     with pytest.raises(ValueError, match='Peso e volume'):
         await save_record(conn, 'food', {'card': product()})
     conn.execute.assert_not_awaited()
+
+
+async def test_nutrient_suggestions_require_admin_and_do_not_mutate_catalog(admin_client):
+    http, conn = admin_client
+    path = '/api/admin/grocery/nutrition-suggestions?q=%C3%93leo%20de%20Soja&amount=900&unit=ml'
+    assert http.get(path).status_code == 401
+    result = http.get(path, headers={'Authorization': 'Bearer only-a-test-value'})
+    assert result.status_code == 200
+    first = result.json()['candidates'][0]
+    assert first['id'] == 'TACO:272'
+    assert first['conversion']['total_grams'] == 828
+    conn.execute.assert_not_awaited()
+    assert http.get('/api/admin/grocery/nutrition-suggestions?q=oleo&amount=nan&unit=ml',
+                    headers={'Authorization': 'Bearer only-a-test-value'}).status_code == 422
+
+
+async def test_reviewed_composition_source_is_preserved_with_nutrients():
+    import json
+    conn = AsyncMock()
+    conn.fetchval.return_value = 'kg'
+    conn.fetchrow.return_value = {'name': 'Manteiga', 'linked_ingredient_slug': 'butter'}
+    reference = {'food_id': 'TACO:272', 'source_name': 'TACO / NEPA-UNICAMP', 'basis_g': 100,
+                 'package_mass_g': 100, 'suggested_value': 100, 'reviewed_at': '2026-10-18T00:00:00Z'}
+    card = product()
+    card['nutrition_facts'] = [{'key': 'fat', 'label': 'Gorduras', 'unit': 'g', 'value': 100, 'reference': reference}]
+    await save_record(conn, 'card', card)
+    args = conn.execute.call_args.args
+    stored = next(json.loads(value) for value in args[1:] if isinstance(value, str) and value.startswith('[{"key"'))
+    assert stored[0]['reference'] == reference
