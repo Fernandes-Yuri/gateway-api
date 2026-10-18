@@ -127,9 +127,10 @@ async def save_food(conn, payload):
     reference = payload.get('reference')
     quote = None
     if reference is not None:
-        if not isinstance(reference, dict) or set(reference) != {'market_id', 'last_updated'}:
+        if (not isinstance(reference, dict) or not {'market_id', 'last_updated'} <= set(reference)
+                or set(reference) - {'market_id', 'last_updated', 'price', 'product_store_url'}):
             raise ValueError('Informe o mercado de origem e a data da referência.')
-        quote = PriceIn.model_validate({**reference, 'card_id': card['id'], 'price': card['price_avg']})
+        quote = PriceIn.model_validate({'price': card['price_avg'], **reference, 'card_id': card['id']})
         if quote.last_updated > datetime.now(timezone.utc):
             raise ValueError('A data da pesquisa não pode estar no futuro.')
     previous = await conn.fetchrow('SELECT linked_ingredient_slug FROM grocery_retail_cards WHERE id=$1', card['id'])
