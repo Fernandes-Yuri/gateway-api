@@ -61,3 +61,21 @@ def test_invalid_package_is_rejected(amount, unit):
 
 def test_unknown_food_does_not_invent_a_reference():
     assert suggestions('xyzfoodinexistente', Decimal('900'), 'ml') == []
+
+
+@pytest.mark.parametrize('query', ['ovo', 'ovos', 'Ovos'])
+def test_eggs_prioritize_whole_raw_chicken_and_exclude_products_containing_eggs(query):
+    results = suggestions(query, 20, 'un', 760)
+    assert results[0]['id'] == 'TACO:489'
+    assert all(result['name'].startswith('Ovo,') for result in results)
+    assert results[0]['conversion']['total_grams'] == 760
+    assert results[0]['conversion']['package_amount'] == 20
+    expected = preview(food('TACO:489'), 760, 'g')['nutrition_facts']
+    assert [n['value'] for n in results[0]['nutrition_facts']] == [n['value'] for n in expected]
+
+
+def test_specific_egg_and_prepared_product_queries_remain_available():
+    assert suggestions('ovo codorna', 20, 'un')[0]['id'] == 'TACO:485'
+    assert suggestions('ovo frito', 100, 'g')[0]['id'] == 'TACO:490'
+    assert suggestions('maionese', 500, 'g')[0]['id'] == 'TACO:524'
+    assert suggestions('macarrao ovos', 500, 'g')[0]['id'] == 'TACO:41'

@@ -20,7 +20,8 @@ def dataset():
 
 def tokens(name):
     normalized = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode().lower()
-    return {word for word in re.findall(r'[a-z0-9]+', normalized) if word not in STOPWORDS}
+    return {'ovo' if word == 'ovos' else word
+            for word in re.findall(r'[a-z0-9]+', normalized) if word not in STOPWORDS}
 
 
 def preview(food, amount, unit, total_grams=None):
@@ -83,6 +84,17 @@ def suggestions(query, amount, unit, total_grams=None):
         if coverage < .65:
             continue
         score = coverage * 100 + (20 if terms == words else 0) - abs(len(words) - len(terms))
-        ranked.append((score, food))
+        # The leading name identifies the food; later words may only be ingredients.
+        primary = tokens(food['name'].split(',')[0])
+        primary_match = bool(terms & primary)
+        if primary_match:
+            score += 100
+        if not terms & {'cru', 'cozido', 'cozida', 'frito', 'frita'} and 'cru' in words:
+            score += 10
+        if terms == {'ovo'} and primary == {'ovo'}:
+            score += 10 * ('inteiro' in words) + 10 * ('galinha' in words)
+        ranked.append((score, food, primary_match))
+    if any(primary_match for _, _, primary_match in ranked):
+        ranked = [match for match in ranked if match[2]]
     ranked.sort(key=lambda match: (-match[0], match[1]['name']))
-    return [preview(food, amount, unit, total_grams) for _, food in ranked[:8]]
+    return [preview(food, amount, unit, total_grams) for _, food, _ in ranked[:8]]
