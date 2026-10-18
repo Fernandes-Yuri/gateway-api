@@ -168,6 +168,24 @@ async def test_food_rejects_future_reference_before_creating_records():
     conn.fetchrow.assert_not_awaited()
 
 
+async def test_food_reference_can_preserve_a_separate_observed_price_and_product_url(monkeypatch):
+    from services import grocery_retail_admin
+    monkeypatch.setattr(grocery_retail_admin, 'update_ingredient', AsyncMock())
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {'name': 'Manteiga', 'linked_ingredient_slug': 'butter'}
+    conn.fetchval.return_value = 'kg'
+    date = '2026-01-15T12:00:00+00:00'
+    await save_record(conn, 'food', {'card': product(), 'reference': {
+        'market_id': 'fonte', 'price': 10.50, 'last_updated': date,
+        'product_store_url': 'https://example.org/manteiga'}})
+    card_args = conn.execute.call_args_list[-2].args
+    quote_args = conn.execute.call_args_list[-1].args
+    assert Decimal('12.90') in card_args
+    assert Decimal('10.50') in quote_args
+    assert datetime.fromisoformat(date) in quote_args
+    assert 'https://example.org/manteiga' in quote_args
+
+
 async def test_food_rejects_incompatible_dimension_before_changing_the_food():
     conn = AsyncMock()
     conn.fetchrow.return_value = {'linked_ingredient_slug': 'butter'}
