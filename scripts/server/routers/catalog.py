@@ -760,3 +760,15 @@ async def put_admin_grocery_retail(body: GroceryAdminMutation, _auth=Depends(req
     except ForeignKeyViolationError as exc:
         raise HTTPException(422, "Produto, mercado ou ingrediente não encontrado. Atualize o catálogo.") from exc
     return {"success": True}
+
+
+@router.get("/api/admin/grocery/nutrition-suggestions", dependencies=[Depends(require_service_token)])
+async def grocery_nutrition_suggestions(q: str, amount: float, unit: Literal['g', 'ml', 'un'], total_grams: Optional[float] = None):
+    from services.grocery_nutrition_reference import suggestions
+    if not 2 <= len(q.strip()) <= 200:
+        raise HTTPException(422, 'Informe o nome do alimento, com 2 a 200 caracteres.')
+    try:
+        return {'candidates': suggestions(q, amount, unit, total_grams),
+                'notice': 'Valores médios da tabela, por embalagem. Confira o alimento e os valores antes de usar. Dados ausentes não representam zero.'}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
