@@ -24,6 +24,25 @@ def tokens(name):
             for word in re.findall(r'[a-z0-9]+', normalized) if word not in STOPWORDS}
 
 
+def is_retail_reference(food):
+    """Keep market ingredients/products, excluding culinary preparations."""
+    if food['category'] == 'Alimentos preparados':
+        return False
+    # Industrial chips are sold fried; do not confuse manufacture with home cooking.
+    words = tokens(food['name'])
+    if 'industrializada' in words or 'industrializado' in words:
+        return True
+    cooking = {'cozido', 'cozida', 'cozidos', 'cozidas', 'frito', 'frita', 'fritos',
+               'fritas', 'assado', 'assada', 'assados', 'assadas', 'grelhado',
+               'grelhada', 'refogado', 'refogada'}
+    if words & cooking:
+        return False
+    if food['category'] in {'Gorduras e óleos', 'Leite e derivados', 'Outros alimentos industrializados'}:
+        return True
+    return not re.search(r'\bcom (?:manteiga|oleo|azeite|leite)\b',
+                         unicodedata.normalize('NFKD', food['name']).encode('ascii', 'ignore').decode().lower())
+
+
 def preview(food, amount, unit, total_grams=None):
     amount = Decimal(str(amount))
     if not amount.is_finite() or not 0 < amount <= 1000000 or unit not in ('g', 'ml', 'un'):
@@ -78,6 +97,8 @@ def suggestions(query, amount, unit, total_grams=None):
         return []
     ranked = []
     for food in dataset()['foods']:
+        if not is_retail_reference(food):
+            continue
         words = tokens(food['name'])
         matched = sum(any(word.startswith(term) for word in words) for term in terms)
         coverage = matched / len(terms)

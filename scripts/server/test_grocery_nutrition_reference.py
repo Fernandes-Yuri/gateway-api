@@ -34,7 +34,8 @@ def test_soybean_oil_volume_uses_explicit_estimated_density_and_preserves_source
 def test_scaling_by_weight_keeps_raw_and_cooked_references_distinct():
     results = suggestions('arroz integral', 500, 'g')
     names = [r['name'] for r in results]
-    assert 'Arroz, integral, cru' in names and 'Arroz, integral, cozido' in names
+    assert 'Arroz, integral, cru' in names
+    assert 'Arroz, integral, cozido' not in names
     reference = food('TACO:2')
     at_100 = {n['key']: n['value'] for n in preview(reference, 100, 'g')['nutrition_facts']}
     at_500 = {n['key']: n['value'] for n in preview(reference, 500, 'g')['nutrition_facts']}
@@ -76,6 +77,26 @@ def test_eggs_prioritize_whole_raw_chicken_and_exclude_products_containing_eggs(
 
 def test_specific_egg_and_prepared_product_queries_remain_available():
     assert suggestions('ovo codorna', 20, 'un')[0]['id'] == 'TACO:485'
-    assert suggestions('ovo frito', 100, 'g')[0]['id'] == 'TACO:490'
+    assert suggestions('ovo frito', 100, 'g') == []
     assert suggestions('maionese', 500, 'g')[0]['id'] == 'TACO:524'
     assert suggestions('macarrao ovos', 500, 'g')[0]['id'] == 'TACO:41'
+
+
+@pytest.mark.parametrize('query', ['tapioca', 'goma de tapioca', 'tapioca com manteiga',
+                                  'feijao tropeiro', 'arroz carreteiro'])
+def test_missing_plain_food_never_falls_back_to_a_composed_dish(query):
+    assert suggestions(query, 500, 'g') == []
+
+
+@pytest.mark.parametrize('query', ['arroz', 'feijao', 'frango', 'ovo', 'batata'])
+def test_staples_only_offer_uncooked_references(query):
+    results = suggestions(query, 500, 'g')
+    assert results
+    assert all(not any(state in result['name'] for state in
+                       ['cozido', 'cozida', 'grelhado', 'grelhada', 'refogado', 'refogada'])
+               for result in results)
+
+
+@pytest.mark.parametrize('query', ['leite', 'oleo de soja', 'farinha', 'polvilho doce', 'manteiga'])
+def test_market_products_do_not_require_a_literal_raw_label(query):
+    assert suggestions(query, 500, 'g')
