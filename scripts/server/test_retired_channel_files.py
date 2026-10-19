@@ -18,9 +18,13 @@ class RetiredFilesTests(unittest.TestCase):
             app = json.dumps({'source':'app_chat','messages':['synthetic app']})+'\n'
             data.write_text(app+json.dumps({'source':'whatsapp_voice','messages':['synthetic retired']})+'\n')
             (root/'webhook_outbox.log').write_text('synthetic retired outbox')
+            cache = root/'app/__pycache__'
+            cache.mkdir(parents=True)
+            (cache/'whatsapp_service.cpython-312.pyc').write_bytes(b'synthetic')
             self.assertEqual(retired.purge(root), 1)
             self.assertEqual(data.read_text(), app)
             self.assertFalse((root/'webhook_outbox.log').exists())
+            self.assertFalse(cache.exists())
             self.assertEqual(retired.purge(root), 0)
 
     def test_invalid_input_keeps_original_and_does_not_report_success(self):

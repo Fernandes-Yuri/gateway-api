@@ -1,6 +1,7 @@
 """Expurgo idempotente de arquivos do assistente encerrado, pelo deploy parado."""
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
 
@@ -49,6 +50,16 @@ def purge(project: Path) -> int:
             if target.is_dir() and not target.is_symlink():
                 raise ValueError('Caminho legado inválido para expurgo')
             target.unlink(missing_ok=True)
+    # rsync preserva __pycache__; retirar também bytecode dos módulos excluídos.
+    runtime = project/'app'
+    if runtime.is_dir():
+        for cache in runtime.rglob('__pycache__'):
+            if cache.is_symlink():
+                cache.unlink()
+            elif cache.is_dir():
+                shutil.rmtree(cache)
+        for bytecode in runtime.rglob('*.pyc'):
+            bytecode.unlink()
     paths = {project/'llm_trace.jsonl', project/'app/llm_trace.jsonl',
              project/'dataset_braga.jsonl', project/'app/dataset_braga.jsonl',
              project/'data/dataset/dataset_braga.jsonl'}
