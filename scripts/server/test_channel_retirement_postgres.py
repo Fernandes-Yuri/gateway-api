@@ -61,9 +61,10 @@ class RetirementMigrationTests(unittest.IsolatedAsyncioTestCase):
         for table in ('profiles','vital_signs','medication_logs'):
             self.assertEqual(await self.conn.fetchval(f'SELECT count(*) FROM {table}'),
                              1 if table == 'profiles' else 2)
-        for table in ('pending_confirmations','agent_actions','medication_dose_batches',
+        for table in ('agent_actions','medication_dose_batches',
                       'medication_dose_batch_items'):
-            self.assertEqual(await self.conn.fetchval(f'SELECT id FROM {table}'), 2)
+            rows = await self.conn.fetch(f'SELECT id FROM {table} ORDER BY id')
+            self.assertEqual([row['id'] for row in rows], [2])
         self.assertEqual(await self.conn.fetchval('SELECT count(*) FROM confirmation_logs'), 3)
         self.assertIsNone(await self.conn.fetchval('SELECT pending_conf_id FROM confirmation_logs WHERE id=3'))
         self.assertIsNone(await self.conn.fetchval('SELECT pending_conf_id FROM confirmation_logs WHERE id=4'))
