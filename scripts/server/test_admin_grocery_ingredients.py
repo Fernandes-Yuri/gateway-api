@@ -441,6 +441,7 @@ class CrudIngredientTests(unittest.TestCase):
             self.assertIn("termo de preparo ou corte", response.json()["detail"])
 
     def test_update_rejects_preparation_terms_in_name(self):
+        self.conn.fetchrow.return_value = CATALOG[0]
         response = self.client.patch("/api/admin/grocery-ingredients/feijao-carioca", headers=self.headers,
                                      json={"name": "Feijão Carioca Cozido"})
         self.assertEqual(response.status_code, 422)

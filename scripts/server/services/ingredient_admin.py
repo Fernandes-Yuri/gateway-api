@@ -102,7 +102,7 @@ def _clean_food_ids(food_ids):
     return cleaned
 
 
-def validate_payload(data, *, partial=False):
+def validate_payload(data, *, partial=False, existing_name=None):
     """Valida o corpo de criação/edição e devolve apenas os campos aceitos."""
     if not isinstance(data, dict):
         raise ValueError("Envie um objeto com os campos do ingrediente.")
@@ -114,7 +114,8 @@ def validate_payload(data, *, partial=False):
         raise ValueError("Informe ao menos um campo para editar.")
     result = {}
     if "name" in data:
-        result["name"] = _validate_clean_name(data["name"])
+        name = _clean_text(data["name"], "Nome", MAX_NAME)
+        result["name"] = name if partial and name == existing_name else _validate_clean_name(name)
     if "unit" in data:
         if data["unit"] not in ALLOWED_UNITS:
             raise ValueError("Unidade deve ser kg, L ou un.")
@@ -223,8 +224,11 @@ async def create_ingredient(conn, data):
 
 
 async def update_ingredient(conn, slug, data, *, bump=True):
-    payload = validate_payload(data, partial=True)
     current = await _load_row(conn, slug)
+    # Legacy catalog names may contain preparation terms. Saving a package or
+    # its photo must preserve an unchanged name instead of rejecting that record.
+    # New names still pass the full validation below.
+    payload = validate_payload(data, partial=True, existing_name=current['name'])
     current_details = as_json(current["details"]) or {}
     if "name" in payload:
         check_name_free(payload["name"], await _taken_names(conn, slug=slug))
