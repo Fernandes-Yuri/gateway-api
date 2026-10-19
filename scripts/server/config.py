@@ -71,11 +71,9 @@ MODEL_ID = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
 # Modelo por serviço (cota é por modelo: cada um tem seu bucket de RPM/RPD/TPM).
 MODEL_CHAT = os.getenv("GROQ_MODEL_CHAT") or MODEL_ID
 MODEL_REST = os.getenv("GROQ_MODEL_REST") or MODEL_ID
-MODEL_WHATSAPP = os.getenv("GROQ_MODEL_WHATSAPP") or MODEL_ID
 GROQ_MODEL_VISION = os.getenv("GROQ_MODEL_VISION", "llama-3.2-11b-vision-instant")
 # Chaves por serviço (fallback para a chave legada do assistente).
 GROQ_API_KEY_CHAT = os.getenv("GROQ_API_KEY_CHAT") or GROQ_API_KEY
-GROQ_API_KEY_WHATSAPP = os.getenv("GROQ_API_KEY_WHATSAPP") or GROQ_API_KEY
 
 # ------------------------------------------------------------------
 # Google Gemini (Visão Multimodal para Receitas Médicas).

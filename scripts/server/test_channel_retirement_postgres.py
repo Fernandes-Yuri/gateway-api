@@ -47,7 +47,7 @@ class RetirementMigrationTests(unittest.IsolatedAsyncioTestCase):
         ''')
         for name in ('whatsapp_channel_cleanup','whatsapp_channel_deletions',
                      'whatsapp_channel_consents','whatsapp_operation_keys',
-                     'whatsapp_message_receipts','whatsapp_link_attempts'):
+                     'whatsapp_message_receipts','whatsapp_link_attempts','care_notification_deliveries'):
             await self.conn.execute(f'CREATE TABLE {name}(id int); INSERT INTO {name} VALUES(1)')
 
     async def asyncTearDown(self):

@@ -13,6 +13,8 @@ DELETE FROM agent_actions WHERE channel = 'whatsapp';
 DELETE FROM medication_dose_batches WHERE channel = 'whatsapp';
 
 -- As tabelas de confirmação são compartilhadas: somente as tabelas exclusivas saem.
+-- Recibos dos agendamentos exclusivos do atendimento antigo.
+DROP TABLE IF EXISTS care_notification_deliveries;
 DROP TABLE IF EXISTS whatsapp_channel_cleanup;
 DROP TABLE IF EXISTS whatsapp_channel_deletions;
 DROP TABLE IF EXISTS whatsapp_channel_consents;
