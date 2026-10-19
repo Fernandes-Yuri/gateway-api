@@ -68,8 +68,10 @@ fi
 echo "=== [3/4] Executando Migrations do Banco de Dados (RDS) ==="
 if [ -f "migrate.py" ]; then
     # Não permitir gravações do atendimento antigo durante o expurgo.
-    sudo systemctl stop braga-gateway.service
-    python3 scripts/purge_retired_channel_files.py
+    if [ ! -f "$APP_DIR/.retired_health_whatsapp_v1" ]; then
+        sudo systemctl stop braga-gateway.service
+        python3 scripts/purge_retired_channel_files.py
+    fi
     python3 migrate.py
     python3 scripts/purge_legacy_exam_files.py
 fi
