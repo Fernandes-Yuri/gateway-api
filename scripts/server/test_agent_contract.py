@@ -19,13 +19,14 @@ class ContractTests(unittest.TestCase):
 
     def test_channel_split(self):
         chat = actions_for_channel("chat")
-        wa = actions_for_channel("whatsapp")
+        voice = actions_for_channel("voice")
+        self.assertEqual(actions_for_channel("whatsapp"), ())
         self.assertIn("ABRIR_LISTA_COMPRAS", chat)
         self.assertNotIn("REGISTRAR_PRESSAO", chat)
-        self.assertIn("REGISTRAR_PRESSAO", wa)
-        self.assertNotIn("ABRIR_LISTA_COMPRAS", wa)
+        self.assertIn("REGISTRAR_PRESSAO", voice)
+        self.assertNotIn("ABRIR_LISTA_COMPRAS", voice)
         self.assertIn("EMERGENCIA", chat)
-        self.assertIn("EMERGENCIA", wa)
+        self.assertIn("EMERGENCIA", voice)
 
     def test_grocery_slots(self):
         self.assertEqual(extract_grocery_items("adiciona aveia e banana na lista"),

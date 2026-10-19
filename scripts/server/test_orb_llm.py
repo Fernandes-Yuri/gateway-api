@@ -24,7 +24,7 @@ class ParseLabelTests(unittest.TestCase):
         self.assertEqual(parse_label("ABRIR_LISTA_COMPRAS", channel="chat"), "ABRIR_LISTA_COMPRAS")
         self.assertEqual(parse_label("ABRIR_LISTA_COMPRAS", channel="whatsapp"), "CONVERSA")
         self.assertEqual(parse_label("REGISTRAR_PRESSAO", channel="chat"), "CONVERSA")
-        self.assertEqual(parse_label("REGISTRAR_PRESSAO", channel="whatsapp"), "REGISTRAR_PRESSAO")
+        self.assertEqual(parse_label("REGISTRAR_PRESSAO", channel="whatsapp"), "CONVERSA")
 
     def test_embedded_sentence(self):
         self.assertEqual(parse_label("A resposta é LEMBRETES."), "LEMBRETES")
@@ -54,7 +54,7 @@ class PayloadTests(unittest.TestCase):
     def test_classify_lists_channel_executors(self):
         chat_p = build_classify_payload("m", "oi", channel="chat")
         self.assertIn("ABRIR_LISTA_COMPRAS", chat_p["messages"][0]["content"])
-        wa_p = build_classify_payload("m", "oi", channel="whatsapp")
+        wa_p = build_classify_payload("m", "oi", channel="voice")
         self.assertIn("REGISTRAR_PRESSAO", wa_p["messages"][0]["content"])
         self.assertNotIn("ABRIR_LISTA_COMPRAS", wa_p["messages"][0]["content"])
 

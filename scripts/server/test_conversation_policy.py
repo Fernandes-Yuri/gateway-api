@@ -6,18 +6,14 @@ from orb_llm import SPEAK_SYSTEM, build_speak_payload
 
 class PolicyTests(unittest.TestCase):
     def test_channels_share_canonical_persona_and_clock(self):
-        for channel in ('voice', 'chat', 'whatsapp'):
+        for channel in ('voice', 'chat'):
             prompt = build_conversation_system(channel)
             self.assertTrue(prompt.startswith(PERSONA))
             self.assertIn('Relógio de referência', prompt)
 
-    def test_whatsapp_does_not_promise_app_navigation(self):
-        prompt = build_conversation_system('whatsapp')
-        self.assertIn('Nunca diga que abriu uma tela', prompt)
-        self.assertIn('mensagens ou botões', prompt)
 
     def test_never_invents_medication_schedule_or_denies_visible_history(self):
-        for channel in ('chat', 'whatsapp'):
+        for channel in ('chat',):
             prompt = build_conversation_system(channel)
             self.assertIn('Nunca invente ou sugira medicamento, dose ou horário', prompt)
             self.assertIn('reconheça o que você escreveu', prompt)

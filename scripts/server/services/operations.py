@@ -29,7 +29,6 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-CHANNEL_WHATSAPP = "whatsapp"
 CHANNEL_APP = "app"
 
 STATUS_SUCCESS = "success"
@@ -45,7 +44,7 @@ class OperationContext(BaseModel):
 
     actor_id: str
     patient_id: str
-    channel: str = CHANNEL_WHATSAPP
+    channel: str = CHANNEL_APP
     message_id: Optional[str] = None
     pending_op_id: Optional[str] = None
 

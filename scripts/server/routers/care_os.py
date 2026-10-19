@@ -1112,7 +1112,7 @@ async def medication_dose_capabilities(uid: str = Depends(firebase_uid)):
     return {"medication_batch_contract": 1, "enabled": dose_contract_enabled(),
             "structured_quantities": True, "integer_units_min": 1, "integer_units_max": 20,
             "proposal_ttl_seconds": 300, "offline_result_recovery": True,
-            "grouping": "exact_local_time", "supported_channels": ["app", "whatsapp"]}
+            "grouping": "exact_local_time", "supported_channels": ["app"]}
 
 
 router.include_router(dose_router)

@@ -93,7 +93,7 @@ def log_fine_tuning_sample(
             }
         }
 
-        from services.wa_channel_storage import file_lock
+        from core.file_lock import file_lock
         with file_lock(_state.dataset_path), open(_state.dataset_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception as e:

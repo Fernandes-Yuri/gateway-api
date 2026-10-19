@@ -5,34 +5,8 @@ from typing import List, Optional, Any
 from fastapi import BackgroundTasks, FastAPI, HTTPException as HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-# Vínculo de WhatsApp por TOTP (arquitetura temporária, até a Meta liberar template).
-try:
-    from wa_link_totp import generate_totp_secret, current_totp_code
-    from wa_link_service import handle_link_attempt
-    from wa_gate_service import gate_unregistered, sender_has_linked_account
-    HAS_WA_LINK = True
-    HAS_WA_GATE = True
-except ImportError:
-    HAS_WA_LINK = False
-    HAS_WA_GATE = False
-
-    def generate_totp_secret(*args, **kwargs):  # type: ignore
-        return None
-
-    def current_totp_code(*args, **kwargs):  # type: ignore
-        return None
-
-    async def handle_link_attempt(*args, **kwargs):  # type: ignore
-        return False
-
-    async def gate_unregistered(*args, **kwargs):  # type: ignore
-        return False
-
-    async def sender_has_linked_account(*args, **kwargs):  # type: ignore
-        return None
 from assistant_preferences import install_preference_routes, process_preferences
 from family_api import install_family_routes, purge_expired_family_messages
 from caregiver_alerts import install_caregiver_alert_routes
@@ -61,10 +35,6 @@ from routers import chat as chat_router
 from routers import auth as auth_router
 # Routers extraidos (Fase A passo 5): sincronizacao PostgreSQL.
 from routers import sync as sync_router
-# Routers extraidos (Fase A passo 7): WhatsApp Business Cloud API.
-# O pipeline completo (webhook, router Fase 4, fast-lane de audio,
-# callback de confirmacao) vive la; este arquivo so registra.
-from routers import whatsapp as whatsapp_router
 from routers import emergency as emergency_router
 # Router administrativo do portal webservice (D-WS1 / D50): leituras e
 # operacoes admin protegidas por token de servico. O portal Next.js no
@@ -72,15 +42,9 @@ from routers import emergency as emergency_router
 from routers import admin as admin_router
 from routers import care_os as care_os_router
 from routers import catalog as catalog_router
-from services.care_automations import (
-    send_nightly_bulletins,
-    send_pattern_break_alerts,
-    send_stock_alerts,
-)
 # Modulos core extraidos (Fase A passo 6): confirmacao de leituras vitais
 # (maquina de pendencias + validacao clinica + botes do WhatsApp) e
 # curadoria do dataset de fine-tuning.
-import core.confirmation as confirmation_module
 import core.dataset as dataset_module
 from core.dataset import (
     log_fine_tuning_sample,
@@ -115,50 +79,6 @@ except ImportError:
     def verify_recaptcha(*args, **kwargs):  # type: ignore
         return {"valid": False, "reason": "module_unavailable"}
 
-# Verificacao de assinatura HMAC do webhook da Meta (zero-trust no webhook)
-try:
-    from webhook_security import verify_meta_signature
-    HAS_WEBHOOK_SECURITY = True
-except ImportError:
-    HAS_WEBHOOK_SECURITY = False
-
-    def verify_meta_signature(*args, **kwargs):  # type: ignore
-        return False
-
-# Suporte defensivo a WhatsApp Business Cloud API
-try:
-    from whatsapp_service import (
-        build_wa_link,
-        send_clinical_alert_whatsapp,
-        send_security_code_whatsapp,
-        send_whatsapp_interactive,
-        send_whatsapp_template,
-        send_whatsapp_text,
-    )
-    HAS_WHATSAPP = True
-except ImportError:
-    HAS_WHATSAPP = False
-    build_wa_link = None
-    send_clinical_alert_whatsapp = None
-    send_security_code_whatsapp = None
-    send_whatsapp_interactive = None
-    send_whatsapp_template = None
-    send_whatsapp_text = None
-
-# ---------------------------------------------------------------------------
-# PAUSA TEMPORARIA DO CANAL WHATSAPP PARA OTP (18/09/2026)
-# ---------------------------------------------------------------------------
-# A Meta nao aprova os templates de autenticacao e a conta business ainda nao
-# foi verificada, entao o codigo OTP por WhatsApp nunca chegava ao usuario.
-# O app agora usa SOMENTE e-mail para OTP. O canal WhatsApp foi pausado aqui
-# (nao removido): o codigo continua intacto para religar assim que a Meta
-# liberar o template.
-#
-# Para religar: basta colocar WHATSAPP_OTP_PAUSED = False.
-# ---------------------------------------------------------------------------
-# WHATSAPP_OTP_PAUSED mora em routers/whatsapp.py (Fase A passo 7); o
-# auth_router le via whatsapp_router.WHATSAPP_OTP_PAUSED.
-
 # Suporte defensivo a asyncpg para PostgreSQL
 try:
     import asyncpg
@@ -192,7 +112,6 @@ GROQ_SEMAPHORE = asyncio.Semaphore(5)
 # Concorrência por canal (isolamento: um canal lento não mata os outros).
 SEM_CHAT = asyncio.Semaphore(3)
 SEM_REST = asyncio.Semaphore(2)
-SEM_WA = asyncio.Semaphore(3)
 
 # AUD-SEC/P2 (contrarrrelatório doc 07 §4 V5, 21/09/2026): /docs, /redoc e
 # /openapi.json expostos em produção entregavam um mapa gratuito de 74 rotas
@@ -214,8 +133,6 @@ health_router.configure_state(
     has_postgres=HAS_POSTGRES,
     has_scheduler=HAS_SCHEDULER,
     has_fcm=HAS_FCM,
-    has_whatsapp=HAS_WHATSAPP,
-    whatsapp_otp_paused=getattr(whatsapp_router, "WHATSAPP_OTP_PAUSED", False),
     messaging=messaging if HAS_FCM else None,
 )
 app.include_router(health_router.router)
@@ -368,48 +285,7 @@ class FamilyMessageSyncDto(BaseModel):
 # 503/offline_mode em producao. (Detectado na revisao pre-push: os testes
 # locais passavam justamente por esperarem pool None offline.)
 _POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
-                 sync_router, whatsapp_router, admin_router, care_os_router, catalog_router)
-
-
-async def _care_sender(phone, message, notification_type):
-    # A phone stored as a contact is not a WhatsApp link/consent. This also
-    # prevents old scheduled deliveries after the channel has been deleted.
-    if db_pool is None:
-        return False
-    from services.wa_channel_privacy import TERMS_VERSION, PRIVACY_VERSION, phone_hash
-    from services.whatsapp_identity import normalize_phone_digits
-    async with whatsapp_router._channel_serialized(phone):
-        async with db_pool.acquire() as conn:
-            allowed = await conn.fetchval(
-                "SELECT EXISTS(SELECT 1 FROM whatsapp_channel_consents c JOIN profiles p "
-                "ON regexp_replace(p.whatsapp_phone, '\\D', '', 'g')=$1 "
-                'WHERE c.phone_hash=$2 AND c.accepted_at IS NOT NULL '
-                'AND c.terms_version=$3 AND c.privacy_version=$4)',
-                normalize_phone_digits(phone), phone_hash(phone), TERMS_VERSION, PRIVACY_VERSION)
-        if not allowed:
-            return False
-        return await _authorized_care_sender(phone, message, notification_type)
-
-
-async def _authorized_care_sender(phone, message, notification_type):
-    if not HAS_WHATSAPP:
-        print("[Care OS] WhatsApp indisponível; entrega não realizada.")
-        return False
-    template_env = {
-        "NIGHTLY_BULLETIN": "WHATSAPP_TEMPLATE_CARE_NIGHTLY",
-        "PATTERN_BREAK": "WHATSAPP_TEMPLATE_CARE_PATTERN_BREAK",
-        "STOCK_OR_PRESCRIPTION": "WHATSAPP_TEMPLATE_CARE_STOCK",
-    }.get(notification_type)
-    template_name = os.getenv(template_env, "") if template_env else ""
-    if template_name:
-        result = await send_whatsapp_template(
-            phone, template_name=template_name, language_code="pt_BR",
-            body_parameters=[message],
-        )
-    else:
-        # Funciona somente se o usuário abriu a janela Meta de 24h.
-        result = await send_whatsapp_text(phone, message)
-    return bool(result.get("success")) if isinstance(result, dict) else bool(result)
+                 sync_router, admin_router, care_os_router, catalog_router)
 
 
 def _propagate_db_pool():
@@ -422,12 +298,6 @@ def _propagate_db_pool():
     """
     for _router in _POOL_ROUTERS:
         _router._state.db_pool = db_pool
-    # Sender compartilhado com os workers, disponível também sem scheduler.
-    # WhatsApp só o usa no envio pós-confirmação. Sem pool, não há envio.
-    if db_pool is not None:
-        whatsapp_router._state.send_care_message = _care_sender
-    else:
-        whatsapp_router._state.send_care_message = None
 
 
 release_control_server = None
@@ -462,17 +332,6 @@ async def startup():
                 print(f"[Release Control] Indisponível: {type(error).__name__}")
 
 
-            # AUD-G(M): expire_pending_confirmations() (migration 004:63-71)
-            # existia mas nunca era chamada. Confirmações vencidas ficavam
-            # status='pending' para sempre — índice parcial
-            # idx_pending_conf_expires e o relatório v_confirmation_report
-            # acumulavam lixo. Expira a cada boot do serviço.
-            try:
-                async with db_pool.acquire() as conn:
-                    await conn.execute("SELECT expire_pending_confirmations()")
-            except Exception as e:
-                print(f"[Startup] Aviso: função expire_pending_confirmations() indisponível: {e}")
-
             try:
                 from services.price_cascade import seed_inicial
                 await seed_inicial(db_pool)
@@ -499,16 +358,6 @@ async def startup():
                 cleanup_deleted_accounts, 'interval', minutes=5,
                 id="cleanup_deleted_accounts", replace_existing=True, max_instances=1,
             )
-            async def cleanup_whatsapp_channel_files():
-                from services.wa_session_context import expire
-                expire()
-                from services.wa_channel_storage import retry_channel_cleanup
-                await retry_channel_cleanup(db_pool, outbox_path=whatsapp_router.WEBHOOK_OUTBOX_PATH)
-            retention_scheduler.add_job(
-                cleanup_whatsapp_channel_files, 'interval', minutes=1,
-                id="cleanup_whatsapp_channel_files", replace_existing=True,
-                max_instances=1, coalesce=True, next_run_time=datetime.now(timezone.utc),
-            )
             if HAS_FCM:
                 from services.firebase_account_reconciliation import reconcile_accounts
                 retention_scheduler.add_job(
@@ -528,27 +377,6 @@ async def startup():
                 id="purge_security_blocked_ips", replace_existing=True, max_instances=1,
             )
 
-            async def _nightly_care_job():
-                await send_nightly_bulletins(db_pool, _care_sender)
-
-            async def _pattern_care_job():
-                await send_pattern_break_alerts(db_pool, _care_sender)
-
-            async def _stock_care_job():
-                await send_stock_alerts(db_pool, _care_sender)
-
-            retention_scheduler.add_job(
-                _nightly_care_job, CronTrigger(hour=20, minute=0, timezone="America/Sao_Paulo"),
-                id="care_os_nightly_2000_brt", replace_existing=True, max_instances=1, coalesce=True,
-            )
-            retention_scheduler.add_job(
-                _pattern_care_job, 'interval', minutes=30,
-                id="care_os_pattern_break", replace_existing=True, max_instances=1, coalesce=True,
-            )
-            retention_scheduler.add_job(
-                _stock_care_job, CronTrigger(hour=9, minute=15, timezone="America/Sao_Paulo"),
-                id="care_os_stock_alert", replace_existing=True, max_instances=1, coalesce=True,
-            )
             # D52: retencao de releases de APK (~36MB cada). Mantem so os 3
             # mais recentes; protege o release ativo e o arquivo servido.
             async def purge_old_release_apks():
@@ -664,8 +492,9 @@ async def shutdown():
         await listener.wait_closed()
         path.unlink(missing_ok=True)
         release_control_server = None
-    if globals().get('security_telemetry'):
-        await security_telemetry.stop()
+    telemetry = globals().get('security_telemetry')
+    if telemetry:
+        await telemetry.stop()
     if globals().get("retention_scheduler"):
         retention_scheduler.shutdown(wait=False)
     if db_pool:
@@ -692,9 +521,8 @@ async def dispatch_clinical_alert(
 ):
     """Gatilho Clínico Automático para Cuidadores (doc 10 §3.2).
 
-    Extraido de sync_vital_sign para que qualquer canal de entrada (app, bot do
-    WhatsApp, voz) aplique a MESMA regra: leitura crítica avisa o cuidador por
-    push FCM e WhatsApp. Best-effort: falha de notificação nunca quebra quem gravou.
+    Leituras críticas registradas no aplicativo avisam o cuidador por
+    push FCM. Best-effort: falha de notificação nunca quebra quem gravou.
 
     Retorna True quando havia condição crítica (mesmo que a notificação falhe).
     """
@@ -705,11 +533,9 @@ async def dispatch_clinical_alert(
 
     if is_critical_pressure:
         val_str = f"{systolic:g}/{diastolic:g} mmHg" if diastolic is not None else f"{systolic:g} mmHg"
-        alert_type = "Pressão Arterial Elevada"
         msg_body = f"Seu familiar registrou pressão de {val_str}."
     else:
         val_str = f"{glucose:g} mg/dL ({glucose_type or 'Glicose'})"
-        alert_type = "Glicemia Fora da Faixa"
         msg_body = f"Seu familiar registrou glicemia de {val_str}."
 
     # 1. Notificação Push (FCM) para aparelhos de cuidador, exceto o próprio.
@@ -735,28 +561,6 @@ async def dispatch_clinical_alert(
                 print(f"[Clinical Alert] Falha no push para cuidador: {push_err}")
     except Exception as e:
         print(f"[Clinical Alert] Falha no push: {e}")
-
-    # 2. Alerta via WhatsApp para o contato de emergência/cuidador.
-    if HAS_WHATSAPP:
-        try:
-            async with pool.acquire() as conn:
-                p_row = await conn.fetchrow(
-                    "SELECT full_name, emergency_contact_phone, emergency_contact_name FROM profiles WHERE id = $1",
-                    source_user_id,
-                )
-            if p_row and p_row.get("emergency_contact_phone"):
-                p_name = p_row.get("full_name") or "Familiar"
-                target_phone = p_row.get("emergency_contact_phone")
-                if background_tasks is not None:
-                    background_tasks.add_task(
-                        send_clinical_alert_whatsapp, target_phone, p_name, alert_type, val_str
-                    )
-                else:
-                    asyncio.create_task(
-                        send_clinical_alert_whatsapp(target_phone, p_name, alert_type, val_str)
-                    )
-        except Exception as e:
-            print(f"[Clinical Alert] Falha no WhatsApp: {e}")
 
     return True
 
@@ -823,7 +627,7 @@ from core.prompt import SYSTEM_PROMPT
 # este arquivo importa ambas de core.text.
 # =============================================================
 # CONFIRMACAO DE LEITURAS VITAIS + DATASET DE FINE-TUNING:
-# ver core/confirmation.py e core/dataset.py (Fase A passo 6).
+# ver core/dataset.py.
 # Maquina de pendencias (pending_confirmations), validacao clinica
 # (SBC/SBD), botes do WhatsApp e curadoria do dataset_braga.jsonl.
 # Nao redeclarar aqui.
@@ -868,22 +672,18 @@ chat_router.configure_state(
 app.include_router(chat_router.router)
 
 # Registro do router de auth (Fase A passo 4b): os modulos defensivos
-# (email_service, whatsapp_service, recaptcha) sao importados no topo deste
+# (email_service, recaptcha) sao importados no topo deste
 # arquivo com fallback gracioso; passamos o que estiver disponivel.
 auth_router.configure_state(
     db_pool=None,  # preenchido no startup (init_db)
     rate_limiter=rate_limiter,
-    whatsapp_otp_paused=whatsapp_router.WHATSAPP_OTP_PAUSED,
     has_email=HAS_EMAIL,
-    has_whatsapp=HAS_WHATSAPP,
     has_fcm=HAS_FCM,
     firebase_admin=firebase_admin if HAS_FCM else None,
     is_email_configured=is_email_configured if HAS_EMAIL else None,
     send_security_code_email=send_security_code_email if HAS_EMAIL else None,
-    send_security_code_whatsapp=send_security_code_whatsapp if HAS_WHATSAPP else None,
     send_security_alert_email=send_security_alert_email if HAS_EMAIL else None,
     send_welcome_email=send_welcome_email if HAS_EMAIL else None,
-    build_wa_link=build_wa_link if HAS_WHATSAPP else None,
     verify_recaptcha=verify_recaptcha if HAS_RECAPTCHA else None,
 )
 app.include_router(auth_router.router)
@@ -895,21 +695,10 @@ sync_router.configure_state(
     db_pool=None,  # preenchido no startup (init_db)
     rate_limiter=rate_limiter,
     dispatch_clinical_alert=dispatch_clinical_alert,
-    has_wa_link=HAS_WA_LINK,
-    generate_totp_secret=generate_totp_secret if HAS_WA_LINK else None,
     log_fine_tuning_sample=log_fine_tuning_sample,
 )
 app.include_router(sync_router.router)
 
-# Registro do router do WhatsApp (Fase A passo 7), com respostas em texto.
-# send_care_message (passo 4.4) é definido abaixo no startup e propagado por
-# _propagate_db_pool, junto com o pool — não existe aqui em tempo de import.
-whatsapp_router.configure_state(
-    db_pool=None,  # preenchido no startup (init_db)
-    sem_wa=SEM_WA,
-    send_care_message=None,
-)
-app.include_router(whatsapp_router.router)
 app.include_router(emergency_router.router)
 
 # Registro do router admin do portal (D-WS1). Autenticado por
@@ -929,10 +718,6 @@ app.include_router(catalog_router.router)
 # Configuracao dos modulos core extraidos (Fase A passo 6).
 # dispatch_clinical_alert continua definido neste arquivo (compartilhado
 # por sync, confirmacao e WhatsApp); passamos a referencia para baixo.
-confirmation_module.configure_state(
-    dispatch_clinical_alert=dispatch_clinical_alert,
-    send_whatsapp_interactive=send_whatsapp_interactive if HAS_WHATSAPP else None,
-)
 dataset_module.configure_state(
     system_prompt=SYSTEM_PROMPT,
     dataset_path=DATASET_PATH,
@@ -943,38 +728,3 @@ dataset_module.configure_state(
 # e registrado via chat_router. assistant_memory e log_fine_tuning_sample
 # permanecem aqui (compartilhados com ws_orb e WhatsApp) e sao passados ao
 # router via configure_state.
-
-
-
-# =============================================================
-# WHATSAPP BUSINESS CLOUD API: ver routers/whatsapp.py (Fase A passo 7).
-# Webhook (GET desafio + POST com HMAC), pipeline de mensagem entrante
-# (transcricao -> router Fase 4 -> Groq), respostas rapidas em texto,
-# callback de confirmacao e /api/whatsapp/{status,send,events}.
-# Nao redeclarar aqui.
-# =============================================================
-
-# =============================================================
-# ENDPOINTS DE SEGURANÇA E AUTENTICAÇÃO OMNICHANNEL (OTP)
-# =============================================================
-
-# ENDPOINTS DE AUTENTICACAO (/api/auth/*): ver routers/auth.py
-# (Fase A passo 4b). OTP send/verify, password/reset, welcome-email,
-# check-account. Nao redeclarar aqui.
-
-
-
-
-# =============================================================
-
-# ENDPOINTS DE DISTRIBUICAO E ATUALIZACAO DO APP (OTA) + LANDING
-# ver routers/app.py (Fase A passo 3): /api/app/latest, /api/app/download,
-# /api/app/version, /api/app/notify-update, /
-# RELEASES_DIR vem de `config`.
-
-from security_telemetry import install as install_security_telemetry
-security_telemetry = install_security_telemetry(app, lambda: db_pool)
-admin_router._state.telemetry = security_telemetry
-
-if os.path.isdir(app_router.ONBOARDING_DIR):
-    app.mount("/", StaticFiles(directory=app_router.ONBOARDING_DIR, html=True), name="onboarding")

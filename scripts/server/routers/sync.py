@@ -76,8 +76,6 @@ class ProfileSyncDto(BaseModel):
     phone: Optional[str] = None
     consentAcceptedAt: Optional[str] = None
     notificationsEnabled: Optional[bool] = True
-    # Segredo TOTP (base32) do vinculo de WhatsApp; o app pode gerar localmente.
-    totpSecret: Optional[str] = None
     locationEnabled: Optional[bool] = True
     currentXp: Optional[int] = 0
     totalXp: Optional[int] = 0
@@ -270,46 +268,9 @@ async def sync_profile(p: ProfileSyncDto, request: Request, uid: str = Depends(f
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 
-    # Segredo TOTP do vinculo de WhatsApp. O app pode gerar localmente (caso em que
-    # ele ja conhece o segredo e calcula o codigo no clique sem chamar o servidor);
-    # senao o gateway gera e devolve para o app persistir. Nunca regenera o de uma
-    # conta existente: isso invalidaria o segredo guardado no aparelho.
-    totp_secret = getattr(p, "totpSecret", None)
-    if totp_secret:
-        try:
-            s_clean = str(totp_secret).strip().replace(" ", "").upper()
-            if not s_clean:
-                totp_secret = None
-            else:
-                pad = (8 - len(s_clean) % 8) % 8
-                raw = base64.b32decode(s_clean + "=" * pad, casefold=True)
-                if not raw:
-                    totp_secret = None
-                else:
-                    totp_secret = s_clean
-        except Exception:
-            totp_secret = None
-
-    if _state.has_wa_link and not totp_secret:
-        totp_secret = _state.generate_totp_secret()
-
     async with db_pool.acquire() as conn:
         await conn.execute(query, *values)
-        if _state.has_wa_link:
-            existing = await conn.fetchrow(
-                "SELECT totp_secret FROM profiles WHERE id = $1", p.id
-            )
-            if existing and existing["totp_secret"]:
-                totp_secret = existing["totp_secret"]
-            elif totp_secret:
-                try:
-                    await conn.execute(
-                        "UPDATE profiles SET totp_secret = $2 WHERE id = $1 AND totp_secret IS NULL",
-                        p.id, totp_secret,
-                    )
-                except Exception as _totp_err:
-                    print(f"[TOTP Secret] Falha ao gravar segredo para {p.id}: {_totp_err}")
-    return {"status": "success", "id": p.id, "totpSecret": totp_secret}
+    return {"status": "success", "id": p.id}
 
 
 @router.get("/api/profile/{user_id}")
@@ -323,23 +284,6 @@ async def get_profile(user_id: str, uid: str = Depends(firebase_uid)):
         if not row:
             raise HTTPException(status_code=404, detail="Perfil não encontrado")
         d = dict(row)
-
-        # Migracao tardia do segredo TOTP do vinculo de WhatsApp.
-        # Contas criadas antes da migration 009 (ou que nunca sincronizaram
-        # perfil depois dela) nao tem totp_secret: o app nao consegue montar o
-        # link de vinculo e o botao "Vincular meu WhatsApp" simplesmente nao
-        # faz nada. Nesse momento — o login puxa o perfil — geramos e
-        # persistimos o segredo faltante. Nao regenera quem ja tem.
-        if _state.has_wa_link and not d.get("totp_secret"):
-            try:
-                novo = _state.generate_totp_secret()
-                await conn.execute(
-                    "UPDATE profiles SET totp_secret = $2 WHERE id = $1 AND totp_secret IS NULL",
-                    user_id, novo,
-                )
-                d["totp_secret"] = novo
-            except Exception as _totp_err:
-                print(f"[TOTP Secret] Falha ao gerar segredo faltante para {user_id}: {_totp_err}")
 
         if d.get("birth_date"):
             d["birth_date"] = d["birth_date"].isoformat()
@@ -1189,8 +1133,6 @@ class _AppState:
     db_pool = None
     rate_limiter = None
     dispatch_clinical_alert = None
-    has_wa_link = False
-    generate_totp_secret = None
     log_fine_tuning_sample = None
 
 
@@ -1198,12 +1140,9 @@ _state = _AppState()
 
 
 def configure_state(*, db_pool=None, rate_limiter=None, dispatch_clinical_alert=None,
-                    has_wa_link=False, generate_totp_secret=None,
                     log_fine_tuning_sample=None):
     """Chamado por server.py ao subir a aplicacao."""
     _state.db_pool = db_pool
     _state.rate_limiter = rate_limiter
     _state.dispatch_clinical_alert = dispatch_clinical_alert
-    _state.has_wa_link = has_wa_link
-    _state.generate_totp_secret = generate_totp_secret
     _state.log_fine_tuning_sample = log_fine_tuning_sample

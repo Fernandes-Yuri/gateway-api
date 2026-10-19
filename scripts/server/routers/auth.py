@@ -24,7 +24,7 @@ router = APIRouter()
 class OtpSendRequest(BaseModel):
     identifier: str  # E-mail ou Telefone
     purpose: Optional[str] = "EMAIL_VERIFICATION"  # "EMAIL_VERIFICATION" ou "PASSWORD_RESET"
-    channel: Optional[str] = "EMAIL"  # "EMAIL" ou "WHATSAPP" (WHATSAPP pausado)
+    channel: Optional[str] = "EMAIL"  # Somente e-mail
 
 
 class OtpVerifyRequest(BaseModel):
@@ -53,7 +53,7 @@ class CheckAccountRequest(BaseModel):
 async def send_auth_otp(request: Request, req: OtpSendRequest, background_tasks: BackgroundTasks):
     """
     Gera um codigo OTP de 6 digitos numericos, armazena no PostgreSQL
-    com expiracao de 15 minutos e despacha via WhatsApp ou E-mail.
+    com expiracao de 15 minutos e despacha por e-mail.
     """
     db_pool = _state.db_pool
     if not db_pool:
@@ -66,17 +66,8 @@ async def send_auth_otp(request: Request, req: OtpSendRequest, background_tasks:
     if not identifier:
         raise HTTPException(status_code=400, detail="Identificador não informado")
 
-    if channel not in ("EMAIL", "WHATSAPP"):
-        raise HTTPException(status_code=400, detail="Canal inválido. Utilize 'EMAIL' ou 'WHATSAPP'.")
-
-    # Canal WhatsApp pausado temporariamente (Meta nao aprova template de OTP).
-    # O codigo abaixo esta intacto e pode ser religado com
-    # WHATSAPP_OTP_PAUSED = False (mantido no server por compartilhar a flag).
-    if channel == "WHATSAPP" and _state.whatsapp_otp_paused:
-        raise HTTPException(
-            status_code=503,
-            detail="Canal WhatsApp temporariamente indisponível. Utilize o canal EMAIL."
-        )
+    if channel != "EMAIL":
+        raise HTTPException(status_code=400, detail="Canal inválido. Utilize EMAIL.")
 
     # Impede custos e acesso ao banco antes de gerar/enviar um novo OTP.
     client_ip = get_client_ip(request)
@@ -114,29 +105,6 @@ async def send_auth_otp(request: Request, req: OtpSendRequest, background_tasks:
             """,
             identifier, code, purpose, channel, expires_at
         )
-
-    # Despacho Assincrono via Canal Selecionado
-    if channel == "WHATSAPP":
-        if not _state.has_whatsapp:
-            raise HTTPException(status_code=503, detail="Serviço de WhatsApp não configurado")
-        # Plano B (sem template aprovado): tenta o envio direto (funciona com
-        # janela de 24h aberta); se a Meta recusar, o app abre a conversa.
-        _wa_direct = await _state.send_security_code_whatsapp(identifier, code, purpose)
-        if _wa_direct.get("success"):
-            return {
-                "status": "code_dispatched",
-                "channel": channel,
-                "purpose": purpose,
-                "expiresInSeconds": 900
-            }
-        return {
-            "status": "open_conversation",
-            "channel": channel,
-            "purpose": purpose,
-            "expiresInSeconds": 900,
-            "waLink": _state.build_wa_link(),
-            "detail": "Abra a conversa no WhatsApp e envie a mensagem para receber o código."
-        }
 
     return {
         "status": "code_dispatched",
@@ -463,41 +431,33 @@ class _AppState:
 
     db_pool = None
     rate_limiter = None
-    whatsapp_otp_paused = True
     has_email = False
-    has_whatsapp = False
     has_fcm = False
     firebase_admin = None
     is_email_configured = None
     send_security_code_email = None
-    send_security_code_whatsapp = None
     send_security_alert_email = None
     send_welcome_email = None
-    build_wa_link = None
     verify_recaptcha = None
 
 
 _state = _AppState()
 
 
-def configure_state(*, db_pool=None, rate_limiter=None, whatsapp_otp_paused=True,
-                    has_email=False, has_whatsapp=False, has_fcm=False,
+def configure_state(*, db_pool=None, rate_limiter=None,
+                    has_email=False, has_fcm=False,
                     firebase_admin=None, is_email_configured=None,
-                    send_security_code_email=None, send_security_code_whatsapp=None,
+                    send_security_code_email=None,
                     send_security_alert_email=None, send_welcome_email=None,
-                    build_wa_link=None, verify_recaptcha=None):
+                    verify_recaptcha=None):
     """Chamado por server.py ao subir a aplicacao."""
     _state.db_pool = db_pool
     _state.rate_limiter = rate_limiter
-    _state.whatsapp_otp_paused = whatsapp_otp_paused
     _state.has_email = has_email
-    _state.has_whatsapp = has_whatsapp
     _state.has_fcm = has_fcm
     _state.firebase_admin = firebase_admin
     _state.is_email_configured = is_email_configured
     _state.send_security_code_email = send_security_code_email
-    _state.send_security_code_whatsapp = send_security_code_whatsapp
     _state.send_security_alert_email = send_security_alert_email
     _state.send_welcome_email = send_welcome_email
-    _state.build_wa_link = build_wa_link
     _state.verify_recaptcha = verify_recaptcha
