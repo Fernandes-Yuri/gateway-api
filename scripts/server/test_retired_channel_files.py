@@ -27,6 +27,16 @@ class RetiredFilesTests(unittest.TestCase):
             self.assertFalse(cache.exists())
             self.assertEqual(retired.purge(root), 0)
 
+    def test_completed_retirement_does_not_delete_a_future_channel(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict('os.environ', {}, clear=True):
+            root = Path(temp)
+            retired.purge(root)
+            data = root/'dataset_braga.jsonl'
+            future = '{"source":"whatsapp","purpose":"new service"}\n'
+            data.write_text(future)
+            self.assertEqual(retired.purge(root), 0)
+            self.assertEqual(data.read_text(), future)
+
     def test_invalid_input_keeps_original_and_does_not_report_success(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp)/'trace.jsonl'

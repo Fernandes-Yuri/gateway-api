@@ -43,6 +43,9 @@ def rewrite(path: Path) -> int:
 
 
 def purge(project: Path) -> int:
+    marker = project/'.retired_health_whatsapp_v1'
+    if marker.exists():
+        return 0
     # Estes caminhos eram exclusivos do outbox e dos dois túneis antigos.
     for root in (project, project/'app'):
         for name in ('webhook_outbox.log', '.whatsapp_tunnel_url'):
@@ -67,7 +70,10 @@ def purge(project: Path) -> int:
         if os.getenv(key):
             path = Path(os.environ[key])
             paths.add(path if path.is_absolute() else project/path)
-    return sum(rewrite(path) for path in sorted(paths))
+    removed = sum(rewrite(path) for path in sorted(paths))
+    marker.write_text("Expurgo do atendimento antigo concluído.\n", encoding="utf-8")
+    marker.chmod(0o600)
+    return removed
 
 
 if __name__ == '__main__':
