@@ -4,10 +4,12 @@
 SET LOCAL lock_timeout = '10s';
 
 DELETE FROM confirmation_logs WHERE channel = 'whatsapp';
+-- O produtor antigo inseria CONF-* antes de marcar a origem em outra operação.
+-- Uma falha entre ambas deixava pendência sem origem: também pertence ao canal.
 -- Logs de outros canais podem apontar a uma proposta antiga: preservar o log.
 UPDATE confirmation_logs SET pending_conf_id = NULL
-WHERE pending_conf_id IN (SELECT id FROM pending_confirmations WHERE source_channel = 'whatsapp');
-DELETE FROM pending_confirmations WHERE source_channel = 'whatsapp';
+WHERE pending_conf_id IN (SELECT id FROM pending_confirmations WHERE source_channel = 'whatsapp' OR (source_channel IS NULL AND confirmation_code LIKE 'CONF-%'));
+DELETE FROM pending_confirmations WHERE source_channel = 'whatsapp' OR (source_channel IS NULL AND confirmation_code LIKE 'CONF-%');
 DELETE FROM agent_actions WHERE channel = 'whatsapp';
 -- Propostas de lote são transitórias; tomadas e ocorrências clínicas permanecem.
 DELETE FROM medication_dose_batches WHERE channel = 'whatsapp';

@@ -27,7 +27,7 @@ class RetirementMigrationTests(unittest.IsolatedAsyncioTestCase):
             CREATE TABLE profiles(id text PRIMARY KEY, full_name text,
                 whatsapp_phone text, whatsapp_linked_at timestamptz, totp_secret text);
             CREATE TABLE pending_confirmations(id int PRIMARY KEY, user_id text REFERENCES profiles,
-                source_channel text);
+                source_channel text, confirmation_code text);
             CREATE TABLE confirmation_logs(id int PRIMARY KEY, channel text,
                 pending_conf_id int REFERENCES pending_confirmations);
             CREATE TABLE agent_actions(id int PRIMARY KEY, channel text);
@@ -37,8 +37,8 @@ class RetirementMigrationTests(unittest.IsolatedAsyncioTestCase):
             CREATE TABLE vital_signs(id int PRIMARY KEY, confirmed_via text);
             CREATE TABLE medication_logs(id int PRIMARY KEY, channel text);
             INSERT INTO profiles VALUES ('patient','Teste','synthetic',now(),'synthetic');
-            INSERT INTO pending_confirmations VALUES (1,'patient','whatsapp'),(2,'patient','app');
-            INSERT INTO confirmation_logs VALUES (1,'whatsapp',1),(2,'app',2),(3,'app',1);
+            INSERT INTO pending_confirmations VALUES (1,'patient','whatsapp','CONF-1'),(2,'patient','app','CONF-2'),(3,'patient',NULL,'CONF-orphan'),(4,'patient',NULL,'APP-other');
+            INSERT INTO confirmation_logs VALUES (1,'whatsapp',1),(2,'app',2),(3,'app',1),(4,'app',3);
             INSERT INTO agent_actions VALUES (1,'whatsapp'),(2,'app');
             INSERT INTO medication_dose_batches VALUES (1,'whatsapp'),(2,'app');
             INSERT INTO medication_dose_batch_items VALUES (1,1),(2,2);
@@ -64,8 +64,11 @@ class RetirementMigrationTests(unittest.IsolatedAsyncioTestCase):
         for table in ('pending_confirmations','agent_actions','medication_dose_batches',
                       'medication_dose_batch_items'):
             self.assertEqual(await self.conn.fetchval(f'SELECT id FROM {table}'), 2)
-        self.assertEqual(await self.conn.fetchval('SELECT count(*) FROM confirmation_logs'), 2)
+        self.assertEqual(await self.conn.fetchval('SELECT count(*) FROM confirmation_logs'), 3)
         self.assertIsNone(await self.conn.fetchval('SELECT pending_conf_id FROM confirmation_logs WHERE id=3'))
+        self.assertIsNone(await self.conn.fetchval('SELECT pending_conf_id FROM confirmation_logs WHERE id=4'))
+        pending_ids = await self.conn.fetch('SELECT id FROM pending_confirmations ORDER BY id')
+        self.assertEqual([r['id'] for r in pending_ids], [2, 4])
         columns = await self.conn.fetch('SELECT column_name FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2', self.schema, 'profiles')
         self.assertEqual({r['column_name'] for r in columns}, {'id','full_name'})
         self.assertEqual(await self.conn.fetchval("SELECT count(*) FROM information_schema.tables WHERE table_schema=$1 AND table_name LIKE 'whatsapp_%'", self.schema), 0)
