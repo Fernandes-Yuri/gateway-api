@@ -65,6 +65,7 @@ from routers import sync as sync_router
 # O pipeline completo (webhook, router Fase 4, fast-lane de audio,
 # callback de confirmacao) vive la; este arquivo so registra.
 from routers import whatsapp as whatsapp_router
+from routers import emergency as emergency_router
 # Router administrativo do portal webservice (D-WS1 / D50): leituras e
 # operacoes admin protegidas por token de servico. O portal Next.js no
 # Render consome estes endpoints e deixa de acessar o RDS diretamente.
@@ -909,6 +910,7 @@ whatsapp_router.configure_state(
     send_care_message=None,
 )
 app.include_router(whatsapp_router.router)
+app.include_router(emergency_router.router)
 
 # Registro do router admin do portal (D-WS1). Autenticado por
 # SERVICE_TOKEN (env), escopo reduzido — ver routers/admin.py.
