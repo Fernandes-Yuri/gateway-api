@@ -395,7 +395,7 @@ async def update_medication(
 
 @router.post("/api/medications/{medication_id}/take")
 async def take_medication(medication_id: str, payload: MedicationTakeRequest, uid: str = Depends(firebase_uid)):
-    # Passo 3.1: lógica no serviço compartilhado (endpoint REST + WhatsApp),
+    # Passo 3.1: lógica no serviço compartilhado (endpoints do aplicativo),
     # sem caminho paralelo só-com-log. A transação envolve a tomada inteira.
     from services.medication_take import take_medication as _take
     async with _pool().acquire() as conn:
@@ -997,7 +997,7 @@ async def ingest_ble(payload: BleTelemetryRequest, uid: str = Depends(firebase_u
     return {"status":"recorded","receipt_id":str(receipt['id']),"vital_sign_id":str(vital['id']),"protocol":"GATT"}
 
 
-# Contrato de doses v1, compartilhado com adaptadores WhatsApp.
+# Contrato de doses v1 do aplicativo.
 from schemas.medication_doses import (
     DoseBatchConfirm, DoseBatchPrepare, DoseBatchResponse, DoseError,
     DoseGroupsResponse, DoseScheduleResponse, DoseScheduleUpdate,

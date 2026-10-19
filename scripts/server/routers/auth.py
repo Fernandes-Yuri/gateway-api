@@ -427,7 +427,7 @@ async def check_account_status(request: Request, req: CheckAccountRequest):
 
 class _AppState:
     """Porta das dependencias do monolito (db_pool, rate_limiter, serviços de
-    e-mail/WhatsApp/Firebase). Preenchida por server.py no startup."""
+    e-mail/Firebase). Preenchida por server.py no startup."""
 
     db_pool = None
     rate_limiter = None

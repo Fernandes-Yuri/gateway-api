@@ -1,4 +1,4 @@
-"""Resolução do familiar alvo no WhatsApp (PR4, passo 4.1).
+"""Resolução do familiar alvo no aplicativo (PR4, passo 4.1).
 
 O cuidador escreve "como está a mamãe?" ou "qual a pressão do papai?". O alvo
 nunca é escolhido pelo modelo: a conta alvo vem dos vínculos familiares ATIVOS
@@ -117,7 +117,7 @@ async def resolve_family_target(conn: Any, context: OperationContext,
 
     if not rows:
         return OperationResult.missing_data(
-            "Você ainda não acompanha ninguém pelo WhatsApp. No aplicativo "
+            "Você ainda não acompanha nenhum familiar. No aplicativo "
             "Braga Saúde, convide um familiar em 'Vínculos de cuidado'; "
             "depois eu consigo consultar os dados dele aqui.")
 
@@ -138,7 +138,7 @@ async def resolve_family_target(conn: Any, context: OperationContext,
         if len(rows) == 1:
             result = _choose_between(rows)
             result.message = (
-                f"Você acompanha apenas {first_name(rows[0]['full_name'])} pelo WhatsApp. "
+                f"Você acompanha apenas {first_name(rows[0]['full_name'])} no aplicativo. "
                 "É dessa pessoa que você está falando? Responda com o nome ou com 1. "
                 "Se for outra pessoa, convide-a em 'Vínculos de cuidado' no aplicativo.")
             return result
@@ -214,5 +214,5 @@ async def active_relations_reply(conn: Any, context: OperationContext) -> Operat
         return OperationResult.unavailable("Não consegui consultar seus vínculos agora. Tente novamente em instantes.")
     if not rows:
         return OperationResult.missing_data("Você ainda não acompanha ninguém por aqui. Convide um familiar em 'Vínculos de cuidado' no aplicativo.")
-    return OperationResult.success("Você acompanha pelo WhatsApp:\n" + "\n".join(
+    return OperationResult.success("Você acompanha no aplicativo:\n" + "\n".join(
         "• " + label for label in choice_labels(rows)))

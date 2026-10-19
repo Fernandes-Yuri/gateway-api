@@ -42,9 +42,7 @@ from routers import emergency as emergency_router
 from routers import admin as admin_router
 from routers import care_os as care_os_router
 from routers import catalog as catalog_router
-# Modulos core extraidos (Fase A passo 6): confirmacao de leituras vitais
-# (maquina de pendencias + validacao clinica + botes do WhatsApp) e
-# curadoria do dataset de fine-tuning.
+# Curadoria do dataset de fine-tuning do aplicativo.
 import core.dataset as dataset_module
 from core.dataset import (
     log_fine_tuning_sample,
@@ -591,7 +589,7 @@ install_caregiver_alert_routes(app, lambda: db_pool, load_devices, dispatch_push
 # versão REGREDIDA — 6 padrões contra 7, sem o bloco de TOKENS ESPECIAIS de
 # modelo (<|im_start|>, <|im_end|>, [INST], <<SYS>>), sem as variantes em
 # inglês (forget/bypass/all) e sem a guarda de tipo. Resultado: as rotas que
-# mais usam essa checagem (chat WhatsApp, /v1/chat/completions, Orb) eram as
+# mais usam essa checagem (/v1/chat/completions, Orb) eram as
 # MENOS protegidas — a doc de especificacao do app prometia bloqueio de <|im_start|>
 # que nunca acontecia por aqui. Agora só existe UMA definição, a completa.
 
@@ -626,10 +624,9 @@ from core.prompt import SYSTEM_PROMPT
 # As funcoes clean_text_for_tts e sanitize_pii foram extraidas para la;
 # este arquivo importa ambas de core.text.
 # =============================================================
-# CONFIRMACAO DE LEITURAS VITAIS + DATASET DE FINE-TUNING:
+# DATASET DE FINE-TUNING:
 # ver core/dataset.py.
-# Maquina de pendencias (pending_confirmations), validacao clinica
-# (SBC/SBD), botes do WhatsApp e curadoria do dataset_braga.jsonl.
+# Curadoria do dataset_braga.jsonl.
 # Nao redeclarar aqui.
 # =============================================================
 
@@ -690,7 +687,7 @@ app.include_router(auth_router.router)
 
 # Registro do router de sync (Fase A passo 5): 22 endpoints de sincronizacao
 # PostgreSQL. dispatch_clinical_alert e log_fine_tuning_sample continuam aqui
-# (compartilhados com o WhatsApp); passados por configure_state.
+# passados por configure_state.
 sync_router.configure_state(
     db_pool=None,  # preenchido no startup (init_db)
     rate_limiter=rate_limiter,
@@ -716,8 +713,7 @@ catalog_router.configure_state(db_pool=None)
 app.include_router(catalog_router.router)
 
 # Configuracao dos modulos core extraidos (Fase A passo 6).
-# dispatch_clinical_alert continua definido neste arquivo (compartilhado
-# por sync, confirmacao e WhatsApp); passamos a referencia para baixo.
+# O dataset usa o prompt canônico e o caminho configurado.
 dataset_module.configure_state(
     system_prompt=SYSTEM_PROMPT,
     dataset_path=DATASET_PATH,
@@ -726,5 +722,5 @@ dataset_module.configure_state(
 # Memoria/ORB_CHAT_PROMPT/chat_completions: ver routers/chat.py (Fase A
 # passo 4). As estruturas _REST_* agora vivem la; o endpoint /v1/chat/completions
 # e registrado via chat_router. assistant_memory e log_fine_tuning_sample
-# permanecem aqui (compartilhados com ws_orb e WhatsApp) e sao passados ao
+# permanecem aqui (compartilhados com ws_orb) e sao passados ao
 # router via configure_state.

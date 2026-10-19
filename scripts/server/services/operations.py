@@ -2,13 +2,13 @@
 
 Toda operação (consulta, registro, lembrete, preferência) recebe um contexto de
 execução e devolve um resultado estruturado. O contrato é canônico para o
-WhatsApp e para a API REST: a mesma operação executada do app ou do WhatsApp
+aplicativo e para a API REST: a mesma operação executada em ambos
 tem o mesmo comportamento, mudando apenas o canal.
 
 Contexto:
   actor_id      - quem executa (conta autenticada / vínculo confirmado)
   patient_id    - de quem é o dado (alvo da operação)
-  channel       - "whatsapp" | "app"
+  channel       - canal autenticado do aplicativo
   message_id    - id da mensagem Meta (antiduplicidade, passo 1.4)
   pending_op_id - id da operação pendente que autoriza a gravação
 
@@ -57,7 +57,7 @@ class OperationContext(BaseModel):
 class OperationResult(BaseModel):
     """Resultado estruturado de uma operação de serviço.
 
-    message: texto pronto para o canal (WhatsApp) ou detalhe para a API.
+    message: texto pronto para o aplicativo ou detalhe para a API.
     data: payload estruturado (registro encontrado, opções, etc.).
     pending_op_id: presente em status=confirmation (vínculo com a pendência).
     """
