@@ -14,7 +14,7 @@ Regras de segurança do roteador:
 """
 
 from services.emergency_reply import emergency_reply
-from services.wa_download_links import DOWNLOAD_REPLY
+DOWNLOAD_REPLY = "O Braga Saúde para Android está disponível em https://bragasaude.online/. Lá você encontra o download e as instruções de instalação."
 
 import re
 import time
@@ -409,7 +409,7 @@ def detect_all(raw: str) -> dict:
         return {"kind": "credential_access"}
     if _CODE_REQUEST.search(norm) or _LONG_OUTPUT_REQUEST.search(norm):
         return {"kind": "out_of_scope"}
-    from services.wa_preferences import detect_preference_intent
+    from services.preference_intent import detect_preference_intent
     if detect_preference_intent(raw):
         return {"kind": "preference"}
     from services.care_intent import is_care_request, is_reminder_request
@@ -748,121 +748,3 @@ def dedupe_fala(memory: dict, key: str, fala: str, alternative: str = None) -> s
         fala = alternative or fala + _REPEAT_SUFFIX
     memory[key] = fala
     return fala
-
-
-# ------------------------------------------------------------------
-# Mapeamento WhatsApp (Fase 4) — sem "voz do aplicativo" por lá
-# ------------------------------------------------------------------
-
-_WA_VITALS = {
-    "bp": ("PRESSAO", lambda d: {"sistolica": d["sys"], "diastolica": d["dia"]}),
-    "glucose": ("GLICEMIA", lambda d: {"glicemia": d["valor"]}),
-    "hydration": ("AGUA", lambda d: {"quantidade_ml": d["ml"]}),
-    "hr": ("BATIMENTOS", lambda d: {"batimentos": d["bpm"]}),
-    "spo2": ("OXIGENACAO", lambda d: {"saturacao": d["valor"]}),
-    # Passo 2.4: peso vai para a biometria do app, não para vital_signs.
-    "weight": ("PESO", lambda d: {"peso_kg": d["peso_kg"]}),
-}
-
-
-def whatsapp_next(raw: str, is_registered: bool, model_name: str = None) -> dict:
-    """Decide o WhatsApp antes do LLM.
-
-    Retorna {'type': 'llm'} (segue fluxo atual),
-    {'type': 'text', 'fala': ...} (resposta direta, sem provedor) ou
-    {'type': 'vitals', 'metric': ..., 'values': ..., 'fala': ...}
-    (vai direto aos botões de confirmação, sem provedor).
-    """
-    det = detect_all(raw)
-    kind = det["kind"]
-    if kind in ("empty", "open", "smalltalk",
-                 "greeting_morning", "greeting_afternoon", "greeting_evening",
-                 "greeting", "gratitude"):
-        return {"type": "llm"}
-    if kind == "emergency":
-        return {"type": "text", "fala": emergency_reply(), "acao": "EMERGENCIA"}
-    if kind == "out_of_scope":
-        return {"type": "text", "fala": "Posso ajudar com recursos de saúde e rotina do Braga Saúde. Para programação ou tarefas gerais, use um assistente apropriado."}
-    if kind == "model_identity":
-        suffix = f" Neste canal, o modelo configurado é {model_name}." if model_name else ""
-        return {"type": "text", "fala": "Sou o Braga, assistente virtual do Braga Saúde." + suffix}
-    if kind in _CLARIFICATION_TEXT:
-        return {"type": "text", "fala": _CLARIFICATION_TEXT[kind]}
-    if kind in {"date", "time"}:
-        from services.calendar_reply import calendar_reply
-        return {"type": "text", "fala": calendar_reply(raw, kind)}
-    if kind == "med_plan":
-        return {"type": "text", "fala": "Entendi que você ainda vai tomar o remédio. Siga os horários cadastrados no aplicativo. Depois de tomar, me avise para preparar a confirmação da tomada."}
-    if kind in _WA_VITALS:
-        metric, to_values = _WA_VITALS[kind]
-        values = to_values(det)
-        from core.confirmation import validate_health_data
-        valid, error, values = validate_health_data(metric, values)
-        if not valid:
-            return {"type": "text", "fala": f"Valor inválido: {error}. Confira a medição e envie o valor correto."}
-        if is_registered:
-            if kind == "bp":
-                summary = f"{det['sys']} por {det['dia']}"
-            elif kind == "glucose":
-                summary = f"{det['valor']} de glicemia"
-            elif kind == "hydration":
-                summary = f"{det['ml']} ml de água"
-            elif kind == "hr":
-                summary = f"{det['bpm']} bpm"
-            elif kind == "weight":
-                summary = f"{det['peso_kg']} kg de peso"
-            else:
-                summary = f"{det['valor']}% de saturação"
-            return {"type": "vitals", "metric": metric, "values": values,
-                    "fala": f"[{metric}] {summary} via router."}
-        if kind == "bp":
-            band = classify_bp(det["sys"], det["dia"])
-            fala = (f"Entendi: {det['sys']} por {det['dia']}. De acordo com a Sociedade Brasileira "
-                    f"de Cardiologia, esse valor está {band}. Para acompanhar e gerar seu relatório, "
-                    "vale conhecer o aplicativo Braga Saúde. E qualquer dúvida sobre o valor, fale com seu médico.")
-        elif kind == "glucose":
-            band = classify_glucose(det["valor"])
-            fala = (f"Entendi: {det['valor']} de glicemia. De acordo com a Sociedade Brasileira "
-                    f"de Diabetes, esse valor está {band}. Para acompanhar e gerar seu relatório, "
-                    "vale conhecer o aplicativo Braga Saúde. E qualquer dúvida sobre o valor, fale com seu médico.")
-        elif kind == "hydration":
-            fala = (f"Boa! {det['ml']} ml de água contam. A orientação geral é cerca de 2 litros por dia. "
-                    "Para acompanhar sua hidratação, vale conhecer o aplicativo Braga Saúde.")
-        elif kind == "hr":
-            fala = (f"Entendi: {det['bpm']} batimentos por minuto. Se sentir algo estranho, procure atendimento. "
-                    "Para acompanhar, vale conhecer o aplicativo Braga Saúde.")
-        else:
-            fala = (f"Entendi: {det['valor']} por cento de saturação. Se sentir falta de ar, procure atendimento. "
-                    "Para acompanhar, vale conhecer o aplicativo Braga Saúde.")
-        return {"type": "text", "fala": fala}
-    if kind == "reminder":
-        from services.care_intent import REMINDER_APP_REPLY
-        return {"type": "text", "fala": REMINDER_APP_REPLY}
-    if kind == "exams":
-        return {"type": "text",
-                "fala": "No aplicativo, Organizar exames prepara um PDF para a consulta. A sessão é temporária: salve o PDF fora do app. Os documentos não são enviados ao servidor."}
-    if kind == "meds":
-        return {"type": "text",
-                "fala": "Entendi. Eu não receito nem ajusto remédio, isso é com seu médico. Se quiser ajuda para organizar os horários, me fala quais são."}
-    if kind == "nutrition":
-        if re.search(r"\bbebi\b.*\bcafe\b", normalize(raw)):
-            return {"type": "text", "fala": "Entendi que você bebeu café. Para acompanhar suas refeições e bebidas, use a área de alimentação no aplicativo Braga Saúde."}
-        return {"type": "text",
-                "fala": "Sobre alimentação posso orientar de forma geral, sem inventar nada do que você comeu. Me conta o que foi que eu te explico com carinho."}
-    if kind == "grocery":
-        # WhatsApp não tem executor de lista (contrato B0): orienta, não promete.
-        return {"type": "text",
-                "fala": "Combinado! Você pode anotar os itens na lista de compras do aplicativo, na tela de alimentação."}
-    if kind == "app":
-        return {"type": "text",
-                "fala": DOWNLOAD_REPLY}
-    if kind == "identity":
-        return {"type": "text",
-                "fala": "Eu sou o Braga, seu assistente de saúde e rotina. Acompanho seus sinais, água e refeições e oriento seu autocuidado."}
-    if kind == "bot":
-        return {"type": "text",
-                "fala": "Sou um assistente virtual. Não tenho experiências ou sentimentos próprios, mas posso conversar e ajudar com sua rotina."}
-    if kind in SYMPTOM_KINDS:
-        return {"type": "text", "fala": symptom_fala(kind, raw)}
-    # topic e qualquer kind não tratado → LLM responde naturalmente
-    return {"type": "llm"}

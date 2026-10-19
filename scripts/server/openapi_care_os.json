@@ -2510,10 +2510,7 @@
           },
           "channel": {
             "type": "string",
-            "enum": [
-              "app",
-              "whatsapp"
-            ],
+            "const": "app",
             "title": "Channel"
           }
         },
@@ -2551,10 +2548,7 @@
           },
           "channel": {
             "type": "string",
-            "enum": [
-              "app",
-              "whatsapp"
-            ],
+            "const": "app",
             "title": "Channel"
           },
           "state": {

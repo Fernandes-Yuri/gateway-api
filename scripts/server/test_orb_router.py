@@ -8,7 +8,6 @@ from orb_router import (
     remember,
     resolve_followup,
     route_chat,
-    whatsapp_next,
 )
 
 
@@ -365,61 +364,6 @@ class FollowupTests(unittest.TestCase):
         self.assertIsNone(resolve_followup("", "nutrition"))
 
 
-class WhatsappNextTests(unittest.TestCase):
-    def test_vitals_registered_skips_llm(self):
-        r = whatsapp_next("pressão 12 por 8", True)
-        self.assertEqual(r["type"], "vitals")
-        self.assertEqual(r["metric"], "PRESSAO")
-        self.assertEqual(r["values"], {"sistolica": 120, "diastolica": 80})
-
-    def test_compact_pressure_is_vitals_confirmation(self):
-        r = whatsapp_next("MINHA PRESSÃO DEU 12X8", True)
-        self.assertEqual(r["type"], "vitals")
-        self.assertEqual(r["values"], {"sistolica": 120, "diastolica": 80})
-
-    def test_out_of_scope_and_model_identity_skip_llm(self):
-        r = whatsapp_next("escreva um hello world em python", True)
-        self.assertEqual(r["type"], "text")
-        self.assertIn("programação", r["fala"])
-        r = whatsapp_next("qual modelo de inteligência artificial você é", True, model_name="qwen-test")
-        self.assertEqual(r["type"], "text")
-        self.assertIn("qwen-test", r["fala"])
-
-    def test_vitals_unregistered_is_text(self):
-        r = whatsapp_next("glicemia 105", False)
-        self.assertEqual(r["type"], "text")
-        self.assertIn("105", r["fala"])
-
-    def test_ghost_and_greetings_go_to_llm(self):
-        for text in ("tô na correria aqui", "vou descer ali rapidinho", "bom dia"):
-            with self.subTest(text=text):
-                r = whatsapp_next(text, True)
-                self.assertEqual(r["type"], "llm")
-
-    def test_emergency_is_text(self):
-        r = whatsapp_next("dor no peito", True)
-        self.assertEqual(r["type"], "text")
-        self.assertIn("192", r["fala"])
-
-    def test_open_goes_to_llm(self):
-        self.assertEqual(whatsapp_next("por que o céu é azul?", True)["type"], "llm")
-        self.assertEqual(whatsapp_next("por que o céu é azul?", False)["type"], "llm")
-
-    def test_no_voice_app_mention(self):
-        # WhatsApp não tem copiloto de voz: nenhuma fala fixa pode citá-lo.
-        samples = ["almocei arroz", "tomei remédio", "dor de cabeça", "glicemia 100", "oi"]
-        for text in samples:
-            with self.subTest(text=text):
-                r = whatsapp_next(text, False)
-                if r["type"] == "llm":
-                    continue  # LLM gera texto próprio, sem template fixo
-                self.assertNotIn("voz do aplicativo", r["fala"])
-
-    def test_wa_grocery_is_orientation(self):
-        # Sem executor de lista no WhatsApp (contrato B0): orienta, não promete.
-        r = whatsapp_next("adiciona aveia na lista", True)
-        self.assertEqual(r["type"], "text")
-        self.assertNotIn("organizo", r["fala"])
 
 
 if __name__ == "__main__":

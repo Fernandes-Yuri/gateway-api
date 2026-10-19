@@ -1,4 +1,4 @@
-"""Identificação de medicamento no WhatsApp (PR3, passo 3.2).
+"""Identificação de medicamento no assistente do aplicativo (PR3, passo 3.2).
 
 A partir da fala (nome e/ou horário), consulta o cadastro e as programações
 do paciente (medications.schedule_time / schedule_times) e devolve:

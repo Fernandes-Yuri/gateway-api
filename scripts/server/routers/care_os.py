@@ -395,7 +395,7 @@ async def update_medication(
 
 @router.post("/api/medications/{medication_id}/take")
 async def take_medication(medication_id: str, payload: MedicationTakeRequest, uid: str = Depends(firebase_uid)):
-    # Passo 3.1: lógica no serviço compartilhado (endpoint REST + WhatsApp),
+    # Passo 3.1: lógica no serviço compartilhado (endpoints do aplicativo),
     # sem caminho paralelo só-com-log. A transação envolve a tomada inteira.
     from services.medication_take import take_medication as _take
     async with _pool().acquire() as conn:
@@ -997,7 +997,7 @@ async def ingest_ble(payload: BleTelemetryRequest, uid: str = Depends(firebase_u
     return {"status":"recorded","receipt_id":str(receipt['id']),"vital_sign_id":str(vital['id']),"protocol":"GATT"}
 
 
-# Contrato de doses v1, compartilhado com adaptadores WhatsApp.
+# Contrato de doses v1 do aplicativo.
 from schemas.medication_doses import (
     DoseBatchConfirm, DoseBatchPrepare, DoseBatchResponse, DoseError,
     DoseGroupsResponse, DoseScheduleResponse, DoseScheduleUpdate,
@@ -1112,7 +1112,7 @@ async def medication_dose_capabilities(uid: str = Depends(firebase_uid)):
     return {"medication_batch_contract": 1, "enabled": dose_contract_enabled(),
             "structured_quantities": True, "integer_units_min": 1, "integer_units_max": 20,
             "proposal_ttl_seconds": 300, "offline_result_recovery": True,
-            "grouping": "exact_local_time", "supported_channels": ["app", "whatsapp"]}
+            "grouping": "exact_local_time", "supported_channels": ["app"]}
 
 
 router.include_router(dose_router)

@@ -3,10 +3,8 @@
 
 Verifica:
 - Serviço braga-gateway (FastAPI gateway)
-- Túnel Cloudflare do WhatsApp
 - PostgreSQL
 - Disco e memória
-- WhatsApp API
 - Uptime do sistema
 
 Envia relatório HTML por e-mail para os destinatários configurados.
@@ -70,39 +68,6 @@ def check_service(name: str) -> Dict:
         "status": output,
         "enabled": enabled_out == "enabled",
         "ok": output == "active",
-    }
-
-
-def check_tunnel(name: str) -> Dict:
-    """Verifica status de um túnel Cloudflare e sua URL."""
-    svc = check_service(name)
-    url = ""
-    # AUD-G(B): os caminhos dos arquivos de URL do túnel eram absolutos do
-    # homelab (/home/yurifjs/...) — na EC2 nunca existem, então a URL vinha
-    # sempre vazia e o check de alcançabilidade reportava FALSO negativo.
-    # Agora relativos à dir da app (env-configurável).
-    app_dir = os.environ.get("BRAGA_APP_DIR") or os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__))
-    )
-    url_file_map = {
-        "braga-ngrok": os.path.join(app_dir, ".whatsapp_tunnel_url"),
-        "braga-whatsapp-tunnel": os.path.join(app_dir, ".whatsapp_tunnel_url"),
-    }
-    if name in url_file_map:
-        output, _ = run_cmd(f"cat {url_file_map[name]} 2>/dev/null")
-        if output:
-            url = output
-
-    # Verificar conectividade via curl
-    tunnel_ok = False
-    if url and svc["ok"]:
-        curl_out, curl_ok = run_cmd(f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 {url}/health 2>/dev/null")
-        tunnel_ok = curl_ok and curl_out in ("200", "403", "404")
-
-    return {
-        **svc,
-        "url": url,
-        "tunnel_reachable": tunnel_ok,
     }
 
 
@@ -292,25 +257,6 @@ def check_inodes() -> Dict:
         "name": "Inodes",
         "usage_percent": usage,
         "ok": usage_ok,
-    }
-
-
-def check_whatsapp_api() -> Dict:
-    """Verifica se a API do WhatsApp está acessível."""
-    token = env_vars.get("WHATSAPP_TOKEN", "")
-    phone_id = env_vars.get("WHATSAPP_PHONE_NUMBER_ID", "")
-    if not token or not phone_id:
-        return {"name": "WhatsApp API", "status": "token_nao_configurado", "ok": False}
-
-    output, ok = run_cmd(
-        f"curl -s -o /dev/null -w '%{{http_code}}' "
-        f"-H 'Authorization: Bearer {token}' "
-        f"https://graph.facebook.com/v21.0/{phone_id}/phone_numbers"
-    )
-    return {
-        "name": "WhatsApp API",
-        "status": f"HTTP {output}" if ok else "erro",
-        "ok": ok and output == "200",
     }
 
 
@@ -570,13 +516,11 @@ def main():
     checks.append({"name": "Gateway Local (8080)", **check_local_gateway()})
 
     # Túneis
-    checks.append({"name": "Túnel Ngrok (Estático)", **check_tunnel("braga-ngrok")})
 
     # Banco de dados
     checks.append(check_postgres())
 
     # APIs externas
-    checks.append(check_whatsapp_api())
 
     # Recursos do sistema
     checks.append(check_disk())

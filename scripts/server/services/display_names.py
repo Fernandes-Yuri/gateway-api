@@ -1,4 +1,4 @@
-"""Identificação reduzida nas respostas públicas do WhatsApp."""
+"""Identificação reduzida nas respostas do assistente."""
 from collections import Counter
 
 

@@ -256,7 +256,7 @@ class DosePostgresTests(unittest.IsolatedAsyncioTestCase):
             await self.confirm(batch, wrong)
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                payload.channel = 'whatsapp'
+                payload.expected_schedule_digest = "0"*64
                 with self.assertRaises(HTTPException) as exc:
                     await doses.prepare_batch(conn, actor_id='actor', patient_id='patient', payload=payload)
                 self.assertEqual(exc.exception.detail['code'], 'IDEMPOTENCY_CONFLICT')
@@ -319,7 +319,9 @@ class DosePostgresTests(unittest.IsolatedAsyncioTestCase):
                 group = data['groups'][0]
                 body = {'client_batch_id':str(uuid4()),'group_id':group['group_id'],
                     'expected_schedule_digest':group['schedule_digest'],
-                    'occurrence_ids':[i['occurrence_id'] for i in group['items']], 'channel':'whatsapp'}
+                    'occurrence_ids':[i['occurrence_id'] for i in group['items']], 'channel':'app'}
+                retired = await client.post('/api/family/patients/patient/medication-dose-batches',json={**body, 'channel':'whatsapp'})
+                self.assertEqual(retired.status_code, 422)
                 first = await client.post('/api/family/patients/patient/medication-dose-batches',json=body)
                 self.assertEqual(first.status_code, 201, first.text)
                 second = await client.post('/api/family/patients/patient/medication-dose-batches',json=body)

@@ -62,13 +62,7 @@ def health():
         "security_shield": "ANTI_PROMPT_INJECTION_ACTIVE",
         "notification_hub": {
             "has_scheduler": _state.has_scheduler,
-            "has_fcm": _state.has_fcm,
-            "has_whatsapp": _state.has_whatsapp
-        },
-        "whatsapp": {
-            "configured": _state.has_whatsapp,
-            "otp_paused": _state.whatsapp_otp_paused,
-            "operational": _state.has_whatsapp and not _state.whatsapp_otp_paused
+            "has_fcm": _state.has_fcm
         }
     }
 
@@ -236,8 +230,6 @@ class _AppState:
     has_postgres = False
     has_scheduler = False
     has_fcm = False
-    has_whatsapp = False
-    whatsapp_otp_paused = False
     messaging = None
 
 
@@ -245,12 +237,10 @@ _state = _AppState()
 
 
 def configure_state(*, db_pool=None, has_postgres=False, has_scheduler=False,
-                    has_fcm=False, has_whatsapp=False, whatsapp_otp_paused=False, messaging=None):
+                    has_fcm=False, messaging=None):
     """Chamado por main.py/server.py ao subir a aplicacao."""
     _state.db_pool = db_pool
     _state.has_postgres = has_postgres
     _state.has_scheduler = has_scheduler
     _state.has_fcm = has_fcm
-    _state.has_whatsapp = has_whatsapp
-    _state.whatsapp_otp_paused = whatsapp_otp_paused
     _state.messaging = messaging

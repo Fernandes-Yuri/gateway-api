@@ -15,19 +15,19 @@ ACTION_CATALOG = {
         "closing": "Lista aberta com {items}. Confirma na tela?",
     },
     "REGISTRAR_PRESSAO": {
-        "channels": ("voice", "whatsapp"),
+        "channels": ("voice",),
         "needs_confirmation": True,
         "slots": ("sistolica", "diastolica"),
         "closing": "Pressão {sistolica} por {diastolica} registrada.",
     },
     "REGISTRAR_GLICEMIA": {
-        "channels": ("voice", "whatsapp"),
+        "channels": ("voice",),
         "needs_confirmation": True,
         "slots": ("glicemia",),
         "closing": "Glicemia {glicemia} registrada.",
     },
     "REGISTRAR_AGUA": {
-        "channels": ("voice", "whatsapp"),
+        "channels": ("voice",),
         "needs_confirmation": True,
         "slots": ("quantidade_ml",),
         "closing": "{quantidade_ml} ml registrados.",
@@ -51,7 +51,7 @@ ACTION_CATALOG = {
         "closing": "Exames abertos.",
     },
     "EMERGENCIA": {
-        "channels": ("chat", "voice", "whatsapp"),
+        "channels": ("chat", "voice"),
         "needs_confirmation": False,
         "slots": (),
         "closing": "Acione o SAMU 192. Os links de socorro estão na resposta.",
@@ -63,10 +63,6 @@ SOURCE_CHANNEL = {
     "app_chat": "chat",
     "app_chat_router": "chat",
     "app_chat_followup": "chat",
-    "whatsapp": "whatsapp",
-    "whatsapp_voice": "whatsapp",
-    "whatsapp_router": "whatsapp",
-    "whatsapp_voice_router": "whatsapp",
 }
 
 

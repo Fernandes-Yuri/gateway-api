@@ -14,7 +14,7 @@ import re
 import sys
 import unicodedata
 
-from orb_router import detect_all, resolve_followup, route_chat, whatsapp_next
+from orb_router import detect_all, resolve_followup, route_chat
 from orb_llm import parse_label
 
 FOOD_WORDS = {
@@ -89,19 +89,6 @@ GHOST_CASES = [
 ]
 
 # (texto, registrado?, tipo esperado)
-WA_CASES = [
-    ("pressão 12 por 8", True, "vitals"),
-    ("glicemia 105", True, "vitals"),
-    ("bebi água", True, "vitals"),
-    ("pressão 12 por 8", False, "text"),
-    ("tô na correria aqui", True, "text"),
-    ("vou descer ali rapidinho", False, "text"),
-    ("dor no peito", True, "text"),
-    ("bom dia", True, "text"),
-    ("por que o céu é azul?", True, "llm"),
-]
-
-# (mensagem anterior, kind lembrado, resposta, esperado: ate|grocery|none)
 FOLLOWUP_CASES = [
     ("almocei arroz", "nutrition", "já comi", "ate"),
     ("almocei arroz", "nutrition", "põe na lista", "grocery"),
@@ -161,13 +148,6 @@ def run_offline():
         ok = env is not None and env["acao"] == action and not ghost and not bad_word and nums_ok
         check("anti_fantasma", text, ok,
               f"acao={env['acao'] if env else None} ghost={ghost} bad={bad_word} nums={nums_ok}")
-
-    for text, reg, typ in WA_CASES:
-        r = whatsapp_next(text, reg)
-        ok = r["type"] == typ
-        if ok and typ == "text":
-            ok = "voz do aplicativo" not in r["fala"]
-        check("whatsapp", f"{text} reg={reg}", ok, f"veio {r['type']}")
 
     for prev, kind, reply, want in FOLLOWUP_CASES:
         env = resolve_followup(reply, kind, channel="chat")
