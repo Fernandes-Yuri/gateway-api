@@ -136,6 +136,28 @@ class OrbTests(unittest.TestCase):
             self.assertEqual(''.join(chunks), SPEECH)
             self.assertLess(len(chunks), len(SPEECH) // 2)
 
+    def test_unauthorized_provider_label_cannot_open_reminders(self):
+        self.classify_label = 'LEMBRETES'
+        with self.connect() as ws:
+            req = self.request()
+            req['messages'] = [dict(role='user', content='por que o céu é azul?')]
+            ws.send_json(req)
+            done = self.receive_terminal(ws)[-1]
+            self.assertEqual(done['action'], 'CONVERSA')
+            self.assertNotIn('lembretes', done['fullContent'])
+        self.assertEqual(len(self.payloads), 2)
+
+    def test_unexecuted_claim_never_reaches_chunks_or_done(self):
+        self.body = sse(content='Já avisei seus contatos.')
+        with self.connect() as ws:
+            ws.send_json(self.request())
+            events = self.receive_terminal(ws)
+        self.assertEqual(events[-1]['type'], 'done')
+        exposed = ''.join(e.get('content', '') for e in events if e['type'] == 'chunk')
+        self.assertNotIn('avisei', exposed)
+        self.assertNotIn('avisei', events[-1]['fullContent'])
+        self.assertEqual(json.loads(events[-1]['fullContent'])['fala'], exposed)
+
     def test_concurrent_messages_rejected(self):
         self.hold = True
         with self.connect() as ws:
@@ -203,7 +225,7 @@ class OrbTests(unittest.TestCase):
         self.classify_label = 'LEMBRETES'
         with self.connect() as ws:
             req = self.request()
-            req['messages'] = [dict(role='user', content='por que o céu é azul?')]
+            req['messages'] = [dict(role='user', content='quero abrir meus lembretes')]
             ws.send_json(req)
             done = self.receive_terminal(ws)[-1]
             self.assertEqual(done['type'], 'done')

@@ -14,6 +14,8 @@ Regras de segurança do roteador:
 """
 
 from services.emergency_reply import emergency_reply
+from orb_semantics import (is_current_emergency, beverage_mentions, beverage_reply,
+                           validate_envelope, EDUCATIONAL, HYPOTHETICAL)
 DOWNLOAD_REPLY = "O Braga Saúde para Android está disponível em https://bragasaude.online/. Lá você encontra o download e as instruções de instalação."
 
 import re
@@ -267,10 +269,7 @@ def _to_int(num: str):
 
 
 def detect_emergency(norm: str) -> bool:
-    # O número sozinho pode ser uma medição (glicemia 192).
-    return any(w in norm for w in _EMERGENCY_WORDS) or bool(
-        re.search(r"\b192\b", norm) and
-        re.search(r"\b(lig\w*|dis[cq]\w*|socorro|emergencia|ambulancia)\b", norm))
+    return is_current_emergency(norm)
 
 
 def detect_bp(norm: str):
@@ -325,6 +324,15 @@ def detect_spo2(norm: str):
 
 
 def detect_hydration(norm: str):
+    if EDUCATIONAL.search(norm) or HYPOTHETICAL.search(norm) or "?" in norm or re.search(
+            r"\b(nao|nunca|jamais|sem|quanto|quantos|como|posso|devo)\b", norm):
+        return None
+    mentions = beverage_mentions(norm)
+    if mentions and (len(mentions) != 1 or mentions[0]["beverage"] != "agua"
+                     or mentions[0]["modality"] not in ("report", "request")):
+        return None
+    if not re.search(r"\b(agua|h2o)\b", norm):
+        return None
     if not any(w in norm for w in _HYDR_WORDS):
         return None
     # Copos de café/suco não são um relato de água. Não inferir volume
@@ -437,7 +445,10 @@ def detect_all(raw: str) -> dict:
                 detect_weight(norm)) if value is not None]
     if len(readings) > 1:
         return {"kind": "multiple_vitals"}
-    if re.search(r"\b(bebi|tomei|ingeri)\b.*\b(agua|h2o)\b", norm) and detect_hydration(norm) is None:
+    if (re.search(r"\b(bebi|tomei|ingeri)\b.*\b(agua|h2o)\b", norm)
+            and not re.search(r"\b(nao|nunca|jamais|sem)\b", norm)
+            and not EDUCATIONAL.search(norm) and not HYPOTHETICAL.search(norm)
+            and detect_hydration(norm) is None):
         return {"kind": "hydration_missing"}
     if re.search(r"\b(apagar|excluir|eliminar)\b.*\b(dados|conta)\b", norm):
         return {"kind": "delete_account"}
@@ -562,7 +573,13 @@ def symptom_repeat(memory: dict, key: str, kind: str, ttl: int = 600, now: float
     return n
 
 
-def route_chat(raw: str, model_name: str = None):
+def route_chat(raw: str, model_name: str = None, *, nlu_context=None):
+    """Mantém o contrato atual e valida ações antes de responder."""
+    routed = _route_chat(raw, model_name=model_name)
+    return validate_envelope(raw, routed, nlu_context) if routed else None
+
+
+def _route_chat(raw: str, model_name: str = None):
     """Roteia a mensagem do chat.
 
     Retorna dict {fala, acao, parametros} pronto para o cliente,
@@ -570,6 +587,11 @@ def route_chat(raw: str, model_name: str = None):
     Saudações, agradecimentos e conversas cotidianas passam para o LLM
     para manter um diálogo caloroso, humano e espontâneo.
     """
+    if detect_emergency(normalize(raw)):
+        return {"fala": emergency_reply(), "acao": "EMERGENCIA", "parametros": {}}
+    meaning_reply = beverage_reply(raw)
+    if meaning_reply:
+        return _conversa(meaning_reply)
     norm = normalize(raw)
     if re.search(r"\b(registr\w*|anot\w*|adicion\w*|coloc\w*)\b", norm) and re.search(
             r"\b(refeicao|refeicoes|alimentacao|almoco|jantar|lanche)\b", norm):
@@ -626,9 +648,9 @@ def route_chat(raw: str, model_name: str = None):
             "e se preferir é só chamar o assistente de voz para registrar com facilidade."
         )
     if kind == "reminder":
-        return {"fala": "Abrindo seus lembretes de remédios.", "acao": "LEMBRETES", "parametros": {}}
+        return {"fala": "Toque em confirmar para abrir seus lembretes de remédios.", "acao": "LEMBRETES", "parametros": {}}
     if kind == "exams":
-        return {"fala": "Abrindo o organizador local de exames.", "acao": "EXAMES", "parametros": {}}
+        return {"fala": "Toque em confirmar para abrir o organizador local de exames.", "acao": "EXAMES", "parametros": {}}
     if kind == "meds":
         return _conversa(
             "Entendi. Eu não receito nem ajusto remédio, isso é com seu médico. "
@@ -644,7 +666,7 @@ def route_chat(raw: str, model_name: str = None):
             shown = ", ".join(items)
             return {"fala": f"Preparei sua lista com {shown}. Toque em confirmar para abrir.",
                     "acao": "ABRIR_LISTA_COMPRAS", "parametros": {"items": items}}
-        return {"fala": "Abri sua lista de compras. Toque em confirmar.",
+        return {"fala": "Toque em confirmar para abrir sua lista de compras.",
                 "acao": "ABRIR_LISTA_COMPRAS", "parametros": {"items": []}}
     if kind == "app":
         return _conversa(
