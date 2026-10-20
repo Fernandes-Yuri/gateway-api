@@ -68,7 +68,7 @@ class SemanticTests(unittest.TestCase):
             self.assertTrue(response is None or 'Boa!' not in response['fala'])
 
     def test_conversation_cannot_claim_unexecuted_actions(self):
-        for fala in ('Já abri as opções de socorro.', 'Salvei 500 ml de água.', 'Entendi, já avisei seus contatos.'):
+        for fala in ('Já abri as opções de socorro.', 'Salvei 500 ml de água.', 'Entendi, já avisei seus contatos.', 'Eu já salvei a medida.'):
             response = validate_envelope('o que significa dor no peito?', {'fala': fala, 'acao': 'CONVERSA', 'parametros': {}})
             self.assertNotEqual(response['fala'], fala)
             self.assertEqual(response['acao'], 'CONVERSA')
@@ -101,3 +101,7 @@ class SemanticTests(unittest.TestCase):
         for raw in ('não consumi 500 ml de água', 'se eu registrar 500 ml de água?', 'bebi 500 ml de água?'):
             reply = route_chat(raw)
             self.assertTrue(reply is None or 'Boa!' not in reply['fala'])
+
+    def test_dial_request_remains_an_emergency_action(self):
+        for raw in ('disque 192', 'disca 192', 'ligue para o SAMU'):
+            self.assertEqual(route_chat(raw)['acao'], 'EMERGENCIA', raw)

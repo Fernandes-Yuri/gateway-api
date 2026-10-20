@@ -17,7 +17,7 @@ CURRENT = re.compile(r"\b(?:estou|tenho|sinto|sentindo|agora|socorro|nao (?:cons
 PAST = re.compile(r"\b(?:ontem|anteontem|semana passada|mes passado|ano passado|ja tive|ja teve|tive|teve|sentia|senti|sentiu|ha \d+ (?:dias|meses|anos))\b")
 RECURRENCE = re.compile(r"\b(?:voltou|voltaram|de novo|outra vez|novamente|piorou|piorando|continua|ainda)\b")
 EMERGENCY = re.compile(r"\b(?:socorro|dor (?:forte |insuportavel )?no peito|aperto (?:insuportavel )?no peito|suor frio|falta de ar(?: repentina)?|nao (?:consigo|consegue) respirar?|desmai\w*|boca (?:ta |esta )?torta|vomitando sangue|infarto|avc|derrame|convuls\w*|perdi a forca|dormencia|formigamento|ajuda rapido|passando muito mal|tontura (?:muito )?forte|visao escureceu|puxa pro braco|queimacao forte no meio do peito|nao (?:consigo|consegue) (?:me |se )?levantar|bati a cabeca|ta sangrando|esta sangrando|levei um tombo|levou um tombo|escorreguei|cai(?:u)?(?: aqui| no chao)?)\b")
-HELP_REQUEST = re.compile(r"\b(?:lig\w*|cham\w*|acion\w*|abr\w*)\b.{0,30}\b(?:samu|192|socorro|emergencia)\b")
+HELP_REQUEST = re.compile(r"\b(?:lig\w*|dis[cq]\w*|cham\w*|acion\w*|abr\w*)\b.{0,30}\b(?:samu|192|socorro|emergencia)\b")
 DRINK = re.compile(r"\b(?:agua|h2o|suco|cha|cafe|leite|refrigerante|cerveja|vinho|bebida)\b")
 INGESTION = re.compile(r"\b(?:bebi|bebeu|tomei|tomou|ingeri|consumi|consumiu|bebendo|tomando|anot\w*|registr\w*|adicion\w*)\b")
 QUANTITY = re.compile(r"(\d+(?:[.,]\d+)?)\s*(mililitros?|ml|litros?|l|copos?|garrafinhas?|garrafas?|xicaras?|canecas?)\b")
@@ -135,7 +135,7 @@ def validated_label(raw, label, context=None):
 
 def execution_claim(fala):
     # Verbos de execução concluída exigem recibo do executor, inexistente nesta etapa.
-    return bool(re.search(r"(?:^|[.!?,])\s*(?:ja\s+)?(?:eu\s+)?(?:abri|salvei|registrei|anotei|avisei|enviei|agendei|deixei as opcoes)\b", normalize(fala)))
+    return bool(re.search(r"(?:^|[.!?,])\s*(?:eu\s+)?(?:ja\s+)?(?:eu\s+)?(?:abri|salvei|registrei|anotei|avisei|enviei|agendei|deixei as opcoes)\b", normalize(fala)))
 
 
 def validate_envelope(raw, envelope, context=None):
