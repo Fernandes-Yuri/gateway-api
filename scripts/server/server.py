@@ -724,3 +724,7 @@ dataset_module.configure_state(
 # e registrado via chat_router. assistant_memory e log_fine_tuning_sample
 # permanecem aqui (compartilhados com ws_orb) e sao passados ao
 # router via configure_state.
+
+# CMS editorial: usa o pool e a identidade administrativa já configurados.
+from routers import editorial as editorial_router
+app.include_router(editorial_router.router)
