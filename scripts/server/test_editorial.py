@@ -39,6 +39,7 @@ class EditorialTest(unittest.TestCase):
             p.start()
         app = FastAPI()
         app.include_router(editorial.router)
+        app.add_middleware(editorial.PublicEditorialCORS)
         self.client = TestClient(app)
         self.id = uuid4()
         now = datetime.now(timezone.utc)
@@ -110,3 +111,38 @@ class EditorialTest(unittest.TestCase):
         for changes in [{'cover_url': 'javascript:alert(1)'}, {'category': 'inexistente'}, {'owner_email': 'other@example.test'}, {'slug': '../../private'}]:
             with self.assertRaises(ValidationError):
                 editorial.Article.model_validate({**article(), **changes})
+
+
+class PublicDeliveryTest(unittest.TestCase):
+    setUp = EditorialTest.setUp
+    tearDown = EditorialTest.tearDown
+    def test_public_cors_does_not_open_admin_routes(self):
+        origin = {'Origin': 'https://clinicas.bragasaude.online'}
+        self.conn.fetchval.return_value = 0
+        self.conn.fetch.return_value = []
+        response = self.client.get('/api/editorial/articles', headers=origin)
+        self.assertEqual(response.headers['access-control-allow-origin'], '*')
+        self.assertNotIn('access-control-allow-credentials', response.headers)
+        denied = self.client.get('/api/admin/editorial/session', headers=origin)
+        self.assertEqual(denied.status_code, 401)
+        self.assertNotIn('access-control-allow-origin', denied.headers)
+        preflight = self.client.options('/api/editorial/articles', headers={**origin, 'Access-Control-Request-Method': 'GET'})
+        self.assertEqual(preflight.status_code, 204)
+        self.assertNotIn('Authorization', preflight.headers.get('access-control-allow-headers', ''))
+
+    def test_sitemap_contains_frontend_urls_without_drafts(self):
+        self.conn.fetchval.return_value = 1
+        self.conn.fetch.return_value = [{'slug': 'informacao-saude-mental', 'modified': datetime(2026, 10, 20, tzinfo=timezone.utc)}]
+        response = self.client.get('/api/editorial/sitemap.xml')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('https://clinicas.bragasaude.online/noticias/informacao-saude-mental', response.text)
+        self.assertIn('<lastmod>2026-10-20T00:00:00+00:00</lastmod>', response.text)
+        self.assertNotIn('writer@example.test', response.text)
+        self.assertIn("state='published'", self.conn.fetch.call_args.args[0])
+
+    def test_sitemap_index_paginates_and_unknown_page_is_404(self):
+        self.conn.fetchval.return_value = 10001
+        response = self.client.get('/api/editorial/sitemap.xml')
+        self.assertIn('<sitemapindex', response.text)
+        self.assertIn('sitemap.xml?page=2', response.text)
+        self.assertEqual(self.client.get('/api/editorial/sitemap.xml?page=3').status_code, 404)

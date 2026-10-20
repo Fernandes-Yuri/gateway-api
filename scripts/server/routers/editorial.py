@@ -3,6 +3,7 @@ import base64
 import binascii
 import json
 import re
+from html import escape
 from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -305,3 +306,62 @@ async def public_media(media_id: UUID):
         raise HTTPException(404, 'Imagem não encontrada.')
     return Response(content=row['data'], media_type=row['content_type'],
                     headers={'Cache-Control': 'public, max-age=0, s-maxage=60', 'X-Content-Type-Options': 'nosniff'})
+
+
+PUBLIC_SITE = 'https://clinicas.bragasaude.online'
+SITEMAP_PAGE_SIZE = 10000
+STATIC_PATHS = ['', '/sobre', '/privacidade', '/termos', '/cookies', '/noticias', '/noticias/politica-editorial']
+
+
+def xml_url(path, modified=None):
+    lastmod = f'<lastmod>{escape(modified.isoformat())}</lastmod>' if modified else ''
+    return f'<url><loc>{PUBLIC_SITE}{escape(path)}</loc>{lastmod}</url>'
+
+
+@router.get('/api/editorial/sitemap.xml')
+async def sitemap(page: int | None = Query(None, ge=1, le=100000)):
+    """URLs do frontend, apenas de versões publicadas, com índice ao crescer."""
+    async with admin._require_pool().acquire() as conn:
+        total = await conn.fetchval("SELECT COUNT(*) FROM editorial_articles WHERE state='published' AND published IS NOT NULL")
+        pages = max(1, (total + SITEMAP_PAGE_SIZE - 1) // SITEMAP_PAGE_SIZE)
+        if page is None and pages > 1:
+            urls = ''.join(f'<sitemap><loc>https://api.bragasaude.online/api/editorial/sitemap.xml?page={i}</loc></sitemap>'
+                           for i in range(1, pages + 1))
+            root = f'<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</sitemapindex>'
+        else:
+            selected = page or 1
+            if selected > pages:
+                raise HTTPException(404, 'Página de sitemap não encontrada.')
+            rows = await conn.fetch("""SELECT slug,COALESCE((SELECT MAX(e.created_at) FROM editorial_events e
+                WHERE e.article_id=editorial_articles.id AND e.action='publish'),published_at) AS modified
+                FROM editorial_articles WHERE state='published' AND published IS NOT NULL
+                ORDER BY published_at DESC,id LIMIT $1 OFFSET $2""", SITEMAP_PAGE_SIZE, (selected - 1) * SITEMAP_PAGE_SIZE)
+            urls = ''.join(xml_url(path) for path in STATIC_PATHS) if selected == 1 else ''
+            urls += ''.join(xml_url('/noticias/' + row['slug'], row['modified']) for row in rows)
+            root = f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>'
+    return Response('<?xml version="1.0" encoding="UTF-8"?>' + root, media_type='application/xml',
+                    headers={'Cache-Control': 'public, max-age=0, s-maxage=60'})
+
+
+class PublicEditorialCORS:
+    """Somente leitura pública, sem cookies e sem ampliar CORS administrativo."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http' or not scope.get('path', '').startswith('/api/editorial/'):
+            return await self.app(scope, receive, send)
+        if scope['method'] == 'OPTIONS':
+            response = Response(status_code=204, headers={
+                'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+                'Access-Control-Allow-Headers': 'Accept', 'Access-Control-Max-Age': '86400'})
+            return await response(scope, receive, send)
+
+        async def public_send(message):
+            if message['type'] == 'http.response.start':
+                headers = [(k, v) for k, v in message.get('headers', [])
+                           if k.lower() not in (b'access-control-allow-origin', b'access-control-allow-credentials')]
+                headers.extend([(b'access-control-allow-origin', b'*'), (b'x-content-type-options', b'nosniff')])
+                message = {**message, 'headers': headers}
+            await send(message)
+        return await self.app(scope, receive, public_send)
