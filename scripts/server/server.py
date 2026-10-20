@@ -728,3 +728,6 @@ dataset_module.configure_state(
 # CMS editorial: usa o pool e a identidade administrativa já configurados.
 from routers import editorial as editorial_router
 app.include_router(editorial_router.router)
+
+# Leitura pública do site estático, sem liberar a superfície administrativa.
+app.add_middleware(editorial_router.PublicEditorialCORS)

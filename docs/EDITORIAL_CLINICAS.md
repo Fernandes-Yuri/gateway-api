@@ -18,9 +18,15 @@ Capa pode ser URL HTTPS ou arquivo PNG/JPEG/WebP até 2 MB. Arquivos ficam em `e
 
 ## SEO e entrega
 
-O Firebase Hosting das clínicas reescreve `/noticias`, `/noticias/**` e `/sitemap.xml` para a função de apresentação `clinicasEditorial`. Ela consome a API pública com timeout, sem credenciais e sem acesso ao banco, e produz HTML completo com canonical, autoria, datas, fontes, Open Graph e Article/NewsArticle. Negócio permanece na gateway. Cache público dura até 60s; falha de origem retorna 503/noindex, artigo inexistente retorna 404/noindex. Política editorial é uma página própria.
+O Firebase Hosting serve apenas HTML/CSS/JS estáticos. `/noticias` e `/noticias/{slug}` usam templates do site e leem a API pública da gateway pelo navegador. Não existem funções ou containers no Firebase. As regras de publicação e autorização continuam exclusivamente no gateway; a API pública não permite escrita.
 
-Ordem de rollout: gateway/migration, portal, função de apresentação, Hosting. Verificar que a borda/WAF permite GET anônimo dos caminhos públicos editoriais, inclusive a partir do runtime Firebase. Não expor rotas administrativas nem usar bypass administrativo no renderer público.
+`PublicEditorialCORS` habilita leitura GET/HEAD pública sem cookies no namespace `/api/editorial/`; não altera o CORS administrativo. A API continua retornando 404 real para artigo ausente e 503 para banco indisponível. O frontend usa redirecionamento para uma URL sem rota para entregar o 404 do Hosting quando o artigo não existe.
+
+O sitemap é gerado na gateway em `/api/editorial/sitemap.xml`, somente com URLs canônicas do domínio das clínicas e datas da última publicação. Divide em índice e páginas de 10 mil artigos ao crescer. `robots.txt` das clínicas referencia esse sitemap externo, e `/sitemap.xml` do site redireciona para ele. Isso segue a submissão de sitemap entre domínios documentada pelo Google.
+
+Nesta arquitetura o conteúdo e os metadados dos artigos são preenchidos por JavaScript. O Google pode processar esse conteúdo, mas robôs sem JavaScript recebem a capa/metadados genéricos do template. Não há promessa de SSR ou de miniatura individual nesses robôs. Para HTML inicial personalizado seria necessário adicionar publicação de páginas estáticas ou roteamento de borda na infraestrutura existente, sem envolver funções do Firebase.
+
+Ordem de rollout: gateway com CORS/sitemap, depois arquivos estáticos do Hosting. Não exige plano Blaze, novos serviços ou novas credenciais. Validar a API pública no navegador e usar inspeção de URL no Search Console após publicar o primeiro artigo real.
 
 ## Verificações
 
