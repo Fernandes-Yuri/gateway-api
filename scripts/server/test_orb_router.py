@@ -69,7 +69,7 @@ class RouterTests(unittest.TestCase):
         self.assertIn("500", r["fala"])
 
     def test_water_ml(self):
-        self.assertEcho("bebi 500 ml", 500)
+        self.assertEcho("bebi 500 ml de água", 500)
 
     def test_water_bare(self):
         r = self.assertAction("bebi água", "CONVERSA")
