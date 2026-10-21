@@ -82,9 +82,9 @@ async def refresh_session(pool,request,client_ip):
 
 async def logout(pool,uid):
     async with pool.acquire() as conn,conn.transaction():
+        await conn.execute('UPDATE whatsapp_intake_operators SET enabled=FALSE WHERE uid=$1',uid)
         await conn.execute('DELETE FROM whatsapp_intake_sessions WHERE uid=$1',uid)
         await conn.execute('DELETE FROM whatsapp_intake_devices WHERE uid=$1',uid)
-        await conn.execute('UPDATE whatsapp_intake_operators SET enabled=FALSE WHERE uid=$1',uid)
     # Não manter lock do operador enquanto adquire locks de conversa.
     from services import wa_intake_store as store
     async with pool.acquire() as conn:

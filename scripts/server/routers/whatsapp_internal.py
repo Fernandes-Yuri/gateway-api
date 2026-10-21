@@ -44,12 +44,14 @@ async def operator(request: Request):
 
 
 @router.post('/auth/enroll',response_model=SessionResponse,status_code=201)
-async def enroll(request: Request,body: EnrollmentRequest):
+async def enroll(request: Request,body: EnrollmentRequest,response: Response):
+    response.headers['Cache-Control']='no-store'
     return await sessions.enroll(pool(),body,get_client_ip(request))
 
 
 @router.post('/auth/refresh',response_model=SessionResponse)
-async def refresh(request: Request,body: RefreshRequest):
+async def refresh(request: Request,body: RefreshRequest,response: Response):
+    response.headers['Cache-Control']='no-store'
     return await sessions.refresh_session(pool(),body,get_client_ip(request))
 
 
