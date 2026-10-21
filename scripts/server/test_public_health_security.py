@@ -54,4 +54,6 @@ class PublicHealthSecurityTests(unittest.TestCase):
     def test_html_help_keeps_its_content_policy(self):
         response = self.client.get('/socorro')
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn("default-src 'none'", response.headers.get('content-security-policy', ''))
+        self.assertIn('text/html', response.headers['content-type'])
+        self.assertIn("style-src 'unsafe-inline'", response.headers['content-security-policy'])
+        self.assertIn("form-action 'none'", response.headers['content-security-policy'])
