@@ -28,8 +28,7 @@ class ChannelRetirementTests(unittest.TestCase):
         self.assertEqual(client.get('/socorro').status_code, 200)
         response = client.get('/health')
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn('whatsapp', response.json())
-        self.assertNotIn('has_whatsapp', response.json()['notification_hub'])
+        self.assertEqual(response.json(), {'status': 'online'})
 
     def test_legacy_otp_channel_is_rejected_before_delivery_or_persistence(self):
         pool = MagicMock()

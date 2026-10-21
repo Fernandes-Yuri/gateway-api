@@ -744,3 +744,7 @@ app.include_router(editorial_router.router)
 
 # Leitura pública do site estático, sem liberar a superfície administrativa.
 app.add_middleware(editorial_router.PublicEditorialCORS)
+
+# Última camada registrada: inclui respostas antecipadas de CORS e firewall.
+from response_security import ResponseSecurityHeaders
+app.add_middleware(ResponseSecurityHeaders)

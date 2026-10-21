@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from api_identity import firebase_uid, require_owner
-from config import DATASET_PATH, MODEL_ID
+from config import DATASET_PATH
 from core.devices import (
     load_devices,
     save_devices,
@@ -51,20 +51,9 @@ class EmergencyTriggerRequest(BaseModel):
 
 @router.get("/health")
 def health():
-    return {
-        "profile_contract": 1,
-        "status": "online",
-        "mode": "groq_qwen_gateway_with_neural_tts_and_postgresql",
-        "ai_provider": "groq_cloud",
-        "model": MODEL_ID,
-        "database": "postgresql_16_alpine" if _state.has_postgres and _state.db_pool else "pending_connect",
-        "clinical_guardrails": "SBC_SBD_OMS_MS_ENFORCED",
-        "security_shield": "ANTI_PROMPT_INJECTION_ACTIVE",
-        "notification_hub": {
-            "has_scheduler": _state.has_scheduler,
-            "has_fcm": _state.has_fcm
-        }
-    }
+    # Sonda pública de liveness; não representa prontidão do banco ou dos
+    # provedores. Preserva o status consumido pelo deploy e monitoramento.
+    return {"status": "online"}
 
 
 @router.get("/dataset/stats")
