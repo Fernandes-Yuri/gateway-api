@@ -4,13 +4,16 @@ import re
 import unicodedata
 from datetime import datetime, timezone
 
-TERMS_VERSION = '2026-09'
-PRIVACY_VERSION = '2026-09'
+TERMS_VERSION = '2026-10-23h59'
+PRIVACY_VERSION = '2026-10-23h59'
 CONSENT_TEXT = (
     'Oi! Sou o Yuri, assistente virtual do atendimento da Braga Saúde. '
     'Antes de conversarmos sobre seu atendimento, leia os Termos de Uso '
     '(https://bragasaude.online/termos.html) e a Política de Privacidade '
     '(https://bragasaude.online/privacidade.html). '
+    'O histórico ativo e seus anexos ficam disponíveis por até 23h59 desde a abertura, '
+    'sem prorrogação por novas mensagens. Depois, o acesso é bloqueado e o histórico entra em expurgo automático. '
+    'Backups seguem ciclo próprio e as mensagens no seu WhatsApp não são apagadas por esse expurgo. '
     'Se estiver de acordo, responda “Li e aceito”. Sem o aceite, não faço a coleta por aqui.')
 
 

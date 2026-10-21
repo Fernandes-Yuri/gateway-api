@@ -15,8 +15,10 @@ from schemas.whatsapp_intake import (EnrollmentRequest, RefreshRequest, SessionR
                                      QueuedMessage, SeenRequest, TextRequest)
 from services import wa_intake_store as store
 from services import wa_intake_transport as transport
+from services.wa_intake_retention import ACTIVE_SQL
 
 router = APIRouter(prefix='/api/internal/whatsapp', tags=['whatsapp-internal-v1'])
+
 
 
 class State:
@@ -80,7 +82,7 @@ async def conversations(limit: int = Query(30, ge=1, le=100), offset: int = Quer
             "FROM whatsapp_intake_handoffs WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) handoff,"
             "(SELECT count(*) FROM whatsapp_intake_messages m WHERE m.conversation_id=c.id AND m.origin='contact' "
             "AND m.id>COALESCE((SELECT message_id FROM whatsapp_intake_reads WHERE conversation_id=c.id AND uid=$4),0)) unread_count "
-            "FROM whatsapp_intake_conversations c WHERE ($1::text IS NULL OR mode=$1) ORDER BY updated_at DESC,id DESC LIMIT $2 OFFSET $3",
+            f"FROM whatsapp_intake_conversations c WHERE c.{ACTIVE_SQL} AND ($1::text IS NULL OR mode=$1) ORDER BY updated_at DESC,id DESC LIMIT $2 OFFSET $3",
             mode, limit + 1, offset, uid)
         cursor = await conn.fetchval('SELECT COALESCE(max(id),0) FROM whatsapp_intake_events')
     items = [{**store.public_conversation(r), 'unread_count': r['unread_count']} for r in rows[:limit]]
@@ -90,7 +92,7 @@ async def conversations(limit: int = Query(30, ge=1, le=100), offset: int = Quer
 @router.get('/conversations/{conversation_id}', response_model=Conversation)
 async def conversation(conversation_id: UUID, uid=Depends(operator)):
     async with pool().acquire() as conn:
-        row = await conn.fetchrow("SELECT c.*,(SELECT jsonb_build_object('id',id,'status',status,'reason',reason,'epoch',epoch,'attempts',attempts) FROM whatsapp_intake_handoffs WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) handoff FROM whatsapp_intake_conversations c WHERE id=$1", conversation_id)
+        row = await conn.fetchrow(f"SELECT c.*,(SELECT jsonb_build_object('id',id,'status',status,'reason',reason,'epoch',epoch,'attempts',attempts) FROM whatsapp_intake_handoffs WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) handoff FROM whatsapp_intake_conversations c WHERE id=$1 AND c.{ACTIVE_SQL}", conversation_id)
     if not row:
         raise HTTPException(404, 'Atendimento não encontrado.')
     return store.public_conversation(row)
@@ -99,7 +101,7 @@ async def conversation(conversation_id: UUID, uid=Depends(operator)):
 @router.get('/conversations/{conversation_id}/messages', response_model=MessagePage)
 async def messages(conversation_id: UUID, cursor: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100), uid=Depends(operator)):
     async with pool().acquire() as conn:
-        if not await conn.fetchval('SELECT EXISTS(SELECT 1 FROM whatsapp_intake_conversations WHERE id=$1)', conversation_id):
+        if not await conn.fetchval(f'SELECT EXISTS(SELECT 1 FROM whatsapp_intake_conversations WHERE id=$1 AND {ACTIVE_SQL})', conversation_id):
             raise HTTPException(404, 'Atendimento não encontrado.')
         rows = await conn.fetch(
             'SELECT m.*,a.id media_id,a.status media_status,a.mime_type media_mime_type FROM whatsapp_intake_messages m '
@@ -151,7 +153,10 @@ async def send_audio(conversation_id: UUID, epoch: int = Form(ge=0), idempotency
 @router.get('/media/{media_id}')
 async def media(media_id: UUID, request: Request, uid=Depends(operator)):
     async with pool().acquire() as conn:
-        row = await conn.fetchrow('SELECT content,mime_type,status FROM whatsapp_intake_media WHERE id=$1', media_id)
+        row = await conn.fetchrow(f'SELECT a.content,a.mime_type,a.status FROM whatsapp_intake_media a '
+                                  f'JOIN whatsapp_intake_messages m ON m.id=a.message_id '
+                                  f'JOIN whatsapp_intake_conversations c ON c.id=m.conversation_id '
+                                  f'WHERE a.id=$1 AND c.{ACTIVE_SQL}', media_id)
     if not row:
         raise HTTPException(404, 'Anexo não encontrado.')
     if row['status'] != 'ready':

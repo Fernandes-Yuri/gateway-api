@@ -325,6 +325,47 @@ class IntakePostgres(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await conn.fetchval('SELECT mode FROM whatsapp_intake_conversations'),'waiting_human')
             self.assertEqual(await conn.fetchval('SELECT reason FROM whatsapp_intake_handoffs'),'worker_failed')
 
+    async def test_absolute_expiry_blocks_reads_commands_and_cascades_media(self):
+        await self.setup_intake()
+        row = await self.ingest('conteúdo sintético')
+        media_id = uuid.uuid4()
+        async with self.pool.acquire() as conn:
+            mid = await conn.fetchval("INSERT INTO whatsapp_intake_messages(conversation_id,origin,kind,body,epoch) VALUES($1,'contact','image','sintético',0) RETURNING id", row['id'])
+            await conn.execute("INSERT INTO whatsapp_intake_media(id,message_id,mime_type,content,status) VALUES($1,$2,'image/png',$3,'ready')", media_id, mid, b'fixture')
+            await conn.execute("UPDATE whatsapp_intake_conversations SET created_at=NOW()-INTERVAL '23 hours 58 minutes',updated_at=NOW() WHERE id=$1", row['id'])
+        app = FastAPI()
+        app.include_router(api.router)
+        app.dependency_overrides[api.operator] = lambda: 'yuri'
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
+            base = '/api/internal/whatsapp'
+            self.assertEqual((await client.get(f'{base}/media/{media_id}')).status_code,200)
+            async with self.pool.acquire() as conn:
+                await conn.execute("UPDATE whatsapp_intake_conversations SET created_at=NOW()-INTERVAL '23 hours 59 minutes 1 second',updated_at=NOW() WHERE id=$1", row['id'])
+            # Nada depende da execução prévia do expurgo nem do updated_at recente.
+            self.assertEqual((await client.get(f'{base}/conversations')).json()['items'],[])
+            for endpoint in [f'/conversations/{row["id"]}',f'/conversations/{row["id"]}/messages',f'/media/{media_id}']:
+                self.assertEqual((await client.get(base+endpoint)).status_code,404)
+            response = await client.post(f'{base}/conversations/{row["id"]}/claim',json={'epoch':0,'idempotency_key':'expiry-test-claim'})
+            self.assertEqual(response.status_code,410)
+        # Configuração antiga não pode manter conteúdo sensível por 30 dias.
+        with patch.dict(os.environ,{'WHATSAPP_INTAKE_RETENTION_DAYS':'30'}):
+            await worker.maintenance(self.pool)
+        async with self.pool.acquire() as conn:
+            for table in ['conversations','messages','media','inbox']:
+                self.assertEqual(await conn.fetchval('SELECT count(*) FROM whatsapp_intake_'+table),0)
+            self.assertEqual(await conn.fetchval("SELECT count(*) FROM whatsapp_intake_events WHERE kind='conversation.deleted'"),1)
+
+    async def test_retention_keeps_recent_conversation_and_expires_old_events(self):
+        await self.setup_intake()
+        row = await self.ingest('sintético recente')
+        async with self.pool.acquire() as conn:
+            await conn.execute("UPDATE whatsapp_intake_conversations SET updated_at=NOW()-INTERVAL '60 days' WHERE id=$1",row['id'])
+            await conn.execute("INSERT INTO whatsapp_intake_events(conversation_id,kind,created_at) VALUES($1,'old',NOW()-INTERVAL '24 hours')",row['id'])
+        await worker.maintenance(self.pool)
+        async with self.pool.acquire() as conn:
+            self.assertTrue(await conn.fetchval('SELECT EXISTS(SELECT 1 FROM whatsapp_intake_conversations WHERE id=$1)',row['id']))
+            self.assertFalse(await conn.fetchval("SELECT EXISTS(SELECT 1 FROM whatsapp_intake_events WHERE kind='old')"))
+
     async def test_migration_rollback_and_reapply(self):
         await self.setup_intake()
         root = Path(__file__).resolve().parents[2]

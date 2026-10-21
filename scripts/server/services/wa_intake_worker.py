@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from schemas.whatsapp_intake import ModelReply
 from services import wa_intake_store as store
 from services import wa_intake_transport as transport
+from services.wa_intake_retention import RETENTION_SECONDS
 from services.wa_intake_privacy import consent_gate, deletion_request, norm, prepare_deletion, resolve_deletion
 
 PROMPT = (Path(__file__).resolve().parents[1] / 'prompts/whatsapp_intake_v1.txt').read_text()
@@ -364,31 +365,28 @@ async def run_push_once(pool):
 
 
 async def maintenance(pool):
-    days = int(os.getenv('WHATSAPP_INTAKE_RETENTION_DAYS', '30'))
-    if not 1 <= days <= 365:
-        raise ValueError('Retenção deve ser de 1 a 365 dias')
     async with pool.acquire() as conn:
         await conn.execute("UPDATE whatsapp_intake_inbox SET status='failed',payload='{}',lease_until=NULL WHERE status='processing' AND lease_until<NOW() AND attempts>=5")
         # Evita reenvio silencioso após queda num POST externo.
         await conn.execute("UPDATE whatsapp_intake_messages SET delivery='uncertain',error_code='worker_interrupted' WHERE delivery='sending' AND available_at<NOW()-INTERVAL '3 minutes'")
         await conn.execute("UPDATE whatsapp_intake_inbox SET payload='{}',status='failed' WHERE created_at<NOW()-INTERVAL '1 hour' AND status IN ('pending','processing')")
-        rows = await conn.fetch("SELECT id FROM whatsapp_intake_conversations WHERE updated_at<NOW()-make_interval(days=>$1)", days)
+        rows = await conn.fetch("SELECT id FROM whatsapp_intake_conversations WHERE created_at<=clock_timestamp()-make_interval(secs=>$1)", RETENTION_SECONDS)
     async with pool.acquire() as conn:
-        failed = await conn.fetch("SELECT id FROM whatsapp_intake_conversations c WHERE mode='bot' AND consented AND EXISTS(SELECT 1 FROM whatsapp_intake_inbox i WHERE i.conversation_id=c.id AND i.status='failed')")
+        failed = await conn.fetch("SELECT id FROM whatsapp_intake_conversations c WHERE mode='bot' AND consented AND created_at>clock_timestamp()-INTERVAL '23 hours 59 minutes' AND EXISTS(SELECT 1 FROM whatsapp_intake_inbox i WHERE i.conversation_id=c.id AND i.status='failed')")
     for conversation in failed:
         async with store.locked(pool, conversation['id']) as (conn, current):
             if current['mode'] == 'bot':
                 epoch = await store.handoff(conn, current, 'worker_failed')
                 await store.event(conn, current['id'], 'handoff.updated',reason='worker_failed',epoch=epoch)
     for row in rows:
-        async with store.locked(pool, row['id']) as (conn, current):
-            if (datetime.now(timezone.utc) - current['updated_at']).total_seconds() < days * 86400:
+        async with store.locked(pool, row['id'], allow_expired=True) as (conn, current):
+            if (datetime.now(timezone.utc) - current['created_at']).total_seconds() < RETENTION_SECONDS:
                 continue
             await conn.execute('DELETE FROM whatsapp_intake_events WHERE conversation_id=$1', row['id'])
             await conn.execute('DELETE FROM whatsapp_intake_conversations WHERE id=$1', row['id'])
             await store.event(conn, row['id'], 'conversation.deleted')
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM whatsapp_intake_events WHERE created_at<NOW()-INTERVAL '30 days'")
+        await conn.execute("DELETE FROM whatsapp_intake_events WHERE created_at<=clock_timestamp()-make_interval(secs=>$1)", RETENTION_SECONDS)
 
 
 async def loop(pool, job):
