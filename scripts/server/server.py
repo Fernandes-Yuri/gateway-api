@@ -36,6 +36,8 @@ from routers import auth as auth_router
 # Routers extraidos (Fase A passo 5): sincronizacao PostgreSQL.
 from routers import sync as sync_router
 from routers import emergency as emergency_router
+from routers import whatsapp_intake as whatsapp_intake_router
+from routers import whatsapp_internal as whatsapp_internal_router
 # Router administrativo do portal webservice (D-WS1 / D50): leituras e
 # operacoes admin protegidas por token de servico. O portal Next.js no
 # Render consome estes endpoints e deixa de acessar o RDS diretamente.
@@ -283,7 +285,7 @@ class FamilyMessageSyncDto(BaseModel):
 # 503/offline_mode em producao. (Detectado na revisao pre-push: os testes
 # locais passavam justamente por esperarem pool None offline.)
 _POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
-                 sync_router, admin_router, care_os_router, catalog_router)
+                 sync_router, admin_router, care_os_router, catalog_router, whatsapp_intake_router, whatsapp_internal_router)
 
 
 def _propagate_db_pool():
@@ -299,11 +301,14 @@ def _propagate_db_pool():
 
 
 release_control_server = None
+intake_tasks = []
+app.include_router(whatsapp_intake_router.router)
+app.include_router(whatsapp_internal_router.router)
 
 
 @app.on_event("startup")
 async def startup():
-    global db_pool, release_control_server
+    global db_pool, release_control_server, intake_tasks
     if HAS_POSTGRES:
         for attempt in range(1, 6):
             try:
@@ -321,6 +326,9 @@ async def startup():
         if db_pool:
             await rate_limiter.load_blocked_ips_from_db(db_pool)
             _propagate_db_pool()  # routers extras: pool vivo a partir de agora
+            from services.wa_intake_worker import enabled as intake_enabled, start as start_intake
+            if intake_enabled():
+                intake_tasks = start_intake(db_pool)
             try:
                 from release_control import start_release_control
                 release_control_server = await start_release_control(
@@ -495,6 +503,11 @@ async def shutdown():
         await telemetry.stop()
     if globals().get("retention_scheduler"):
         retention_scheduler.shutdown(wait=False)
+    for task in intake_tasks:
+        task.cancel()
+    if intake_tasks:
+        await asyncio.gather(*intake_tasks,return_exceptions=True)
+        intake_tasks.clear()
     if db_pool:
         await db_pool.close()
         db_pool = None
