@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS whatsapp_intake_sessions,whatsapp_intake_consents,whatsapp_intake_deletions,whatsapp_intake_reads,whatsapp_intake_devices,whatsapp_intake_handoffs,
+whatsapp_intake_commands,whatsapp_intake_events,whatsapp_intake_media,whatsapp_intake_messages,
+whatsapp_intake_inbox,whatsapp_intake_conversations,whatsapp_intake_operators;
+DELETE FROM schema_migrations WHERE version='068_whatsapp_intake';
