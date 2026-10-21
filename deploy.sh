@@ -76,6 +76,13 @@ if [ -f "migrate.py" ]; then
     python3 scripts/purge_legacy_exam_files.py
 fi
 
+# Não persistir dumps com memória de atendimentos. A política global também
+# desabilita processamento pelo systemd-coredump quando o core_pattern usa pipe.
+sudo install -d -m 0755 /etc/systemd/system/braga-gateway.service.d /etc/systemd/coredump.conf.d
+sudo install -m 0644 infra/systemd/braga-gateway.service.d/10-private-memory.conf /etc/systemd/system/braga-gateway.service.d/10-private-memory.conf
+sudo install -m 0644 infra/systemd/coredump.conf.d/10-braga-privacy.conf /etc/systemd/coredump.conf.d/10-braga-privacy.conf
+sudo systemctl daemon-reload
+
 echo "=== [4/4] Reiniciando Braga Gateway ==="
 sudo systemctl restart braga-gateway.service
 sleep 2
