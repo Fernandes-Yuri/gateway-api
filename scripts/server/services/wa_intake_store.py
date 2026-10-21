@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 
 from services.wa_intake_privacy import phone_hash
+from services.wa_intake_retention import expired
 
 
 def decoded(value):
@@ -42,12 +43,14 @@ async def event(conn, conversation_id, kind, **data):
 
 
 @asynccontextmanager
-async def locked(pool, conversation_id):
+async def locked(pool, conversation_id, *, allow_expired=False):
     async with pool.acquire() as conn, conn.transaction():
         # Envios externos e tomada de controle usam o mesmo lock de linha.
         row = await conn.fetchrow('SELECT * FROM whatsapp_intake_conversations WHERE id=$1 FOR UPDATE', conversation_id)
         if not row:
             raise HTTPException(404, 'Atendimento não encontrado.')
+        if not allow_expired and expired(row):
+            raise HTTPException(410, 'Prazo deste atendimento encerrado. O histórico está em expurgo.')
         yield conn, row
 
 
