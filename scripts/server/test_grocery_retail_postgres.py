@@ -85,7 +85,8 @@ async def test_single_food_save_derives_units_and_preserves_existing_recipe_meta
             CREATE TABLE grocery_price_cache(food_name TEXT,ingredient_slug TEXT,price_unit TEXT);
         """)
         for migration in ['058_grocery_retail_cards_and_markets.sql', '061_grocery_dietary_fiber.sql',
-                          '063_grocery_retail_nutrition_facts.sql', '064_grocery_retail_cards_updated_at.sql']:
+                          '063_grocery_retail_nutrition_facts.sql', '064_grocery_retail_cards_updated_at.sql',
+                          '070_grocery_card_image_credits.sql']:
             await conn.execute((ROOT / 'migrations' / migration).read_text())
         await conn.execute("INSERT INTO grocery_markets(id,name,logo_url,website_url) VALUES('fonte','Mercado','','')")
         card = dict(id='oleo-900', name='Óleo de Soja', category='Óleos vegetais',
