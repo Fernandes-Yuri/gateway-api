@@ -408,6 +408,15 @@ class IntakePostgres(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await conn.fetchval('SELECT count(*) FROM admin_master_uses'),1)
             self.assertEqual(await conn.fetchval('SELECT count(*) FROM whatsapp_intake_sessions'),0)
 
+    async def test_homologation_token_authenticates_without_master(self):
+        await self.setup_intake()
+        from services import wa_intake_auth as auth
+        from schemas.whatsapp_intake import RefreshRequest
+        uid = await auth.authenticate(self.pool, 'Bearer wha_homologacao_temporaria_12345678')
+        self.assertEqual(uid, 'device:homologacao')
+        refreshed = await auth.refresh_session(self.pool, RefreshRequest(refresh_token='whr_homologacao_temporaria'), 'synthetic-ip')
+        self.assertEqual(refreshed['operator_uid'], 'device:homologacao')
+
     async def test_session_expiry_rotation_of_master_and_enrollment_http_contract(self):
         await self.setup_intake()
         from services import wa_intake_auth as auth
