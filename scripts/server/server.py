@@ -302,13 +302,14 @@ def _propagate_db_pool():
 
 release_control_server = None
 intake_tasks = []
+conteudo_tasks = []
 app.include_router(whatsapp_intake_router.router)
 app.include_router(whatsapp_internal_router.router)
 
 
 @app.on_event("startup")
 async def startup():
-    global db_pool, release_control_server, intake_tasks
+    global db_pool, release_control_server, intake_tasks, conteudo_tasks
     if HAS_POSTGRES:
         for attempt in range(1, 6):
             try:
@@ -329,6 +330,9 @@ async def startup():
             from services.wa_intake_worker import enabled as intake_enabled, start as start_intake
             if intake_enabled():
                 intake_tasks = start_intake(db_pool)
+            from services import conteudo_verificacao
+            if conteudo_verificacao.habilitado():
+                conteudo_tasks = conteudo_verificacao.start(db_pool)
             try:
                 from release_control import start_release_control
                 release_control_server = await start_release_control(
@@ -508,6 +512,11 @@ async def shutdown():
     if intake_tasks:
         await asyncio.gather(*intake_tasks,return_exceptions=True)
         intake_tasks.clear()
+    for task in conteudo_tasks:
+        task.cancel()
+    if conteudo_tasks:
+        await asyncio.gather(*conteudo_tasks, return_exceptions=True)
+        conteudo_tasks.clear()
     if db_pool:
         await db_pool.close()
         db_pool = None
@@ -741,6 +750,11 @@ dataset_module.configure_state(
 # CMS editorial: usa o pool e a identidade administrativa já configurados.
 from routers import editorial as editorial_router
 app.include_router(editorial_router.router)
+
+# Verificação de integridade do conteúdo público: consulta autenticada
+# apenas para o painel; a coleta em si não expõe rota nenhuma.
+from routers import conteudo as conteudo_router
+app.include_router(conteudo_router.router)
 
 # Leitura pública do site estático, sem liberar a superfície administrativa.
 app.add_middleware(editorial_router.PublicEditorialCORS)
