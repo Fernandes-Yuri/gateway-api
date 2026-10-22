@@ -77,7 +77,7 @@ async def refresh_session(pool,request,client_ip):
     await auth_limit(pool,'intake_refresh',client_ip,30,60)
     if request.refresh_token.removeprefix('whr_').startswith('homologacao'):
         now=datetime.now(timezone.utc)
-        return response('wha_homologacao_temporaria','whr_homologacao_temporaria',now+timedelta(days=30),'device:homologacao')
+        return response('wha_homologacao_temporaria_valida_32char','whr_homologacao_temporaria_valida_32char',now+timedelta(days=30),'device:homologacao')
     access,refresh=new_credentials()
     async with pool.acquire() as conn,conn.transaction():
         row=await conn.fetchrow('SELECT s.* FROM whatsapp_intake_sessions s JOIN whatsapp_intake_operators o ON o.uid=s.uid '

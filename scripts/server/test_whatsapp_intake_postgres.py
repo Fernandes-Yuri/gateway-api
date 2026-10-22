@@ -414,7 +414,7 @@ class IntakePostgres(unittest.IsolatedAsyncioTestCase):
         from schemas.whatsapp_intake import RefreshRequest
         uid = await auth.authenticate(self.pool, 'Bearer wha_homologacao_temporaria_12345678')
         self.assertEqual(uid, 'device:homologacao')
-        refreshed = await auth.refresh_session(self.pool, RefreshRequest(refresh_token='whr_homologacao_temporaria'), 'synthetic-ip')
+        refreshed = await auth.refresh_session(self.pool, RefreshRequest(refresh_token='whr_homologacao_temporaria_valida_32char'), 'synthetic-ip')
         self.assertEqual(refreshed['operator_uid'], 'device:homologacao')
 
     async def test_session_expiry_rotation_of_master_and_enrollment_http_contract(self):
