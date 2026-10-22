@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,17 @@ def merge_fields(current, result, text, message_id):
         for key in ('patient.full_name', 'patient.gender'):
             if fields.get(key, {}).get('derived_from'):
                 fields.pop(key)
+        rel = norm(fields.get('relationship', {}).get('value') or '')
+        if 'patient.gender' not in fields:
+            if any(w in rel for w in ('filho', 'pai', 'irmao', 'esposo', 'marido', 'sobrinho', 'neto', 'tio')):
+                fields['patient.gender'] = {'value': 'male', 'status': 'provided', 'evidence': rel, 'message_id': message_id}
+            elif any(w in rel for w in ('filha', 'mae', 'irma', 'esposa', 'mulher', 'sobrinha', 'neta', 'tia')):
+                fields['patient.gender'] = {'value': 'female', 'status': 'provided', 'evidence': rel, 'message_id': message_id}
+        if 'contact.gender' not in fields:
+            if any(w in rel for w in ('mae', 'filha', 'irma', 'esposa', 'mulher', 'tia', 'neta')):
+                fields['contact.gender'] = {'value': 'female', 'status': 'provided', 'evidence': rel, 'message_id': message_id}
+            elif any(w in rel for w in ('pai', 'filho', 'irmao', 'marido', 'esposo', 'tio', 'neto')):
+                fields['contact.gender'] = {'value': 'male', 'status': 'provided', 'evidence': rel, 'message_id': message_id}
     return fields
 
 
@@ -55,6 +67,18 @@ def pending_fields(fields):
     return [k for k in keys if k not in fields]
 
 
+def is_confirmation(text):
+    t = norm(text)
+    if not t:
+        return False
+    if re.search(r'\b(nao|errado|incorreto|corrigir|alterar|mudar|trocar|falta)\b', t):
+        return False
+    return bool(re.search(
+        r'\b(sim|correto|esta correto|tudo correto|confirmo|confirmado|isso|isso mesmo|exato|exatamente|perfeito|ta certo|certo|ok|positivo|pode ser|tudo certo)\b',
+        t
+    ))
+
+
 def summary_text(fields):
     lines = []
     for key, label in LABELS.items():
@@ -64,8 +88,12 @@ def summary_text(fields):
         value = item['value'] if item['status'] == 'provided' else ('Prefere não informar' if item['status'] == 'declined' else 'Não sabe informar')
         if key == 'care_for': value = {'self': 'a própria pessoa', 'other': 'outra pessoa'}.get(value, value)
         if key == 'payment.kind': value = {'private': 'particular', 'insurance': 'convênio'}.get(value, value)
-        lines.append(f'{label}: {value}')
-    return 'Confira se entendi direitinho:\n' + '\n'.join(lines) + '\n\nEstá correto ou quer corrigir alguma informação?'
+        if key in ('patient.gender', 'contact.gender') and value in ('male', 'female', 'other'):
+            value = {'male': 'masculino', 'female': 'feminino', 'other': 'outro'}.get(value, value)
+        if key == 'patient.age_years' and isinstance(value, (int, float)):
+            value = f"{int(value)} anos"
+        lines.append(f'• {label}: {value}')
+    return 'Confira se anotei tudo certinho:\n' + '\n'.join(lines) + '\n\nEstá tudo correto ou quer corrigir alguma informação?'
 
 
 async def generate(fields, history, text):
@@ -266,10 +294,26 @@ async def process_item(pool, item):
         summary_sent = bool(summary_row and summary_row['delivery'] in ('sent','delivered','read') and summary_row['sent_at'])
         if summary_sent and message.get('timestamp'):
             summary_sent = float(message['timestamp']) >= int(summary_row['sent_at'].timestamp())
-        if current['intake_status'] == 'awaiting_summary_confirmation' and summary_sent and norm(text) in ('sim', 'correto', 'esta correto', 'confirmo', 'isso mesmo'):
+        if current['intake_status'] == 'awaiting_summary_confirmation' and summary_sent and is_confirmation(text):
             epoch = await store.handoff(conn, current, 'summary_confirmed')
-            await store.queue_message(conn, {**dict(current), 'epoch': epoch},
-                'Certo, deixei seu pedido registrado para a equipe dar continuidade por aqui.', origin='system', key='confirmed-' + str(item['id']))
+            contact_name = fields.get('contact.full_name', {}).get('value') or ''
+            first_name = contact_name.split()[0] if contact_name else ''
+            greeting = f'{first_name}, d' if first_name else 'D'
+
+            payment_kind = fields.get('payment.kind', {}).get('value')
+            insurer = fields.get('payment.insurer', {}).get('value')
+            if payment_kind == 'insurance' or insurer:
+                ins_str = f' da {insurer}' if insurer else ''
+                closing_msg = (
+                    f'Perfeito! {greeting}eixei seu atendimento registrado para a nossa equipe consultar as vagas e opções de clínicas disponíveis.\n\n'
+                    f'Se você tiver em mãos, pode nos enviar por aqui uma foto da carteirinha do plano{ins_str} (frente e verso)? '
+                    f'Assim já adiantamos a verificação de cobertura com as unidades parceiras.'
+                )
+            else:
+                closing_msg = (
+                    f'Perfeito! {greeting}eixei seu atendimento registrado para a nossa equipe consultar as vagas, valores e opções de clínicas disponíveis.'
+                )
+            await store.queue_message(conn, {**dict(current), 'epoch': epoch}, closing_msg, origin='system', key='confirmed-' + str(item['id']))
             await finish_inbox(conn, item)
             await store.event(conn, row['id'], 'summary.confirmed', epoch=epoch)
             return
@@ -280,7 +324,7 @@ async def process_item(pool, item):
             await store.event(conn, row['id'], 'handoff.updated', reason='human_requested', epoch=epoch)
             return
         if not text or kind == 'image':
-            reply = ('Recebi sua foto e ela ficou disponível para o atendente. Pode me contar por texto ou áudio o que você precisa?'
+            reply = ('Recebi a foto e ela já ficou disponível para a nossa equipe consultar a carteirinha/documento com as clínicas parceiras. Se quiser acrescentar mais alguma informação, pode mandar por aqui!'
                      if kind == 'image' and media_ready else 'Não consegui entender essa mensagem. Pode escrever ou enviar um áudio, como preferir?')
             await store.queue_message(conn, current, reply, key='unsupported-' + str(item['id']))
             await finish_inbox(conn, item)
@@ -321,7 +365,11 @@ async def process_item(pool, item):
         reply = result.reply
         summary = None
         if not pending_fields(updated_fields):
-            reply = summary = summary_text(updated_fields)
+            if current['intake_status'] == 'awaiting_summary_confirmation' and not result.updates:
+                reply = f"{result.reply}\n\nPodemos confirmar os dados anotados acima para a equipe dar andamento?"
+                summary = current['summary'] or summary_text(updated_fields)
+            else:
+                reply = summary = summary_text(updated_fields)
             status = 'awaiting_summary_confirmation'
         await conn.execute('UPDATE whatsapp_intake_conversations SET fields=$2::jsonb,intake_status=$3,summary=$4,summary_message_id=NULL,updated_at=NOW() WHERE id=$1',
                            row['id'], json.dumps(updated_fields), status, summary)
