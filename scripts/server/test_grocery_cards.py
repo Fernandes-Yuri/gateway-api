@@ -76,6 +76,25 @@ def test_cards_return_package_totals_and_market_research_date(client):
     assert product['updated_at'].startswith('2026-09-01')
     assert product['markets'][0]['last_updated'].startswith('2026-10-01')
     assert float(product['markets'][0]['price']) == 12.90
+    assert product['image_credit'] is None
+    assert product['image_credit_url'] is None
+
+
+def test_cards_expose_image_credit_and_url_when_available(client):
+    http, conn = client
+    from datetime import datetime, timezone
+    card = dict(id='arroz-1kg', name='Arroz', category='Cereais',
+        image_url='https://example.org/arroz.png', package_display='1 kg',
+        package_net_value=1000, package_unit='g', kcal_per_package=3600,
+        carbs_g=800, protein_g=70, fat_g=5, price_avg='7.50', linked_ingredient_slug=None,
+        clinical_tags=[], active=True, updated_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        image_credit='Fotógrafo Fulano / Unsplash', image_credit_url='https://unsplash.com/photos/123')
+    conn.fetch.side_effect = [[card], []]
+    result = http.get('/api/catalog/grocery/cards')
+    assert result.status_code == 200
+    item = result.json()[0]
+    assert item['image_credit'] == 'Fotógrafo Fulano / Unsplash'
+    assert item['image_credit_url'] == 'https://unsplash.com/photos/123'
 
 
 def test_editorial_import_requires_real_research_timestamp_with_timezone():

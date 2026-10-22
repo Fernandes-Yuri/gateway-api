@@ -40,6 +40,8 @@ class GroceryRetailCardIn(BaseModel):
     price_avg: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
     linked_ingredient_slug: Optional[str] = None
     clinical_tags: list[str] = Field(default_factory=list)
+    image_credit: Optional[str] = Field(default=None, max_length=500)
+    image_credit_url: Optional[str] = Field(default=None, max_length=1000)
     active: bool = True
 
     @model_validator(mode='before')

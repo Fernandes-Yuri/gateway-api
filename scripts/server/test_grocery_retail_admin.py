@@ -222,3 +222,42 @@ async def test_reviewed_composition_source_is_preserved_with_nutrients():
     args = conn.execute.call_args.args
     stored = next(json.loads(value) for value in args[1:] if isinstance(value, str) and value.startswith('[{"key"'))
     assert stored[0]['reference'] == reference
+
+
+async def test_image_credit_and_url_saved_and_bound():
+    conn = AsyncMock()
+    conn.fetchval.return_value = 'kg'
+    conn.fetchrow.return_value = {'name': 'Manteiga', 'linked_ingredient_slug': 'butter'}
+    card = product(
+        image_credit='Autor Exemplo / CC-BY-SA 4.0',
+        image_credit_url='https://example.org/foto-autor',
+    )
+    await save_record(conn, 'card', card)
+    args = conn.execute.call_args.args
+    assert 'image_credit' in args[0]
+    assert 'image_credit_url' in args[0]
+    assert 'Autor Exemplo / CC-BY-SA 4.0' in args[1:]
+    assert 'https://example.org/foto-autor' in args[1:]
+
+
+async def test_whitespace_image_credit_normalized_to_none_for_kill_switch():
+    conn = AsyncMock()
+    conn.fetchval.return_value = 'kg'
+    conn.fetchrow.return_value = {'name': 'Manteiga', 'linked_ingredient_slug': 'butter'}
+    card = product(image_credit='   ', image_credit_url='   ')
+    await save_record(conn, 'card', card)
+    args = conn.execute.call_args.args
+    columns = [col.strip() for col in args[0].split('(')[1].split(')')[0].split(',')]
+    credit_idx = columns.index('image_credit') + 1
+    credit_url_idx = columns.index('image_credit_url') + 1
+    assert args[credit_idx] is None
+    assert args[credit_url_idx] is None
+
+
+async def test_invalid_image_credit_url_rejected_before_write():
+    conn = AsyncMock()
+    conn.fetchval.return_value = 'kg'
+    conn.fetchrow.return_value = {'name': 'Manteiga', 'linked_ingredient_slug': 'butter'}
+    with pytest.raises(ValueError, match='crédito da imagem'):
+        await save_record(conn, 'card', product(image_credit_url='javascript:alert(1)'))
+    conn.execute.assert_not_awaited()
