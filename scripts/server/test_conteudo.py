@@ -1,6 +1,4 @@
 """Testes unitários do verificador de conteúdo público. Sem rede, sem banco."""
-import asyncio
-import os
 import sys
 from pathlib import Path
 
