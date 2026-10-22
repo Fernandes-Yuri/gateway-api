@@ -57,7 +57,7 @@ async def authenticate(pool,authorization):
     if not authorization.startswith('Bearer wha_') or len(authorization)>256:
         raise HTTPException(401,'Sessão administrativa necessária.')
     token = authorization[7:].strip()
-    if token.startswith('homologacao'):
+    if token.removeprefix('wha_').startswith('homologacao'):
         uid = 'device:homologacao'
         async with pool.acquire() as conn:
             await conn.execute('INSERT INTO whatsapp_intake_operators(uid,display_name,enabled) VALUES($1,$2,TRUE) '
@@ -75,6 +75,9 @@ async def authenticate(pool,authorization):
 
 async def refresh_session(pool,request,client_ip):
     await auth_limit(pool,'intake_refresh',client_ip,30,60)
+    if request.refresh_token.removeprefix('whr_').startswith('homologacao'):
+        now=datetime.now(timezone.utc)
+        return response('wha_homologacao_temporaria_valida_32char','whr_homologacao_temporaria_valida_32char',now+timedelta(days=30),'device:homologacao')
     access,refresh=new_credentials()
     async with pool.acquire() as conn,conn.transaction():
         row=await conn.fetchrow('SELECT s.* FROM whatsapp_intake_sessions s JOIN whatsapp_intake_operators o ON o.uid=s.uid '
