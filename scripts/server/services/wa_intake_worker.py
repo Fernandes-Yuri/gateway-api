@@ -31,8 +31,8 @@ def enabled():
 def merge_fields(current, result, text, message_id):
     fields = dict(current)
     for key, item in result.updates.items():
-        if item.evidence and item.evidence.casefold() not in text.casefold():
-            item.evidence = text[:100]
+        if item.evidence.casefold() not in text.casefold():
+            raise ValueError('Evidência ausente')
         fields[key] = {**item.model_dump(), 'message_id': message_id}
     if fields.get('care_for', {}).get('value') == 'self':
         for field in ('full_name', 'gender'):
@@ -251,7 +251,10 @@ async def process_item(pool, item):
     # Sem lock durante a inferência: operador pode assumir imediatamente.
     try:
         result = await generate(fields, history, text)
-        updated_fields = merge_fields(fields, result, text, mid)
+        try:
+            updated_fields = merge_fields(fields, result, text, mid)
+        except ValueError:
+            updated_fields = fields
     except (transport.TransportFailure, httpx.HTTPError, ValidationError, ValueError, KeyError, IndexError):
         result, updated_fields = None, fields
     async with store.locked(pool, row['id']) as (conn, current):
