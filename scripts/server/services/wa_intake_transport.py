@@ -126,10 +126,31 @@ async def transcribe(content, mime):
         return str(response.json().get('text', '')).strip()[:12000]
 
 
-async def send(phone, text='', *, content=None, mime=None, media_id=None):
+async def send(phone, text='', *, content=None, mime=None, media_id=None, buttons=None):
     base, receiver, headers = meta_config()
     async with httpx.AsyncClient(timeout=30) as client:
-        if content is not None and not media_id:
+        if buttons:
+            action_buttons = []
+            for btn in buttons[:3]:
+                action_buttons.append({
+                    "type": "reply",
+                    "reply": {
+                        "id": btn["id"],
+                        "title": btn["title"][:20]
+                    }
+                })
+            payload = {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": phone,
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {"text": text},
+                    "action": {"buttons": action_buttons}
+                }
+            }
+        elif content is not None and not media_id:
             try:
                 upload = await client.post(f'{base}/{receiver}/media', headers=headers,
                     data={'messaging_product': 'whatsapp', 'type': mime}, files={'file': ('audio.' + {'audio/ogg':'ogg','audio/mpeg':'mp3','audio/mp4':'m4a','audio/aac':'aac','audio/amr':'amr'}[mime], content, mime)})
@@ -139,9 +160,10 @@ async def send(phone, text='', *, content=None, mime=None, media_id=None):
             except httpx.HTTPError:
                 # O upload não envia mensagem para o paciente; pode ser repetido.
                 raise TransportFailure('media_upload_failed', retryable=True) from None
-        payload = {'messaging_product': 'whatsapp', 'to': phone,
-                   'type': 'audio' if media_id else 'text'}
-        payload[payload['type']] = {'id': media_id} if media_id else {'body': text, 'preview_url': False}
+        if not buttons:
+            payload = {'messaging_product': 'whatsapp', 'to': phone,
+                       'type': 'audio' if media_id else 'text'}
+            payload[payload['type']] = {'id': media_id} if media_id else {'body': text, 'preview_url': False}
         try:
             response = await client.post(f'{base}/{receiver}/messages', headers=headers, json=payload)
         except httpx.HTTPError:

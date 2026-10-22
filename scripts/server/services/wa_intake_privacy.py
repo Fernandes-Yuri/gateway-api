@@ -7,14 +7,13 @@ from datetime import datetime, timezone
 TERMS_VERSION = '2026-10-23h59'
 PRIVACY_VERSION = '2026-10-23h59'
 CONSENT_TEXT = (
-    'Oi! Sou o Yuri, assistente virtual do atendimento da Braga Saúde. '
-    'Antes de conversarmos sobre seu atendimento, leia os Termos de Uso '
+    'Antes de iniciarmos seu atendimento, leia nossos Termos de Uso '
     '(https://bragasaude.online/termos.html) e a Política de Privacidade '
-    '(https://bragasaude.online/privacidade.html). '
+    '(https://bragasaude.online/privacidade.html).\n\n'
     'O histórico ativo e seus anexos ficam disponíveis por até 23h59 desde a abertura, '
     'sem prorrogação por novas mensagens. Depois, o acesso é bloqueado e o histórico entra em expurgo automático. '
-    'Backups seguem ciclo próprio e as mensagens no seu WhatsApp não são apagadas por esse expurgo. '
-    'Se estiver de acordo, responda “Li e aceito”. Sem o aceite, não faço a coleta por aqui.')
+    'Backups seguem ciclo próprio e as mensagens no seu WhatsApp não são apagadas por esse expurgo.\n\n'
+    'Para prosseguir com o atendimento, confirme seu aceite tocando no botão abaixo:')
 
 
 def phone_hash(phone):
@@ -43,17 +42,17 @@ async def consent_gate(pool,phone,*,text='',button_id='',timestamp=None,accept_m
                 return True,'',[]
             return False,'',[]
         pending=bool(row and row['expires_at']>datetime.now(timezone.utc) and row['terms_version']==TERMS_VERSION and row['privacy_version']==PRIVACY_VERSION)
-        accept=norm(text) in ('li e aceito','aceito os termos e a politica de privacidade')
+        accept=norm(text) in ('li e aceito','aceito os termos e a politica de privacidade') or button_id == 'wa_accept'
         if pending and accept and (not timestamp or float(timestamp)>=int(row['presented_at'].timestamp())):
             await conn.execute('UPDATE whatsapp_intake_consents SET accepted_at=NOW() WHERE phone_hash=$1',key)
             return True,accept_message or 'Aceite registrado. Como posso ajudar no atendimento?',[]
-        if norm(text) in ('nao aceito','nao concordo'):
+        if norm(text) in ('nao aceito','nao concordo') or button_id == 'wa_decline':
             await conn.execute('DELETE FROM whatsapp_intake_consents WHERE phone_hash=$1',key)
             return True,'Tudo bem. Não farei a coleta sem seu aceite. A orientação de socorro continua disponível.',[]
         if not pending:
             await conn.execute('INSERT INTO whatsapp_intake_consents(phone_hash,terms_version,privacy_version) VALUES($1,$2,$3) '
                 'ON CONFLICT(phone_hash) DO UPDATE SET terms_version=$2,privacy_version=$3,accepted_at=NULL,presented_at=NOW(),expires_at=NOW()+INTERVAL \'10 minutes\'',key,TERMS_VERSION,PRIVACY_VERSION)
-        return True,CONSENT_TEXT,[]
+        return True,CONSENT_TEXT,[{'id':'wa_accept','title':'Li e aceito'},{'id':'wa_decline','title':'Não aceito'}]
 
 
 async def prepare_deletion(pool,phone):

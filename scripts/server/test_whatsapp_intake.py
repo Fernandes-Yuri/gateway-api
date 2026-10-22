@@ -48,7 +48,7 @@ class EntityTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         runtime = (Path(__file__).parent / 'prompts/whatsapp_intake_v1.txt').read_text()
         self.assertEqual(runtime, (root / 'docs/prompts/whatsapp-clinic-intake-v1.txt').read_text())
-        self.assertIn('Você é Yuri', runtime)
+        self.assertIn('assistente virtual', runtime)
 
 
 class MediaTests(unittest.IsolatedAsyncioTestCase):
