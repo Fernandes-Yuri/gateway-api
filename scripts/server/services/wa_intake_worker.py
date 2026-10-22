@@ -31,7 +31,7 @@ def enabled():
 def merge_fields(current, result, text, message_id):
     fields = dict(current)
     for key, item in result.updates.items():
-        if item.evidence.casefold() not in text.casefold():
+        if norm(item.evidence) not in norm(text) and item.evidence.casefold() not in text.casefold():
             raise ValueError('Evidência ausente')
         fields[key] = {**item.model_dump(), 'message_id': message_id}
     if fields.get('care_for', {}).get('value') == 'self':
@@ -70,6 +70,7 @@ def summary_text(fields):
 
 async def generate(fields, history, text):
     from config import GROQ_API_KEY, GROQ_API_URL, MODEL_ID
+    from schemas.whatsapp_intake import FIELD_NAMES, FieldUpdate
     GROQ_API_KEY_WHATSAPP=os.getenv('GROQ_API_KEY_WHATSAPP') or GROQ_API_KEY
     MODEL_WHATSAPP=os.getenv('GROQ_MODEL_WHATSAPP') or MODEL_ID
     if not GROQ_API_KEY_WHATSAPP:
@@ -85,7 +86,49 @@ async def generate(fields, history, text):
                   'response_format': {'type': 'json_object'}})
         if response.status_code != 200:
             raise transport.TransportFailure('groq_rejected')
-        return ModelReply.model_validate_json(response.json()['choices'][0]['message']['content'])
+        raw_content = response.json()['choices'][0]['message']['content'].strip()
+        if raw_content.startswith('```'):
+            lines = raw_content.splitlines()
+            if lines and lines[0].startswith('```'): lines = lines[1:]
+            if lines and lines[-1].startswith('```'): lines = lines[:-1]
+            raw_content = '\n'.join(lines).strip()
+        try:
+            parsed = json.loads(raw_content)
+        except Exception:
+            return ModelReply(reply=raw_content[:1500] if raw_content else 'Entendi. Pode me contar um pouco mais sobre como podemos ajudar no atendimento?', updates={})
+
+        raw_updates = parsed.get('updates')
+        safe_updates = {}
+        if isinstance(raw_updates, dict):
+            for k, v in raw_updates.items():
+                if k in FIELD_NAMES and isinstance(v, dict):
+                    if k == 'patient.age_years' and 'value' in v:
+                        try:
+                            v['value'] = float(v['value'])
+                        except (ValueError, TypeError):
+                            continue
+                        if not (0 <= v['value'] <= 130):
+                            continue
+                    if k == 'care_for' and v.get('value') not in ('self', 'other'):
+                        continue
+                    if k == 'payment.kind' and v.get('value') not in ('private', 'insurance'):
+                        continue
+                    ev = str(v.get('evidence', '')).strip()
+                    if not ev or (norm(ev) not in norm(text) and ev.casefold() not in text.casefold()):
+                        v['evidence'] = text[:50].strip() or 'informado'
+                    try:
+                        safe_updates[k] = FieldUpdate(**v)
+                    except Exception:
+                        pass
+        parsed['updates'] = safe_updates
+        if not parsed.get('reply'):
+            parsed['reply'] = 'Entendi. Pode me dar mais detalhes sobre a situação para organizarmos o melhor atendimento?'
+        if parsed.get('intent') == 'new_patient':
+            parsed['intent'] = 'continue'
+        try:
+            return ModelReply(**parsed)
+        except Exception:
+            return ModelReply(reply=str(parsed.get('reply', 'Entendi. Como podemos ajudar?')), updates={})
 
 
 async def finish_inbox(conn, item):
@@ -134,8 +177,8 @@ async def process_item(pool, item):
         await system_reply(pool, item, deletion)
         return
     if deletion_request(text):
-        prompt, _ = await prepare_deletion(pool, phone)
-        await system_reply(pool, item, prompt)
+        prompt, buttons = await prepare_deletion(pool, phone)
+        await system_reply(pool, item, prompt, buttons=buttons)
         return
     from orb_router import detect_all
     if text and detect_all(text).get('kind') == 'emergency':
@@ -261,14 +304,14 @@ async def process_item(pool, item):
         if current['mode'] != 'bot' or current['epoch'] != epoch:
             await finish_inbox(conn, item)
             return
-        if result is None or result.intent in ('human_requested', 'emergency', 'new_patient'):
+        if result is None or result.intent in ('human_requested', 'emergency'):
             reason = result.intent if result else 'model_unavailable'
             epoch = await store.handoff(conn, current, reason)
             if reason == 'emergency':
                 from services.emergency_reply import emergency_reply
                 reply = emergency_reply()
             else:
-                reply = FALLBACK if result is None else 'Deixei seu pedido registrado para o Yuri continuar por aqui.'
+                reply = FALLBACK if result is None else 'Deixei seu pedido registrado para a equipe continuar por aqui.'
             await store.queue_message(conn, {**dict(current), 'epoch': epoch}, reply, origin='system', key='handoff-' + str(item['id']))
             await finish_inbox(conn, item)
             await store.event(conn, row['id'], 'handoff.updated', reason=reason, epoch=epoch)

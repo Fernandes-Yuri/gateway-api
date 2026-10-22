@@ -58,7 +58,8 @@ async def consent_gate(pool,phone,*,text='',button_id='',timestamp=None,accept_m
 async def prepare_deletion(pool,phone):
     async with pool.acquire() as conn:
         await conn.execute('INSERT INTO whatsapp_intake_deletions(phone_hash) VALUES($1) ON CONFLICT(phone_hash) DO UPDATE SET expires_at=NOW()+INTERVAL \'5 minutes\'',phone_hash(phone))
-    return ('Quer apagar os dados deste atendimento no WhatsApp? Isso não altera sua conta ou histórico no aplicativo. Responda SIM ou NÃO.',[])
+    return ('Quer apagar os dados deste atendimento no WhatsApp? Responda SIM ou NÃO.',
+            [{'id':'del_confirm','title':'Sim, apagar'},{'id':'del_cancel','title':'Não'}])
 
 
 async def resolve_deletion(pool,phone,*,text='',button_id='',timestamp=None):
@@ -71,10 +72,10 @@ async def resolve_deletion(pool,phone,*,text='',button_id='',timestamp=None):
             return None
         if timestamp and float(timestamp)<int(pending['expires_at'].timestamp()-300):
             return None
-        if norm(text) in ('nao','cancelar'):
+        if norm(text) in ('nao','cancelar') or button_id == 'del_cancel':
             await conn.execute('DELETE FROM whatsapp_intake_deletions WHERE phone_hash=$1',key)
             return 'Tudo bem, não apaguei seus dados.'
-        if norm(text)!='sim':
+        if norm(text)!='sim' and button_id != 'del_confirm':
             return None
         rows=await conn.fetch('SELECT id FROM whatsapp_intake_conversations WHERE phone_hash=$1 ORDER BY id FOR UPDATE',key)
         for row in rows:
