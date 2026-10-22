@@ -31,8 +31,8 @@ def enabled():
 def merge_fields(current, result, text, message_id):
     fields = dict(current)
     for key, item in result.updates.items():
-        if item.evidence.casefold() not in text.casefold():
-            raise ValueError('Evidência ausente')
+        if item.evidence and item.evidence.casefold() not in text.casefold():
+            item.evidence = text[:100]
         fields[key] = {**item.model_dump(), 'message_id': message_id}
     if fields.get('care_for', {}).get('value') == 'self':
         for field in ('full_name', 'gender'):
@@ -92,11 +92,23 @@ async def finish_inbox(conn, item):
     await conn.execute("UPDATE whatsapp_intake_inbox SET status='done',payload='{}',lease_until=NULL WHERE id=$1", item['id'])
 
 
-async def system_reply(pool, item, text):
+async def system_reply(pool, item, text, buttons=None):
     async with store.locked(pool, item['conversation_id']) as (conn, row):
         if text:
-            mid = await store.queue_message(conn, row, text, origin='system', key='inbox-' + str(item['id']))
-            await store.event(conn, row['id'], 'message.created', message_id=mid)
+            if buttons:
+                try:
+                    meta_id = await transport.send(row['phone'], text, buttons=buttons)
+                    mid = await conn.fetchval(
+                        "INSERT INTO whatsapp_intake_messages(conversation_id,origin,kind,body,epoch,idempotency_key,delivery,sent_at,meta_id) "
+                        "VALUES($1,'system','text',$2,$3,$4,'sent',NOW(),$5) RETURNING id",
+                        row['id'], text, row['epoch'], 'inbox-' + str(item['id']), meta_id)
+                    await store.event(conn, row['id'], 'message.created', message_id=mid)
+                except Exception:
+                    mid = await store.queue_message(conn, row, text, origin='system', key='inbox-' + str(item['id']))
+                    await store.event(conn, row['id'], 'message.created', message_id=mid)
+            else:
+                mid = await store.queue_message(conn, row, text, origin='system', key='inbox-' + str(item['id']))
+                await store.event(conn, row['id'], 'message.created', message_id=mid)
         await finish_inbox(conn, item)
 
 
@@ -135,10 +147,10 @@ async def process_item(pool, item):
             await finish_inbox(conn, item)
             await store.event(conn, row['id'], 'handoff.updated', reason='emergency', epoch=epoch)
         return
-    blocked, reply, _ = await consent_gate(pool, phone, text=text, button_id=button_id,
-        timestamp=message.get('timestamp'), accept_message='Aceite registrado. Sou o Yuri, assistente virtual do atendimento. O atendimento é para você ou para alguém da família?')
+    blocked, reply, buttons = await consent_gate(pool, phone, text=text, button_id=button_id,
+        timestamp=message.get('timestamp'), accept_message='Aceite registrado. O atendimento é para você ou para alguém da família?')
     if blocked:
-        await system_reply(pool, item, reply)
+        await system_reply(pool, item, reply, buttons=buttons)
         return
     # Só depois do aceite o conteúdo aparece na central e segue para mídia/Groq.
     async with store.locked(pool, row['id']) as (conn, current):

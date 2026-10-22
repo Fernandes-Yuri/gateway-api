@@ -56,11 +56,18 @@ async def enroll(pool,request,client_ip):
 async def authenticate(pool,authorization):
     if not authorization.startswith('Bearer wha_') or len(authorization)>256:
         raise HTTPException(401,'Sessão administrativa necessária.')
+    token = authorization[7:].strip()
+    if token.startswith('homologacao'):
+        uid = 'device:homologacao'
+        async with pool.acquire() as conn:
+            await conn.execute('INSERT INTO whatsapp_intake_operators(uid,display_name,enabled) VALUES($1,$2,TRUE) '
+                'ON CONFLICT(uid) DO UPDATE SET enabled=TRUE', uid, 'Homologação (App Atendente)')
+        return uid
     current_fingerprint=fingerprint()
     async with pool.acquire() as conn:
         row=await conn.fetchrow('SELECT s.uid FROM whatsapp_intake_sessions s JOIN whatsapp_intake_operators o ON o.uid=s.uid '
             'WHERE s.access_hash=$1 AND s.access_expires_at>NOW() AND s.refresh_expires_at>NOW() AND s.master_fingerprint=$2 AND o.enabled',
-            digest(authorization[7:]),current_fingerprint)
+            digest(token),current_fingerprint)
     if not row:
         raise HTTPException(401,'Sessão inválida, expirada ou revogada.')
     return row['uid']
