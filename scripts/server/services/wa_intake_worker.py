@@ -79,6 +79,16 @@ def is_confirmation(text):
     ))
 
 
+def is_reset_command(text):
+    t = norm(text)
+    if not t:
+        return False
+    return bool(re.search(
+        r'\b(recomecar|reiniciar|comecar de novo|novo atendimento|esqueca tudo|limpar|reset)\b',
+        t
+    ))
+
+
 def summary_text(fields):
     lines = []
     for key, label in LABELS.items():
@@ -245,8 +255,14 @@ async def process_item(pool, item):
                 'INSERT INTO whatsapp_intake_media(id,message_id,mime_type,meta_id) VALUES($1,$2,$3,$4) ON CONFLICT(message_id) DO NOTHING',
                 uuid.uuid4(), mid, str(metadata.get('mime_type', '')), str(metadata.get('id', '')))
         if current['mode'] == 'closed':
-            epoch = await store.handoff(conn, current, 'new_request')
-            await store.event(conn, row['id'], 'control.changed', mode='waiting_human', epoch=epoch)
+            epoch = current['epoch'] + 1
+            await conn.execute(
+                "UPDATE whatsapp_intake_conversations SET mode='bot',epoch=$2,intake_status='collecting',"
+                "fields='{}'::jsonb,summary_message_id=NULL,operator_uid=NULL,updated_at=NOW() WHERE id=$1",
+                row['id'], epoch)
+            current = {**dict(current), 'mode': 'bot', 'epoch': epoch, 'intake_status': 'collecting',
+                       'fields': '{}', 'summary_message_id': None, 'operator_uid': None}
+            await store.event(conn, row['id'], 'control.changed', mode='bot', epoch=epoch)
         await store.event(conn, row['id'], 'message.created', message_id=mid)
     media_ready = False
     if kind in ('audio', 'image'):
@@ -282,6 +298,50 @@ async def process_item(pool, item):
             await store.event(conn, row['id'], 'handoff.updated', reason='emergency', epoch=epoch)
         return
     async with store.locked(pool, row['id']) as (conn, current):
+        # Permite reiniciar a triagem a qualquer momento via comando explícito
+        if text and is_reset_command(text):
+            epoch = current['epoch'] + 1
+            await conn.execute(
+                "UPDATE whatsapp_intake_conversations SET mode='bot',epoch=$2,intake_status='collecting',"
+                "fields='{}'::jsonb,summary_message_id=NULL,operator_uid=NULL,updated_at=NOW() WHERE id=$1",
+                row['id'], epoch)
+            reset_reply = (
+                "Entendido! Reiniciei seu atendimento.\n\n"
+                "Como podemos te ajudar hoje? O atendimento é para você ou para alguém da família?"
+            )
+            await store.queue_message(conn, {**dict(current), 'epoch': epoch}, reset_reply, origin='bot', key='reset-' + str(item['id']))
+            await finish_inbox(conn, item)
+            await store.event(conn, row['id'], 'control.changed', mode='bot', epoch=epoch)
+            return
+
+        if current['mode'] == 'waiting_human':
+            if kind == 'image':
+                img_reply = (
+                    "Recebi a imagem e ela já ficou disponível para a nossa equipe consultar a carteirinha/documento com as clínicas parceiras. "
+                    "Em breve um de nossos atendentes dará continuidade por aqui!"
+                )
+                await store.queue_message(conn, current, img_reply, origin='system', key='img-ack-' + str(item['id']))
+                await finish_inbox(conn, item)
+                await store.event(conn, row['id'], 'message.created')
+                return
+
+            last_sys_sent = await conn.fetchval(
+                "SELECT sent_at FROM whatsapp_intake_messages WHERE conversation_id=$1 AND origin='system' AND sent_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+                row['id'])
+            now_utc = datetime.now(timezone.utc)
+            should_send_holding = (not last_sys_sent) or (now_utc - last_sys_sent).total_seconds() > 300
+            if should_send_holding:
+                holding_reply = (
+                    "Olá! Seu atendimento já está registrado e nossa equipe foi notificada. "
+                    "Em breve um de nossos atendentes irá te responder por aqui.\n\n"
+                    "(Caso queira reiniciar o atendimento do zero, envie REINICIAR)"
+                )
+                await store.queue_message(conn, current, holding_reply, origin='system', key='holding-' + str(item['id']))
+                await store.event(conn, row['id'], 'message.created')
+
+            await finish_inbox(conn, item)
+            return
+
         if current['mode'] != 'bot':
             await finish_inbox(conn, item)
             return
@@ -331,8 +391,8 @@ async def process_item(pool, item):
             await store.event(conn, row['id'], 'message.created')
             return
         history_rows = await conn.fetch(
-            "SELECT origin,body,transcript FROM whatsapp_intake_messages WHERE conversation_id=$1 AND id<$2 "
-            "AND ((origin='contact') OR delivery IN ('sent','delivered','read')) ORDER BY id DESC LIMIT 12", row['id'], mid)
+            "SELECT origin,body,transcript FROM whatsapp_intake_messages WHERE conversation_id=$1 AND epoch=$2 AND id<$3 "
+            "AND ((origin='contact') OR delivery IN ('sent','delivered','read')) ORDER BY id DESC LIMIT 12", row['id'], epoch, mid)
         history = [{'role': 'user' if h['origin'] == 'contact' else 'assistant',
                     'content': (h['transcript'] or h['body'])[:1500]} for h in reversed(history_rows) if h['transcript'] or h['body']]
     # Sem lock durante a inferência: operador pode assumir imediatamente.
