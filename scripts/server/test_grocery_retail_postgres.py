@@ -32,21 +32,26 @@ async def test_migration_import_dimension_validation_and_rollback():
         await conn.execute((ROOT / 'migrations/061_grocery_dietary_fiber.sql').read_text())
         await conn.execute((ROOT / 'migrations/063_grocery_retail_nutrition_facts.sql').read_text())
         await conn.execute((ROOT / 'migrations/064_grocery_retail_cards_updated_at.sql').read_text())
+        await conn.execute((ROOT / 'migrations/070_grocery_card_image_credits.sql').read_text())
         data = dict(id='butter-200g', name='Manteiga', category='Laticínios',
             image_url='https://example.org/image.png', package_display='Pote 200g',
             package_net_value=200, package_unit='g', kcal_per_package=1400, price_avg='12.90',
-            linked_ingredient_slug='butter')
+            linked_ingredient_slug='butter', image_credit='Wikimedia / Test',
+            image_credit_url='https://example.org/credit')
         payload = GroceryImport(cards=[data])
         await conn.execute(import_sql(payload))
         await conn.execute(import_sql(payload))
         rows = await load_cards(conn, 'Laticínios', 'MANTEIGA')
         assert len(rows) == 1
         assert rows[0]['package_net_value'] == 200
+        assert rows[0]['image_credit'] == 'Wikimedia / Test'
+        assert rows[0]['image_credit_url'] == 'https://example.org/credit'
         data['package_unit'] = 'ml'
         with pytest.raises(asyncpg.RaiseError):
             await conn.execute(import_sql(GroceryImport(cards=[data])))
         await conn.execute('ROLLBACK')
         assert (await load_cards(conn))[0]['package_unit'] == 'g'
+        await conn.execute((ROOT / 'migrations/070_grocery_card_image_credits_rollback.sql').read_text())
         await conn.execute((ROOT / 'migrations/064_grocery_retail_cards_updated_at_rollback.sql').read_text())
         await conn.execute((ROOT / 'migrations/063_grocery_retail_nutrition_facts_rollback.sql').read_text())
         await conn.execute((ROOT / 'migrations/061_grocery_dietary_fiber_rollback.sql').read_text())
@@ -80,7 +85,8 @@ async def test_single_food_save_derives_units_and_preserves_existing_recipe_meta
             CREATE TABLE grocery_price_cache(food_name TEXT,ingredient_slug TEXT,price_unit TEXT);
         """)
         for migration in ['058_grocery_retail_cards_and_markets.sql', '061_grocery_dietary_fiber.sql',
-                          '063_grocery_retail_nutrition_facts.sql', '064_grocery_retail_cards_updated_at.sql']:
+                          '063_grocery_retail_nutrition_facts.sql', '064_grocery_retail_cards_updated_at.sql',
+                          '070_grocery_card_image_credits.sql']:
             await conn.execute((ROOT / 'migrations' / migration).read_text())
         await conn.execute("INSERT INTO grocery_markets(id,name,logo_url,website_url) VALUES('fonte','Mercado','','')")
         card = dict(id='oleo-900', name='Óleo de Soja', category='Óleos vegetais',

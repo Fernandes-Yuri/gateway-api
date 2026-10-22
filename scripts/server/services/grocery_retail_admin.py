@@ -51,6 +51,7 @@ async def save_record(conn, kind, payload):
             'price_avg': 'preço de referência', 'price': 'preço pesquisado',
             'last_updated': 'data da pesquisa', 'product_store_url': 'link do produto',
             'card_id': 'produto', 'market_id': 'supermercado',
+            'image_credit': 'crédito da imagem', 'image_credit_url': 'link do crédito da imagem',
         }
         fields = ', '.join(dict.fromkeys(labels.get(str(err['loc'][0]), 'dados do cadastro')
             if err['loc'] else 'dados do cadastro' for err in exc.errors()))
@@ -95,12 +96,20 @@ async def save_record(conn, kind, payload):
     if kind == 'quote':
         if data['last_updated'] > datetime.now(timezone.utc):
             raise ValueError('A data da pesquisa não pode estar no futuro.')
-    for field in ('image_url', 'logo_url', 'website_url', 'product_store_url'):
+    for field in ('image_url', 'logo_url', 'website_url', 'product_store_url', 'image_credit_url'):
         if data.get(field) is not None:
             data[field] = str(data[field])
     for field in ('image_url', 'logo_url'):
         if data.get(field) and not data[field].startswith('https://'):
             raise ValueError('Use uma URL HTTPS pública para a imagem ou o logotipo.')
+    if data.get('image_credit') is not None:
+        credit = str(data['image_credit']).strip()
+        data['image_credit'] = credit or None
+    if data.get('image_credit_url') is not None:
+        credit_url = str(data['image_credit_url']).strip()
+        if credit_url and not (credit_url.startswith('https://') or credit_url.startswith('http://')):
+            raise ValueError('Use uma URL HTTP ou HTTPS válida para o crédito da imagem.')
+        data['image_credit_url'] = credit_url or None
     columns = list(data)
     # Table and columns come only from the fixed mapping and validated model.
     updates = [f'{column}=EXCLUDED.{column}' for column in columns if column not in keys]
