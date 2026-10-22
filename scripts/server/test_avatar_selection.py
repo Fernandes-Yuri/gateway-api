@@ -54,3 +54,28 @@ class AvatarSelectionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.moderation.assert_not_called()
         self.conn.execute.assert_not_called()
+
+    def test_metadata_exposes_only_shared_visual_identity(self):
+        self.conn.fetchrow.return_value = {"photo_url": "https://example.test/foto.jpg",
+                                           "avatar_identifier": None, "phone": "nao-expor", "has_diabetes": True}
+        response = self.client.get("/api/profile/outro/avatar")
+        self.assertEqual(200, response.status_code)
+        self.assertEqual({"id": "outro", "photo_url": "https://example.test/foto.jpg",
+                          "avatar_identifier": None}, response.json())
+        self.assertEqual("private, no-store", response.headers["cache-control"])
+        self.assertIn("SELECT photo_url, avatar_identifier", self.conn.fetchrow.call_args.args[0])
+
+    def test_metadata_requires_authentication(self):
+        self.client.app.dependency_overrides.clear()
+        response = self.client.get("/api/profile/outro/avatar")
+        self.assertEqual(401, response.status_code)
+        self.conn.fetchrow.assert_not_awaited()
+
+    def test_missing_avatar_profile_returns_404(self):
+        self.conn.fetchrow.return_value = None
+        self.assertEqual(404, self.client.get("/api/profile/outro/avatar").status_code)
+
+    def test_removed_photo_is_returned_as_null(self):
+        self.conn.fetchrow.return_value = {"photo_url": None, "avatar_identifier": "Star"}
+        response = self.client.get("/api/profile/outro/avatar")
+        self.assertEqual({"id": "outro", "photo_url": None, "avatar_identifier": "Star"}, response.json())

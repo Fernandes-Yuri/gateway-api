@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api_identity import firebase_uid, require_owner, require_family_access
@@ -292,6 +292,25 @@ async def get_profile(user_id: str, uid: str = Depends(firebase_uid)):
         if d.get("updated_at"):
             d["updated_at"] = d["updated_at"].isoformat()
         return d
+
+
+@router.get("/api/profile/{user_id}/avatar")
+async def profile_avatar_metadata(user_id: str, uid: str = Depends(firebase_uid)):
+    """Identidade visual compartilhada; mesma audiência autenticada do arquivo de avatar.
+
+    Não usa o endpoint clínico de perfil para exibir autores e familiares.
+    A projeção explícita impede exposição dos demais campos de profiles.
+    """
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco indisponível")
+    async with _state.db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT photo_url, avatar_identifier FROM profiles WHERE id=$1", user_id)
+    if row is None:
+        raise HTTPException(404, "Perfil não encontrado")
+    return JSONResponse({"id": user_id, "photo_url": row.get("photo_url"),
+                         "avatar_identifier": row.get("avatar_identifier")},
+                        headers={"Cache-Control": "private, no-store"})
 
 
 @router.delete("/api/profile/{user_id}", status_code=status.HTTP_200_OK)
