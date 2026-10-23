@@ -23,6 +23,8 @@ class AccountPausePostgres(unittest.IsolatedAsyncioTestCase):
         return Request({'type': 'http', 'method': method, 'path': path, 'headers': []})
 
     async def test_pause_preserves_data_blocks_old_session_and_only_fresh_login_reactivates(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute("INSERT INTO medications(user_id,name,schedule_time) VALUES ('paciente','Teste preservado','08:00')")
         with patch('core.devices.load_devices', return_value={}):
             await lifecycle.deactivate_account(self.pool, 'paciente', 'owner@example.test', 'Paciente')
         async with self.pool.acquire() as conn:
@@ -46,6 +48,7 @@ class AccountPausePostgres(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await conn.fetchval("SELECT paused_at FROM profiles WHERE id='paciente'"))
             self.assertFalse(await conn.fetchval("SELECT is_active FROM device_push_tokens WHERE user_id='paciente'"))
             self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM profiles"), 2)
+            self.assertEqual(await conn.fetchval("SELECT name FROM medications WHERE user_id='paciente'"), 'Teste preservado')
 
     async def test_paused_user_cannot_reenable_push_even_with_late_registration(self):
         with patch('core.devices.load_devices', return_value={}):
