@@ -44,15 +44,15 @@ async def register_device_token(
         await conn.execute(
             """
             INSERT INTO device_push_tokens (token, user_id, role, platform, is_active, last_seen_at)
-            SELECT $1, $2, $3, $4, true, NOW()
-            WHERE NOT EXISTS(SELECT 1 FROM profiles WHERE id=$2 AND paused_at IS NOT NULL)
+            SELECT $1::text, $2::varchar, $3::text, $4::text, true, NOW()
+            WHERE NOT EXISTS(SELECT 1 FROM profiles WHERE id=$2::varchar AND paused_at IS NOT NULL)
             ON CONFLICT (token) DO UPDATE SET
                 user_id = EXCLUDED.user_id,
                 role = EXCLUDED.role,
                 platform = EXCLUDED.platform,
                 is_active = true,
                 last_seen_at = NOW()
-            WHERE NOT EXISTS(SELECT 1 FROM profiles WHERE id=$2 AND paused_at IS NOT NULL);
+            WHERE NOT EXISTS(SELECT 1 FROM profiles WHERE id=$2::varchar AND paused_at IS NOT NULL);
             """,
             token,
             user_id,
