@@ -79,3 +79,10 @@ class AvatarSelectionTests(unittest.TestCase):
         self.conn.fetchrow.return_value = {"photo_url": None, "avatar_identifier": "Star"}
         response = self.client.get("/api/profile/outro/avatar")
         self.assertEqual({"id": "outro", "photo_url": None, "avatar_identifier": "Star"}, response.json())
+
+    def test_unavailable_moderation_keeps_existing_avatar(self):
+        self.moderation.side_effect = sync.ModerationUnavailable("fixture")
+        response = self.client.post("/api/profile/autor/avatar", files={"file": ("foto.jpg", b"foto", "image/jpeg")})
+        self.assertEqual(503, response.status_code)
+        self.assertEqual("60", response.headers["retry-after"])
+        self.conn.execute.assert_not_awaited()

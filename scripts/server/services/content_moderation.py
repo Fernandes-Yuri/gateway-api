@@ -109,7 +109,7 @@ async def _gemini_verdict(image_bytes: bytes, content_type: str) -> Optional[str
                 ]
             }
         ],
-        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 256, "responseMimeType": "application/json"},
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 1024, "responseMimeType": "application/json"},
     }
     try:
         async with httpx.AsyncClient(timeout=_MODERATION_TIMEOUT) as client:
@@ -122,8 +122,10 @@ async def _gemini_verdict(image_bytes: bytes, content_type: str) -> Optional[str
                 candidates = resp.json().get("candidates", [])
                 if candidates and "content" in candidates[0]:
                     parts = candidates[0]["content"].get("parts", [])
-                    if parts and "text" in parts[0]:
-                        return parts[0]["text"].strip()
+                    texts = [part["text"] for part in parts
+                             if isinstance(part.get("text"), str) and not part.get("thought")]
+                    if texts:
+                        return "".join(texts).strip()
             logger.warning(
                 "[moderation] Gemini HTTP %s (modelo: %s)",
                 resp.status_code, AVATAR_GEMINI_MODEL,

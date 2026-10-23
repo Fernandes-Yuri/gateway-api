@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import AsyncMock, patch
+import httpx
 from services import content_moderation as moderation
 
 
@@ -32,3 +33,16 @@ class AvatarModerationTests(unittest.IsolatedAsyncioTestCase):
              patch.object(moderation, '_groq_verdict', AsyncMock(return_value=None)):
             with self.assertRaises(moderation.ModerationUnavailable):
                 await moderation.moderate_avatar(b'fixture', 'image/jpeg')
+
+    async def test_primary_uses_avatar_model_and_structured_output(self):
+        client = AsyncMock()
+        client.post.return_value = httpx.Response(200, json={"candidates": [{"content": {"parts": [
+            {"text": "pensamento", "thought": True}, {"text": '{"aprovada":true,"motivo":""}'}]}}]})
+        with patch.object(moderation, 'GEMINI_API_KEY', 'fixture'),              patch.object(moderation.httpx, 'AsyncClient') as factory:
+            factory.return_value.__aenter__.return_value = client
+            raw = await moderation._gemini_verdict(b'fixture', 'image/jpeg')
+        self.assertEqual((True, ''), moderation._parse_verdict(raw))
+        args, kwargs = client.post.call_args
+        self.assertIn(moderation.AVATAR_GEMINI_MODEL, args[0])
+        self.assertNotIn('key=', args[0])
+        self.assertEqual('application/json', kwargs['json']['generationConfig']['responseMimeType'])
