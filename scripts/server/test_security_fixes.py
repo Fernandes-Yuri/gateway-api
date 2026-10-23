@@ -59,12 +59,7 @@ class CorsAllowlistTests(unittest.TestCase):
 
 
 class PublicReleaseCorsTests(unittest.TestCase):
-    """A pagina de download le versao/hash do app sem estar na allowlist.
-
-    braga-saude.web.app serve so a pagina de download; se /api/app/latest
-    responder sem Access-Control-Allow-Origin, o navegador bloqueia o fetch e
-    a pagina publica "Versao indisponivel" em vez do hash real do APK.
-    """
+    """Rotas aposentadas mantêm CORS para clientes antigos lerem o aviso 410."""
 
     def _client(self):
         from fastapi.testclient import TestClient
@@ -75,7 +70,7 @@ class PublicReleaseCorsTests(unittest.TestCase):
         res = self._client().request(method, path, headers=headers or {})
         return res.headers.get("access-control-allow-origin")
 
-    def test_release_endpoints_allow_any_origin(self):
+    def test_retired_release_endpoints_allow_reading_the_notice(self):
         for path in ("/api/app/latest", "/api/app/version", "/api/app/download"):
             with self.subTest(path=path):
                 self.assertEqual("*", self._acao(path))
