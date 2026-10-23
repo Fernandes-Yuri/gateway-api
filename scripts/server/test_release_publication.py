@@ -68,20 +68,22 @@ class PublicationTests(unittest.IsolatedAsyncioTestCase):
     @asynccontextmanager
     async def api(self):
         app = FastAPI(); app.include_router(app_router.router)
-        with patch.object(app_router._state, 'db_pool', self.pool), patch.object(app_router, 'RELEASES_DIR', str(self.root)):
+        with patch.object(app_router._state, 'db_pool', self.pool):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='https://api.fixture') as client:
                 yield client
 
-    async def test_metadata_and_download_remain_bound_across_promotion(self):
+    async def test_public_routes_stay_retired_even_with_an_active_catalog(self):
         old = self.stage(31, b'old-apk'); await self.publish(old)
         async with self.api() as client:
-            snapshot = (await client.get('/api/app/latest')).json()
+            self.assertEqual((await client.get('/api/app/latest')).status_code, 410)
             new = self.stage(32, b'new-apk'); await self.publish(new)
-            previous = await client.get(snapshot['download_url'])
-            latest = await client.get('/api/app/download')
-        self.assertEqual(previous.content, b'old-apk')
-        self.assertEqual(latest.content, b'new-apk')
-        self.assertEqual(hashlib.sha256(previous.content).hexdigest(), snapshot['sha256_hash'].lower())
+            for path in ('/api/app/latest', '/api/app/version', '/api/app/download',
+                         '/api/app/download?version_code=31', '/api/app/download?version_code=32'):
+                response = await client.get(path)
+                self.assertEqual(response.status_code, 410)
+                self.assertFalse(response.json()['available'])
+                self.assertNotIn('download_url', response.json())
+                self.assertNotIn('sha256_hash', response.json())
 
     async def test_database_failure_preserves_old_active_file_and_retry_succeeds(self):
         old = self.stage(31, b'old-apk'); await self.publish(old)
@@ -126,10 +128,10 @@ class PublicationTests(unittest.IsolatedAsyncioTestCase):
         value = self.stage(); await self.publish(value)
         path = self.root / value.filename; path.chmod(0o600); path.write_bytes(b'bad')
         async with self.api() as client:
-            self.assertEqual((await client.get('/api/app/download')).status_code, 503)
+            self.assertEqual((await client.get('/api/app/download')).status_code, 410)
             async with self.pool.acquire() as conn:
                 await conn.execute("UPDATE app_releases SET filename='../private.apk'")
-            self.assertEqual((await client.get('/api/app/download')).status_code, 503)
+            self.assertEqual((await client.get('/api/app/download')).status_code, 410)
 
     async def test_private_control_probes_publishes_and_notifies_only_once(self):
         value = self.stage()

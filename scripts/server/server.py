@@ -53,7 +53,7 @@ from core.dataset import (
 
 # Configuração central (Fase B, passo 1 — doc 36): env vars, defaults e paths.
 from config import (
-    DATASET_PATH, RELEASES_DIR,
+    DATASET_PATH,
     DATABASE_URL,
     GROQ_API_URL, MODEL_ID, MODEL_REST, GROQ_API_KEY_CHAT,
     SERVICE_ACCOUNT_PATH,
@@ -162,18 +162,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Distribuicao publica do app: metadados de versao/hash e o proprio APK sao
-# conteudo estatico sem credenciais. O site oficial e a pagina de download
-# (braga-saude.web.app/app-download.html) buscam version + SHA-256 por fetch;
-# sem ACAO aberto nesses caminhos o navegador engola a resposta e a pagina
-# mostra "Versao indisponivel". Nao entra na allowlist da API de proposito:
-# aqui nao ha cookie nem Bearer, entao "*" e seguro e nao abre o resto da API.
+# Clientes legados também conseguem ler o aviso de aposentadoria (410).
+# Nenhum desses caminhos serve mais metadados ou bytes de APK.
 PUBLIC_APP_PATHS = ('/api/app/latest', '/api/app/download', '/api/app/version')
 
 
 @app.middleware("http")
 async def public_app_release_cors(request: Request, call_next):
-    """CORS aberto só nos endpoints públicos de distribuição do APK."""
+    """CORS apenas para os avisos públicos das rotas aposentadas."""
     path = request.url.path.rstrip('/') or '/'
     if path not in PUBLIC_APP_PATHS:
         return await call_next(request)
@@ -300,7 +296,6 @@ def _propagate_db_pool():
         _router._state.db_pool = db_pool
 
 
-release_control_server = None
 intake_tasks = []
 conteudo_tasks = []
 app.include_router(whatsapp_intake_router.router)
@@ -309,7 +304,7 @@ app.include_router(whatsapp_internal_router.router)
 
 @app.on_event("startup")
 async def startup():
-    global db_pool, release_control_server, intake_tasks, conteudo_tasks
+    global db_pool, intake_tasks, conteudo_tasks
     if HAS_POSTGRES:
         for attempt in range(1, 6):
             try:
@@ -333,14 +328,7 @@ async def startup():
             from services import conteudo_verificacao
             if conteudo_verificacao.habilitado():
                 conteudo_tasks = conteudo_verificacao.start(db_pool)
-            try:
-                from release_control import start_release_control
-                release_control_server = await start_release_control(
-                    RELEASES_DIR, lambda: app_router._state.db_pool, PUBLIC_API_BASE_URL,
-                    app_router.notify_published_release)
-            except Exception as error:
-                print(f"[Release Control] Indisponível: {type(error).__name__}")
-
+            # O canal público de APK foi aposentado. Não inicia o socket de promoção.
 
             try:
                 from services.price_cascade import seed_inicial
@@ -388,24 +376,6 @@ async def startup():
                 purge_expired_blocked_ips, 'interval', minutes=5,
                 id="purge_security_blocked_ips", replace_existing=True, max_instances=1,
             )
-
-            # D52: retencao de releases de APK (~36MB cada). Mantem so os 3
-            # mais recentes; protege o release ativo e o arquivo servido.
-            async def purge_old_release_apks():
-                try:
-                    from release_retention import purge_old_releases
-                    res = await purge_old_releases(db_pool, RELEASES_DIR, keep=3)
-                    if res["apagados"]:
-                        print(f"[RETENTION] {len(res['apagados'])} APK(s) antigo(s) removido(s): {res['apagados']}")
-                except Exception as err:
-                    print(f"[RETENTION] Falha na limpeza de releases: {err}")
-            retention_scheduler.add_job(
-                purge_old_release_apks, 'interval', hours=6,
-                id="purge_old_release_apks", replace_existing=True, max_instances=1,
-                coalesce=True,
-            )
-            # Limpeza imediata na inicializacao (nao espera 6h para a 1a passada)
-            await purge_old_release_apks()
 
             # doc 10 §4.6: rotinas pró-ativas (09h / 14h30 / 20h30). Antes isto
             # era uma função solta que criava um scheduler aninhado e nunca era
@@ -497,13 +467,7 @@ async def scheduled_proactive_job(periodo: str):
 
 @app.on_event("shutdown")
 async def shutdown():
-    global db_pool, release_control_server
-    if release_control_server:
-        listener, path = release_control_server
-        listener.close()
-        await listener.wait_closed()
-        path.unlink(missing_ok=True)
-        release_control_server = None
+    global db_pool
     telemetry = globals().get('security_telemetry')
     if telemetry:
         await telemetry.stop()
