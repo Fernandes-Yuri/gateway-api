@@ -50,6 +50,8 @@ async def delete_account(pool, user_id: str, *, actor: str, ip: str = "", fireba
     async with pool.acquire() as conn:
         async with conn.transaction():
             profile = await conn.fetchrow("SELECT id FROM profiles WHERE id=$1 FOR UPDATE", user_id)
+            # Sem FK para profiles: também remove resíduos em uma repetição da exclusão.
+            await conn.execute("DELETE FROM device_push_tokens WHERE user_id=$1", user_id)
             if profile:
                 files = await conn.fetch("SELECT filename FROM prescription_files WHERE patient_id=$1", user_id)
                 await conn.execute(
