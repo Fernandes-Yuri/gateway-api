@@ -25,6 +25,7 @@ async def firebase_uid(request: Request):
         mark_signal('invalid_auth')
         raise HTTPException(401, 'Sessão inválida ou expirada. Entre novamente.')
     request.state.security_verified_uid = uid
+    request.state.firebase_auth_time = auth_time
     from user_moderation import require_not_restricted
     try:
         await require_not_restricted(uid, request, auth_time=auth_time)

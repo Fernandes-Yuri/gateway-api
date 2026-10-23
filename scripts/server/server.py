@@ -364,6 +364,8 @@ async def startup():
                     jobs = await conn.fetch("SELECT user_id FROM account_storage_cleanup ORDER BY created_at LIMIT 100")
                 for job in jobs:
                     await cleanup_account_files(db_pool, job["user_id"])
+                from services.account_lifecycle import process_account_mail
+                await process_account_mail(db_pool)
             retention_scheduler.add_job(
                 cleanup_deleted_accounts, 'interval', minutes=5,
                 id="cleanup_deleted_accounts", replace_existing=True, max_instances=1,
@@ -458,7 +460,7 @@ async def scheduled_proactive_job(periodo: str):
                 SELECT d.token, d.user_id, p.full_name
                 FROM device_push_tokens d
                 JOIN profiles p ON p.id = d.user_id
-                WHERE d.is_active = true
+                WHERE d.is_active = true AND p.paused_at IS NULL
                   AND NOT EXISTS (
                     SELECT 1 FROM vital_signs v
                     WHERE v.user_id = d.user_id

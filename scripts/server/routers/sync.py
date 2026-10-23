@@ -314,12 +314,37 @@ async def profile_avatar_metadata(user_id: str, uid: str = Depends(firebase_uid)
 
 
 @router.delete("/api/profile/{user_id}", status_code=status.HTTP_200_OK)
-async def delete_profile(user_id: str, uid: str = Depends(firebase_uid)):
+async def delete_profile(user_id: str, background_tasks: BackgroundTasks, uid: str = Depends(firebase_uid)):
     if _state.db_pool is None:
         raise HTTPException(503, "Banco indisponível")
     require_owner(uid, user_id)
     from services.account_deletion import delete_account
-    return await delete_account(_state.db_pool, user_id, actor="próprio titular")
+    from services.account_lifecycle import account_contact, process_account_mail
+    email, name = await account_contact(user_id)
+    result = await delete_account(_state.db_pool, user_id, actor="próprio titular", receipt_email=email, receipt_name=name)
+    background_tasks.add_task(process_account_mail, _state.db_pool)
+    return result
+
+
+@router.post("/api/profile/{user_id}/deactivate")
+async def deactivate_profile(user_id: str, background_tasks: BackgroundTasks, uid: str = Depends(firebase_uid)):
+    require_owner(uid, user_id)
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco indisponível.")
+    from services.account_lifecycle import account_contact, deactivate_account, process_account_mail
+    email, name = await account_contact(user_id)
+    result = await deactivate_account(_state.db_pool, user_id, email, name)
+    background_tasks.add_task(process_account_mail, _state.db_pool)
+    return result
+
+
+@router.post("/api/profile/{user_id}/reactivate")
+async def reactivate_profile(user_id: str, request: Request, uid: str = Depends(firebase_uid)):
+    require_owner(uid, user_id)
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco indisponível.")
+    from services.account_lifecycle import reactivate_account
+    return await reactivate_account(_state.db_pool, user_id, getattr(request.state, "firebase_auth_time", None))
 
 
 # =============================================================
