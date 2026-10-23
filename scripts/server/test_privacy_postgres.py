@@ -105,6 +105,18 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM device_push_tokens WHERE user_id='paciente'"), 0)
             self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM user_deletion_logs WHERE user_id='paciente'"), 1)
 
+    async def test_deletion_removes_posts_and_cross_account_reactions_but_preserves_other_posts(self):
+        async with self.pool.acquire() as conn:
+            patient_post = await conn.fetchval("INSERT INTO social_posts(user_id,post_type,title) VALUES ('paciente','milestone','Teste') RETURNING id")
+            other_post = await conn.fetchval("INSERT INTO social_posts(user_id,post_type,title) VALUES ('cuidador','milestone','Preservado') RETURNING id")
+            await conn.execute("INSERT INTO post_reactions(post_id,user_id) VALUES ($1,'cuidador'),($2,'paciente')", patient_post, other_post)
+        with patch.object(account_deletion, "cleanup_account_files", AsyncMock(return_value=True)):
+            await account_deletion.delete_account(self.pool, "paciente", actor="titular")
+        async with self.pool.acquire() as conn:
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM social_posts WHERE user_id='paciente'"), 0)
+            self.assertEqual(await conn.fetchval("SELECT id FROM social_posts WHERE user_id='cuidador'"), other_post)
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM post_reactions"), 0)
+
     async def test_failed_transaction_rolls_back_every_deletion_and_cleanup_job(self):
         async with self.pool.acquire() as conn:
             await conn.execute("INSERT INTO feedbacks(user_id,category,message) VALUES ('paciente','bug','Teste')")

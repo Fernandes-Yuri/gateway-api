@@ -818,7 +818,7 @@ async def get_social_feed(
     # exige conta logada e o limit e forcado a <=100 pela validacao do Query.
     db_pool = _state.db_pool
     if not db_pool:
-        return []
+        raise HTTPException(503, "Mural temporariamente indisponível. Tente novamente.")
     query = """
     SELECT sp.id, sp.user_id, sp.post_type, sp.title, sp.description, sp.created_at, sp.edited_at,
            sp.visibility,
