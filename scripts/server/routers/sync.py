@@ -396,7 +396,7 @@ async def upload_profile_avatar(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Content-Length inválido.") from exc
 
-    content = await file.read()
+    content = await file.read(AVATAR_MAX_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="A foto enviada está vazia.")
     if len(content) > AVATAR_MAX_BYTES:
@@ -414,10 +414,11 @@ async def upload_profile_avatar(
         logger.warning("[avatar] Moderacao indisponivel para user_id=%s — upload recusado", user_id)
         raise HTTPException(
             status_code=503,
-            detail="Não foi possível verificar a foto agora. Tente novamente em instantes.",
+            detail="A verificação de publicação está indisponível. Sua foto atual foi mantida. Tente novamente em instantes.",
+            headers={"Retry-After": "60"},
         )
     if not aprovada:
-        logger.info("[avatar] Foto reprovada na moderacao user_id=%s motivo=%s", user_id, motivo)
+        logger.info("[avatar] Foto reprovada na moderacao")
         raise HTTPException(
             status_code=422,
             detail=motivo or "Foto não aprovada. Escolha outra imagem.",
