@@ -316,9 +316,9 @@ async def profile_avatar_metadata(user_id: str, uid: str = Depends(firebase_uid)
 
 @router.delete("/api/profile/{user_id}", status_code=status.HTTP_200_OK)
 async def delete_profile(user_id: str, background_tasks: BackgroundTasks, uid: str = Depends(firebase_uid)):
+    require_owner(uid, user_id)
     if _state.db_pool is None:
         raise HTTPException(503, "Banco indisponível")
-    require_owner(uid, user_id)
     from services.account_deletion import delete_account
     from services.account_lifecycle import account_contact, process_account_mail
     email, name = await account_contact(user_id)
