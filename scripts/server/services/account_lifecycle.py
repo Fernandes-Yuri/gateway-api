@@ -28,7 +28,7 @@ async def deactivate_account(pool, user_id, email="", name=""):
             if row is None:
                 raise HTTPException(404, "Perfil não encontrado.")
             if row["paused_at"] is None:
-                paused = await conn.fetchval("UPDATE profiles SET paused_at=NOW() WHERE id=$1 RETURNING paused_at", user_id)
+                paused = await conn.fetchval("UPDATE profiles SET paused_at=NOW(),session_revoked_at=NOW(),session_version=session_version+1 WHERE id=$1 RETURNING paused_at", user_id)
                 await queue_mail(conn, user_id, "paused", email, row["full_name"] or name,
                                  f"paused:{user_id}:{paused.isoformat()}")
             await conn.execute("UPDATE device_push_tokens SET is_active=FALSE WHERE user_id=$1", user_id)

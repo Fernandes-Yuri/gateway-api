@@ -39,6 +39,9 @@ class AccountPausePostgres(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(HTTPException):
                 await lifecycle.reactivate_account(self.pool, 'paciente', old_time)
             await lifecycle.reactivate_account(self.pool, 'paciente', old_time + 2)
+            with self.assertRaises(HTTPException) as still_revoked:
+                await user_moderation.require_not_restricted('paciente', self.request('GET', '/api/profile/paciente'), auth_time=old_time)
+            self.assertEqual(still_revoked.exception.status_code, 401)
         async with self.pool.acquire() as conn:
             self.assertIsNone(await conn.fetchval("SELECT paused_at FROM profiles WHERE id='paciente'"))
             self.assertFalse(await conn.fetchval("SELECT is_active FROM device_push_tokens WHERE user_id='paciente'"))
