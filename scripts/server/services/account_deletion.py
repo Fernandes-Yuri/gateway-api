@@ -44,7 +44,7 @@ async def cleanup_account_files(pool, user_id: str) -> bool:
     return True
 
 
-async def delete_account(pool, user_id: str, *, actor: str, ip: str = "", firebase_cleanup: bool = False) -> dict:
+async def delete_account(pool, user_id: str, *, actor: str, ip: str = "", firebase_cleanup: bool = False, receipt_email: str = "", receipt_name: str = "") -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", user_id):
         raise HTTPException(422, "Identificador de conta inválido.")
     async with pool.acquire() as conn:
@@ -58,6 +58,8 @@ async def delete_account(pool, user_id: str, *, actor: str, ip: str = "", fireba
                 "(SELECT id FROM social_posts WHERE user_id=$1)", user_id)
             await conn.execute("DELETE FROM social_posts WHERE user_id=$1", user_id)
             if profile:
+                from services.account_lifecycle import queue_mail
+                await queue_mail(conn, user_id, "deleted", receipt_email, receipt_name, f"deleted:{user_id}")
                 files = await conn.fetch("SELECT filename FROM prescription_files WHERE patient_id=$1", user_id)
                 await conn.execute(
                     "INSERT INTO account_storage_cleanup(user_id,prescription_filenames,firebase_cleanup_required) "

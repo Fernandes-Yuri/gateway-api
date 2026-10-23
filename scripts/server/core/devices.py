@@ -44,13 +44,15 @@ async def register_device_token(
         await conn.execute(
             """
             INSERT INTO device_push_tokens (token, user_id, role, platform, is_active, last_seen_at)
-            VALUES ($1, $2, $3, $4, true, NOW())
+            SELECT $1, $2, $3, $4, true, NOW()
+            WHERE NOT EXISTS(SELECT 1 FROM profiles WHERE id=$2 AND paused_at IS NOT NULL)
             ON CONFLICT (token) DO UPDATE SET
                 user_id = EXCLUDED.user_id,
                 role = EXCLUDED.role,
                 platform = EXCLUDED.platform,
                 is_active = true,
-                last_seen_at = NOW();
+                last_seen_at = NOW()
+            WHERE NOT EXISTS(SELECT 1 FROM profiles WHERE id=$2 AND paused_at IS NOT NULL);
             """,
             token,
             user_id,
@@ -69,7 +71,7 @@ async def get_active_tokens_for_caregivers(pool, exclude_user_id: Optional[str] 
             rows = await conn.fetch(
                 """
                 SELECT token FROM device_push_tokens
-                WHERE LOWER(role) = 'caregiver' AND is_active = true AND user_id != $1;
+                WHERE NOT EXISTS(SELECT 1 FROM profiles p WHERE p.id=device_push_tokens.user_id AND p.paused_at IS NOT NULL) AND LOWER(role) = 'caregiver' AND is_active = true AND user_id != $1;
                 """,
                 exclude_user_id,
             )
@@ -77,7 +79,7 @@ async def get_active_tokens_for_caregivers(pool, exclude_user_id: Optional[str] 
             rows = await conn.fetch(
                 """
                 SELECT token FROM device_push_tokens
-                WHERE LOWER(role) = 'caregiver' AND is_active = true;
+                WHERE NOT EXISTS(SELECT 1 FROM profiles p WHERE p.id=device_push_tokens.user_id AND p.paused_at IS NOT NULL) AND LOWER(role) = 'caregiver' AND is_active = true;
                 """
             )
         if rows and isinstance(rows, (list, tuple)):
@@ -93,7 +95,7 @@ async def get_active_devices_for_users(pool) -> List[Dict[str, Any]]:
         rows = await conn.fetch(
             """
             SELECT token, user_id, role, platform FROM device_push_tokens
-            WHERE is_active = true;
+            WHERE is_active = true AND NOT EXISTS(SELECT 1 FROM profiles p WHERE p.id=device_push_tokens.user_id AND p.paused_at IS NOT NULL);
             """
         )
         if rows and isinstance(rows, (list, tuple)):
@@ -125,7 +127,7 @@ async def load_devices_by_user(pool, legacy_loader=None) -> Dict[str, List[Dict[
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT token, user_id, role, platform FROM device_push_tokens WHERE is_active = true;"
+                "SELECT token, user_id, role, platform FROM device_push_tokens WHERE is_active = true AND NOT EXISTS(SELECT 1 FROM profiles p WHERE p.id=device_push_tokens.user_id AND p.paused_at IS NOT NULL);"
             )
         grouped = {}
         for row in rows or []:
@@ -141,9 +143,15 @@ async def load_devices_by_user(pool, legacy_loader=None) -> Dict[str, List[Dict[
             })
         if grouped:
             return grouped
+        # Compatibilidade sem reintroduzir destinatários pausados do JSON.
+        async with pool.acquire() as conn:
+            paused = await conn.fetch("SELECT id FROM profiles WHERE paused_at IS NOT NULL")
+        denied = {row.get("id") for row in paused}
+        return {uid: values for uid, values in _legacy().items() if uid not in denied}
     except Exception as error:
         print(f"[Devices] Falha ao ler device_push_tokens; usando JSON legado: {error}")
-    return _legacy()
+    # Não contorna a pausa com o espelho legado após falha no banco.
+    return {}
 
 
 async def migrate_legacy_json_devices(pool) -> int:

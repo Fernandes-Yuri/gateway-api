@@ -38,6 +38,7 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(migration.read_text(encoding="utf-8"))
             await conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)")
             await conn.execute((ROOT / "migrations/056_firebase_account_reconciliation.sql").read_text(encoding="utf-8"))
+            await conn.execute((ROOT / "migrations/071_account_pause_and_mail.sql").read_text(encoding="utf-8"))
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('paciente','Paciente'),('cuidador','Cuidador')")
 
     async def test_exam_storage_removal_preserves_patient_and_medications(self):
