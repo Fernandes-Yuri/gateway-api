@@ -8,6 +8,7 @@ secrets para OTP (CSPRNG), transacoes Postgres, reCAPTCHA server-side,
 alerta de seguranca ao dono da conta (doc 10 §4.5) e AUD-G13 (falha do
 Firebase nunca e engolida com sucesso).
 """
+import asyncio
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional
@@ -49,6 +50,19 @@ class CheckAccountRequest(BaseModel):
     recaptchaToken: Optional[str] = None
 
 
+async def _firebase_user_for_email(identifier: str):
+    """Ausência é diferente de indisponibilidade; nunca altera uma conta na consulta."""
+    if not _state.has_fcm or not _state.firebase_admin or not _state.firebase_admin._apps:
+        raise HTTPException(503, "Serviço de autenticação indisponível. Tente novamente mais tarde.")
+    from firebase_admin import auth as fb_auth
+    try:
+        return await asyncio.to_thread(fb_auth.get_user_by_email, identifier)
+    except fb_auth.UserNotFoundError:
+        return None
+    except Exception:
+        raise HTTPException(503, "Não foi possível consultar sua conta. Tente novamente mais tarde.")
+
+
 @router.post("/api/auth/otp/send")
 async def send_auth_otp(request: Request, req: OtpSendRequest, background_tasks: BackgroundTasks):
     """
@@ -60,8 +74,10 @@ async def send_auth_otp(request: Request, req: OtpSendRequest, background_tasks:
         raise HTTPException(status_code=503, detail="Banco de dados não disponível")
 
     identifier = req.identifier.strip().lower()
-    channel = req.channel.upper()
-    purpose = req.purpose.upper()
+    channel = (req.channel or "").strip().upper()
+    purpose = (req.purpose or "").strip().upper()
+    if purpose not in {"REGISTRATION", "PASSWORD_RESET", "EMAIL_VERIFICATION"}:
+        raise HTTPException(400, "Finalidade de código inválida.")
 
     if not identifier:
         raise HTTPException(status_code=400, detail="Identificador não informado")
@@ -79,6 +95,17 @@ async def send_auth_otp(request: Request, req: OtpSendRequest, background_tasks:
             status_code=503,
             detail="Serviço de e-mail não configurado. Configure o Gmail SMTP no servidor.",
         )
+
+    if purpose in {"REGISTRATION", "PASSWORD_RESET"}:
+        user = await _firebase_user_for_email(identifier)
+        if purpose == "REGISTRATION":
+            async with db_pool.acquire() as conn:
+                profile_exists = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM profiles WHERE lower(id)=$1 OR lower(phone)=$1)", identifier)
+            if user is not None or profile_exists:
+                raise HTTPException(409, "Este e-mail já possui cadastro. Faça login ou recupere sua senha.")
+        elif user is None:
+            raise HTTPException(404, "Não encontramos uma conta com este e-mail. Confira o endereço ou crie seu cadastro.")
 
     # Gera codigo aleatorio de 6 digitos. secrets (CSPRNG) e obrigatorio:
     # random.randint usa um PRNG nao criptografico e o codigo e previsivel.
@@ -214,7 +241,7 @@ async def reset_password(req: PasswordResetRequest, request: Request):
 
     identifier = req.identifier.strip().lower()
     reset_token = req.resetToken.strip()
-    new_password = req.newPassword.strip()
+    new_password = req.newPassword
 
     if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="A nova senha deve possuir no mínimo 6 caracteres.")
@@ -236,27 +263,21 @@ async def reset_password(req: PasswordResetRequest, request: Request):
             if not row:
                 raise HTTPException(status_code=403, detail="Token de redefinição inválido, expirado ou não autorizado.")
 
+            user_record = await _firebase_user_for_email(identifier)
+            if user_record is None:
+                raise HTTPException(404, "A conta deste e-mail não existe mais. Confira o endereço ou crie seu cadastro.")
+
             # Invalida o token apos o uso
             await conn.execute("UPDATE auth_verification_codes SET reset_token = NULL WHERE id = $1", row["id"])
 
-    # Atualizacao no Firebase Auth se disponivel
-    firebase_updated = False
-    if _state.has_fcm and _state.firebase_admin._apps:
-        try:
-            from firebase_admin import auth as fb_auth
-            user_record = fb_auth.get_user_by_email(identifier)
-            fb_auth.update_user(user_record.uid, password=new_password)
-            firebase_updated = True
-            print(f"[Auth Service] Senha atualizada no Firebase Auth para {identifier}")
-        except Exception as e:
-            # AUD-G13: a falha NAO pode ser engolida com mensagem de sucesso. O
-            # usuario acreditaria que a senha foi trocada e nao entenderia por que
-            # o login antigo ainda funciona (e ficaria sem saber o que fazer).
-            print(f"[Auth Service Firebase Error] {e}")
-            raise HTTPException(
-                status_code=503,
-                detail="Não foi possível atualizar a senha no Firebase Auth. O token de redefinição já foi consumido — solicite um novo código."
-            )
+    try:
+        from firebase_admin import auth as fb_auth
+        await asyncio.to_thread(fb_auth.update_user, user_record.uid, password=new_password)
+    except fb_auth.UserNotFoundError:
+        raise HTTPException(404, "A conta deste e-mail não existe mais. Crie seu cadastro para continuar.")
+    except Exception:
+        raise HTTPException(503, "Não foi possível atualizar a senha. Solicite um novo código e tente novamente.")
+    firebase_updated = True
 
     # doc 10 §4.5: alerta de seguranca ao dono da conta. Se a troca partiu de
     # um OTP legitimo o e-mail e so um recibo; se partiu de um invasor, o dono
@@ -357,22 +378,10 @@ async def check_account_status(request: Request, req: CheckAccountRequest):
                 profile_exists = True
                 profile_id = row["id"]
 
-    # Checa tambem no Firebase Auth se for e-mail
-    fb_user = None
-    is_google_user = False
-    if _state.has_fcm and _state.firebase_admin._apps and "@" in identifier:
-        try:
-            from firebase_admin import auth as fb_auth
-            fb_user = fb_auth.get_user_by_email(identifier)
-            if fb_user:
-                if not profile_id:
-                    profile_id = fb_user.uid
-                for provider in fb_user.provider_data:
-                    if provider.provider_id == "google.com":
-                        is_google_user = True
-                        break
-        except Exception:
-            fb_user = None
+    fb_user = await _firebase_user_for_email(identifier) if "@" in identifier else None
+    is_google_user = bool(fb_user and any(p.provider_id == "google.com" for p in fb_user.provider_data))
+    if fb_user and not profile_id:
+        profile_id = fb_user.uid
 
     # Se descobriu UID no Firebase mas ainda nao achou perfil, busca pelo UID no banco
     if fb_user and not profile_exists and db_pool:
@@ -382,24 +391,10 @@ async def check_account_status(request: Request, req: CheckAccountRequest):
                 profile_exists = True
                 profile_id = fb_user.uid
 
-    # Cenario 1: Conta foi deletada no nosso banco (perfil nao existe), mas resquicio ficou no Firebase
-    if fb_user and not profile_exists:
-        try:
-            from firebase_admin import auth as fb_auth
-            fb_auth.delete_user(fb_user.uid)
-            print(f"[Auth Cleanup] Usuário deletado no banco purgado do Firebase Auth: {fb_user.uid}")
-        except Exception as e:
-            print(f"[Auth Cleanup Error] {e}")
-
-        return {
-            "exists": False,
-            "provider": "DELETED",
-            "canCreateDirect": True,
-            "message": "Conta anterior foi excluída. Você pode criar um novo cadastro diretamente conosco."
-        }
-
+    # Um cadastro Firebase sem perfil pode estar concluindo o onboarding.
+    # Consultar disponibilidade nunca autoriza excluir ou recriar essa identidade.
     # Cenario 2: Usuario com conta Google ativa
-    if is_google_user and profile_exists:
+    if is_google_user:
         return {
             "exists": True,
             "provider": "GOOGLE",
@@ -408,7 +403,7 @@ async def check_account_status(request: Request, req: CheckAccountRequest):
         }
 
     # Cenario 3: Conta direta ja cadastrada e ativa
-    if profile_exists:
+    if profile_exists or fb_user is not None:
         return {
             "exists": True,
             "provider": "DIRECT",
