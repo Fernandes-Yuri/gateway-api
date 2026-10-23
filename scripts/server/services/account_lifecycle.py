@@ -10,8 +10,10 @@ async def account_contact(user_id):
     try:
         user = await asyncio.to_thread(auth.get_user, user_id)
         return (user.email or "").strip(), user.display_name or ""
-    except Exception:
+    except auth.UserNotFoundError:
         return "", ""
+    except Exception:
+        raise HTTPException(503, "Não foi possível preparar a confirmação da conta. Tente novamente.")
 
 
 async def queue_mail(conn, user_id, event_type, email, name, event_key):
@@ -69,6 +71,7 @@ async def process_account_mail(pool, limit=20):
                     if row["event_type"] == "deleted":
                         if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=$1)", uid):
                             # Não envia comprovante antigo nem expurga uma conta recriada.
+                            await conn.execute("DELETE FROM account_lifecycle_mail WHERE event_key=$1", key)
                             continue
                         if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM account_storage_cleanup WHERE user_id=$1)", uid):
                             continue
