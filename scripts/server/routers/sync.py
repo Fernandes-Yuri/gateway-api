@@ -11,6 +11,7 @@ rate-limiter por IP, sanitize_zero_trust_text em campos livres, faixa
 clinica valida em vitais (SBC/SBD), status de exame em lista fechada e
 LGPD Art. 18 no delete de conta (ON DELETE CASCADE).
 """
+import asyncio
 import base64
 import json
 import logging
@@ -322,6 +323,15 @@ async def delete_profile(user_id: str, background_tasks: BackgroundTasks, uid: s
     from services.account_lifecycle import account_contact, process_account_mail
     email, name = await account_contact(user_id)
     result = await delete_account(_state.db_pool, user_id, actor="próprio titular", receipt_email=email, receipt_name=name)
+    # A solicitação explícita do titular conclui também a identidade de acesso.
+    # Clientes antigos podem repetir user.delete(); UserNotFound continua idempotente.
+    from firebase_admin import auth as fb_auth
+    try:
+        await asyncio.to_thread(fb_auth.delete_user, user_id)
+    except fb_auth.UserNotFoundError:
+        pass
+    except Exception:
+        raise HTTPException(503, "Os dados foram removidos, mas a exclusão do acesso ainda está pendente. Tente novamente para concluir.")
     background_tasks.add_task(process_account_mail, _state.db_pool)
     return result
 
