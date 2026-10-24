@@ -1132,7 +1132,6 @@ async def sync_league_membership(m: LeagueMembershipSyncDto, uid: str = Depends(
 
 @router.post("/api/sync/audit-log")
 async def sync_audit_log(a: AuditLogSyncDto, uid: str = Depends(firebase_uid)):
-    require_owner(uid, a.userId)
     db_pool = _state.db_pool
     if not db_pool:
         return {"status": "offline_mode"}
@@ -1144,6 +1143,8 @@ async def sync_audit_log(a: AuditLogSyncDto, uid: str = Depends(firebase_uid)):
     """
     log_id = a.id or str(uuid.uuid4())
     async with db_pool.acquire() as conn:
+        if uid != a.userId:
+            await require_family_access(conn, uid, a.userId)
         row = await conn.fetchrow(query, log_id, a.userId, a.eventType, a.action, a.metadataJson)
     return {"status": "success", "id": str(row["id"]) if row else log_id}
 
