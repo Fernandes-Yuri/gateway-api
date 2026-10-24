@@ -50,3 +50,9 @@ class CareOsPermissionTests(unittest.IsolatedAsyncioTestCase):
         conn.fetchrow.return_value = {"caregiver_role": "CAREGIVER_VIEWER", "permissions": ["medication:take"]}
         result = await require_patient_permission(conn, "caregiver", "patient", "medication:take")
         self.assertEqual(result["role"], "CAREGIVER_VIEWER")
+
+    async def test_viewer_has_care_read_permission_for_symptoms(self):
+        conn = AsyncMock()
+        conn.fetchrow.return_value = {"caregiver_role": "CAREGIVER_VIEWER", "permissions": []}
+        result = await require_patient_permission(conn, "caregiver", "patient", "care:read")
+        self.assertEqual(result["role"], "CAREGIVER_VIEWER")
