@@ -240,6 +240,7 @@ async def get_grocery_prices(request: Request):
 @router.get("/api/admin/grocery-prices")
 async def list_admin_grocery_prices(
     request: Request,
+    include_inactive: bool = False,
     _auth=Depends(require_service_token)
 ):
     """Lista o catálogo de ingredientes com preço resolvido (manual > comunidade > estimado)."""
@@ -249,7 +250,7 @@ async def list_admin_grocery_prices(
     try:
         async with _state.db_pool.acquire() as conn:
             async with conn.transaction(readonly=True, isolation="repeatable_read"):
-                items = await admin_price_rows(conn, AVERAGES_SQL)
+                items = await admin_price_rows(conn, AVERAGES_SQL, active_only=not include_inactive)
         return {"success": True, "total": len(items), "items": items}
     except Exception as e:
         raise HTTPException(500, f"Erro ao consultar itens: {e}")
@@ -258,6 +259,7 @@ async def list_admin_grocery_prices(
 @router.get("/api/admin/grocery-prices/missing")
 async def list_missing_grocery_prices(
     request: Request,
+    include_inactive: bool = False,
     _auth=Depends(require_service_token)
 ):
     """Lista ingredientes sem preço resolvido, pendentes de definição manual."""
@@ -267,7 +269,7 @@ async def list_missing_grocery_prices(
     try:
         async with _state.db_pool.acquire() as conn:
             async with conn.transaction(readonly=True, isolation="repeatable_read"):
-                items = [row for row in await admin_price_rows(conn, AVERAGES_SQL) if row["needs_manual"]]
+                items = [row for row in await admin_price_rows(conn, AVERAGES_SQL, active_only=not include_inactive) if row["needs_manual"]]
         return {"success": True, "total": len(items), "items": items}
     except Exception as e:
         raise HTTPException(500, f"Erro ao consultar pendências: {e}")
@@ -730,19 +732,23 @@ async def list_grocery_retail_cards(category: Optional[str] = None, q: Optional[
 
 
 @router.get("/api/admin/grocery/retail")
-async def get_admin_grocery_retail(_auth=Depends(require_service_token)):
+async def get_admin_grocery_retail(
+    include_inactive: bool = False,
+    _auth=Depends(require_service_token)
+):
     if not _state.db_pool:
         raise HTTPException(503, "Catálogo de compras indisponível.")
     async with _state.db_pool.acquire() as conn:
         async with conn.transaction(readonly=True, isolation="repeatable_read"):
-            cards = await load_cards(conn, include_inactive=True)
+            cards = await load_cards(conn, include_inactive=include_inactive)
             markets = await conn.fetch("SELECT * FROM grocery_markets ORDER BY name,id")
-            ingredients = await conn.fetch("""SELECT slug,name,unit,active,details->>'group' AS group,
+            active_clause = "" if include_inactive else "WHERE active = TRUE "
+            ingredients = await conn.fetch(f"""SELECT slug,name,unit,active,details->>'group' AS group,
                 COALESCE((details->>'minimum')::numeric,0) AS minimum,
                 COALESCE((details->>'step')::numeric,1) AS step,
                 (details->>'grams_per_unit')::numeric AS grams_per_unit,
                 COALESCE(details->'aliases','[]'::jsonb) AS aliases
-                FROM grocery_ingredients ORDER BY name""")
+                FROM grocery_ingredients {active_clause}ORDER BY name""")
     return {"cards": cards, "markets": [dict(m) for m in markets],
             "ingredients": [dict(i) for i in ingredients]}
 
