@@ -1,5 +1,5 @@
 """Retail nutrition values are totals per package, prices are BRL per package."""
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal, Optional
 from pydantic import BaseModel, Field, HttpUrl, AwareDatetime, model_validator
@@ -11,6 +11,17 @@ class MarketIn(BaseModel):
     logo_url: HttpUrl | Literal[""] = ""
     website_url: HttpUrl | Literal[""] = ""
     active: bool = True
+    cart_type: Literal['VTEX', 'SHOPIFY', 'CUSTOM_PARAM', 'ASSISTED'] = 'VTEX'
+    cart_url_template: Optional[str] = Field(default=None, max_length=2000)
+
+    @model_validator(mode='after')
+    def valid_cart_template(self):
+        if self.cart_url_template:
+            from urllib.parse import urlsplit
+            parsed = urlsplit(self.cart_url_template)
+            if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
+                raise ValueError('Informe uma URL HTTP ou HTTPS de carrinho válida.')
+        return self
 
 
 class MarketQuote(BaseModel):
@@ -19,6 +30,9 @@ class MarketQuote(BaseModel):
     market_logo_url: str
     website_url: str
     product_store_url: Optional[str] = None
+    product_sku: Optional[str] = None
+    in_stock: bool = True
+    last_verified_at: Optional[datetime] = None
     price: Decimal
     last_updated: datetime
 
@@ -76,6 +90,9 @@ class PriceIn(BaseModel):
     market_id: str
     price: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
     product_store_url: Optional[HttpUrl] = None
+    product_sku: Optional[str] = Field(default=None, max_length=200)
+    in_stock: bool = True
+    last_verified_at: AwareDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_updated: AwareDatetime  # Actual research time, never silently refreshed by import.
 
 

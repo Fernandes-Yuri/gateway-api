@@ -270,3 +270,25 @@ async def test_invalid_image_credit_url_rejected_before_write():
     with pytest.raises(ValueError, match='crédito da imagem'):
         await save_record(conn, 'card', product(image_credit_url='javascript:alert(1)'))
     conn.execute.assert_not_awaited()
+
+
+async def test_cart_contracts_saved_as_bound_columns():
+    conn = AsyncMock()
+    await save_record(conn, 'market', dict(id='m', name='Mercado', cart_type='SHOPIFY',
+        cart_url_template='https://example.org/cart/{items}'))
+    assert 'cart_type' in conn.execute.call_args.args[0]
+    assert 'SHOPIFY' in conn.execute.call_args.args
+    await save_record(conn, 'quote', dict(card_id='a', market_id='m', price='1.25',
+        last_updated='2026-01-01T00:00:00Z', product_sku='123', in_stock=False,
+        last_verified_at='2026-01-02T00:00:00Z'))
+    args = conn.execute.call_args.args
+    assert 'product_sku' in args[0] and 'last_verified_at' in args[0]
+    assert '123' in args and False in args
+
+
+@pytest.mark.parametrize('values', [dict(cart_type='OTHER'), dict(cart_url_template='javascript:alert(1)')])
+async def test_invalid_cart_contract_rejected(values):
+    conn = AsyncMock()
+    with pytest.raises(ValueError):
+        await save_record(conn, 'market', dict(id='m', name='Mercado', **values))
+    conn.execute.assert_not_awaited()
