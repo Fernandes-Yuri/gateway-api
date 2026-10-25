@@ -9,7 +9,7 @@ from services.food_semantic_metadata import FoodPlanningMetadata
 class FoodSemanticMetadataTest(unittest.TestCase):
     def test_all_seeded_identifiers_have_valid_explicit_metadata(self):
         root = Path(__file__).resolve().parents[2]
-        sql = (root / "migrations/063_food_semantic_metadata.sql").read_text()
+        sql = (root / "migrations/072_food_semantic_metadata.sql").read_text()
         rows = json.loads(sql.split("$metadata$")[1])
         self.assertEqual(242, len(rows))
         self.assertEqual(len(rows), len({row["remoteId"] for row in rows}))

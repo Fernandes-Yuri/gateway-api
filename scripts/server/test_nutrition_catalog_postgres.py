@@ -99,12 +99,12 @@ class NutritionCatalogPostgres(unittest.IsolatedAsyncioTestCase):
                 path = next(p for p in (ROOT / "migrations").glob(f"{number:03d}_*.sql") if not p.stem.endswith("_rollback"))
                 await conn.execute(path.read_text())
             before = await conn.fetchval("SELECT count(*) FROM food_catalog WHERE active")
-            await conn.execute((ROOT / "migrations/063_food_semantic_metadata.sql").read_text())
+            await conn.execute((ROOT / "migrations/072_food_semantic_metadata.sql").read_text())
         snapshot = await nutrition_snapshot(self.pool, AVERAGES_SQL)
         self.assertEqual(before, len(snapshot["foods"]))
         for food in snapshot["foods"]:
             self.assertIn("semanticMetadata", food)
             self.assertGreater(food["maxDailyGrams"], 0)
         async with self.pool.acquire() as conn:
-            await conn.execute((ROOT / "migrations/063_food_semantic_metadata_rollback.sql").read_text())
+            await conn.execute((ROOT / "migrations/072_food_semantic_metadata_rollback.sql").read_text())
             self.assertEqual(0, await conn.fetchval("SELECT count(*) FROM food_catalog WHERE details ? 'semanticMetadata'"))

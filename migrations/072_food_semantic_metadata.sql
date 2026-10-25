@@ -2,7 +2,7 @@
 -- Unknown active identifiers abort the migration so they can be curated explicitly.
 BEGIN;
 SET LOCAL lock_timeout = '10s';
-CREATE TABLE food_semantic_metadata_backup_063 AS
+CREATE TABLE food_semantic_metadata_backup_072 AS
 SELECT remote_id, details->'semanticMetadata' AS metadata, details->'maxDailyGrams' AS daily_cap, details->'functionalTags' AS tags
 FROM food_catalog;
 WITH seed AS (SELECT value AS f FROM jsonb_array_elements($metadata$
@@ -256,7 +256,7 @@ UPDATE food_catalog c SET details = COALESCE(c.details, '{}'::jsonb) ||
         'functionalTags', (SELECT COALESCE(jsonb_agg(DISTINCT tag), '[]'::jsonb) FROM jsonb_array_elements(COALESCE(c.details->'functionalTags', '[]'::jsonb) || seed.f->'allergenTags') AS tag))
 FROM seed WHERE c.remote_id = seed.f->>'remoteId';
 DO $$ BEGIN
-    IF EXISTS (SELECT 1 FROM food_catalog WHERE active AND
+    IF EXISTS (SELECT 1 FROM food_catalog WHERE active AND remote_id IS NOT NULL AND details IS NOT NULL AND
         (details->'semanticMetadata' IS NULL OR details->'maxDailyGrams' IS NULL)) THEN
         RAISE EXCEPTION 'Active foods without curated semantic metadata';
     END IF;
