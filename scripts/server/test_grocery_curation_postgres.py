@@ -95,7 +95,7 @@ async def test_purge_non_canonical_072_inactivates_items_and_reverses():
                 'INSERT INTO food_catalog(remote_id,name,details) VALUES($1,$2,$3)',
                 f'food_{slug}', name, json.dumps({'shoppingComponents': [slug]})
             )
-            await conn.execute('INSERT INTO grocery_retail_cards VALUES($1,$1,$2,TRUE)', f'card_{slug}', '')
+            await conn.execute('INSERT INTO grocery_retail_cards VALUES($1,$2,$3,TRUE)', f'card_{slug}', slug, '')
 
         await conn.execute("INSERT INTO food_catalog VALUES('food_217','Chá de Cidreira','{\"shoppingComponents\":[\"melissa-fresca\",\"maca-gala-com-casca\"]}',TRUE)")
 
