@@ -30,7 +30,5 @@ async def load_cards(conn, category=None, q=None, *, include_inactive=False):
                 facts.append({'key': 'fiber', 'label': 'Fibras alimentares', 'unit': 'g', 'value': card['fiber_g']})
         card['nutrition_facts'] = facts
         card['markets'] = by_card.get(card['id'], [])
-        if card['markets']:
-            card['price_avg'] = card['markets'][0]['price']
         result.append(card)
     return result

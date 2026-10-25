@@ -121,7 +121,7 @@ def test_supplied_image_still_requires_valid_url():
 
 
 @pytest.mark.asyncio
-async def test_latest_observation_is_reference_even_when_more_expensive():
+async def test_snapshot_preserves_consolidated_price_and_research_order():
     from services.grocery_cards import load_cards
     conn = AsyncMock()
     conn.fetch.side_effect = [
@@ -130,7 +130,7 @@ async def test_latest_observation_is_reference_even_when_more_expensive():
          dict(card_id='arroz', market_id='old', price='6.00')],
     ]
     cards = await load_cards(conn)
-    assert cards[0]['price_avg'] == '9.00'
+    assert cards[0]['price_avg'] == '7.50'
     assert cards[0]['markets'][0]['market_id'] == 'new'
     assert 'ORDER BY p.last_updated DESC,m.id' in conn.fetch.call_args_list[1].args[0]
 

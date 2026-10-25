@@ -292,3 +292,66 @@ async def test_invalid_cart_contract_rejected(values):
     with pytest.raises(ValueError):
         await save_record(conn, 'market', dict(id='m', name='Mercado', **values))
     conn.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize('count', [5, 10])
+async def test_single_food_mutation_saves_all_market_quotes_and_consolidates_price(monkeypatch, count):
+    from services import grocery_retail_admin
+    monkeypatch.setattr(grocery_retail_admin, 'update_ingredient', AsyncMock())
+    conn = AsyncMock()
+    conn.fetch.return_value = [dict(id=f'm{i}') for i in range(count)]
+    conn.fetchrow.return_value = {'name': 'Manteiga', 'linked_ingredient_slug': 'butter'}
+    async def value(sql, *args):
+        if 'SELECT unit' in sql:
+            return 'kg'
+        if 'SELECT AVG' in sql:
+            return Decimal('3.005')
+        return False
+    conn.fetchval.side_effect = value
+    card = product(barcode_ean='4006381333931')
+    del card['price_avg']
+    quotes = [dict(market_id=f'm{i}', price=f'{i+1}.00', product_sku=f'00{i}',
+                   product_store_url=f'https://market.test/p/{i}', in_stock=i != 0,
+                   last_updated='2026-01-01T00:00:00Z', last_verified_at='2026-01-02T00:00:00Z') for i in range(count)]
+    await save_record(conn, 'food', {'card': card, 'quotes': quotes})
+    writes = conn.execute.call_args_list
+    quote_writes = [call.args for call in writes if call.args[0].startswith('INSERT INTO grocery_market_prices')]
+    assert len(quote_writes) == count
+    assert all('product_sku' in args[0] and 'last_verified_at' in args[0] for args in quote_writes)
+    assert '000' in quote_writes[0] and False in quote_writes[0]
+    assert any('4006381333931' in call.args for call in writes)
+    assert writes[-1].args[1:] == ('butter-200g', Decimal('3.01'))
+    assert 'm.active' in next(call.args[0] for call in conn.fetchval.call_args_list if 'SELECT AVG' in call.args[0])
+
+
+@pytest.mark.parametrize('quotes', [
+    [dict(market_id='m', price='1', last_updated='2026-01-01T00:00:00Z')] * 2,
+    [dict(market_id=f'm{i}', price='1', last_updated='2026-01-01T00:00:00Z') for i in range(11)],
+    [dict(market_id='m', price='-1', last_updated='2026-01-01T00:00:00Z')],
+    [dict(market_id='m', price='1')],
+])
+async def test_invalid_batch_rejected_before_any_write(quotes):
+    conn = AsyncMock()
+    with pytest.raises(ValueError):
+        await save_record(conn, 'food', {'card': product(), 'quotes': quotes})
+    conn.execute.assert_not_awaited()
+
+
+async def test_batch_blank_price_removes_only_the_specified_quote(monkeypatch):
+    from services import grocery_retail_admin
+    monkeypatch.setattr(grocery_retail_admin, 'update_ingredient', AsyncMock())
+    conn = AsyncMock()
+    conn.fetch.return_value = [dict(id='m')]
+    conn.fetchrow.return_value = {'name': 'Manteiga', 'linked_ingredient_slug': 'butter'}
+    conn.fetchval.return_value = 'kg'
+    await save_record(conn, 'food', {'card': product(), 'quotes': [dict(market_id='m', price='')]})
+    assert any(call.args == ('DELETE FROM grocery_market_prices WHERE card_id=$1 AND market_id=$2', 'butter-200g', 'm') for call in conn.execute.call_args_list)
+    assert not any('SELECT AVG' in call.args[0] for call in conn.fetchval.call_args_list)  # Explicit manual price preserved.
+
+
+@pytest.mark.parametrize('ean', ['123', '4006381333932', 'abcdefghijklm', 4006381333931])
+async def test_invalid_universal_ean_rejected(ean):
+    conn = AsyncMock()
+    with pytest.raises(ValueError):
+        await save_record(conn, 'food', {'card': product(barcode_ean=ean), 'quotes': []})
+    conn.execute.assert_not_awaited()

@@ -1,9 +1,9 @@
 """Editorial mutations used by the webservice. Values are always bound parameters."""
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import json
 from pydantic import ValidationError
-from schemas.grocery_cards import GroceryRetailCardIn, MarketIn, PriceIn
+from schemas.grocery_cards import GroceryRetailCardIn, MarketIn, PriceIn, GroceryFoodIn
 from services.ingredient_admin import update_ingredient, create_ingredient
 from services.ingredient_catalog import key, load_ingredients
 
@@ -51,7 +51,7 @@ async def save_record(conn, kind, payload):
             'price_avg': 'preço de referência', 'price': 'preço pesquisado',
             'last_updated': 'data da pesquisa', 'product_store_url': 'link do produto',
             'card_id': 'produto', 'market_id': 'supermercado',
-            'image_credit': 'crédito da imagem', 'image_credit_url': 'link do crédito da imagem',
+            'barcode_ean': 'código EAN-13', 'image_credit': 'crédito da imagem', 'image_credit_url': 'link do crédito da imagem',
         }
         fields = ', '.join(dict.fromkeys(labels.get(str(err['loc'][0]), 'dados do cadastro')
             if err['loc'] else 'dados do cadastro' for err in exc.errors()))
@@ -129,19 +129,28 @@ async def save_food(conn, payload):
     The route owns the transaction. Preserve recipe links and physical metadata;
     correct the base dimension without treating existing quantities as conversions.
     """
-    if set(payload) - {'card', 'reference'} or not isinstance(payload.get('card'), dict):
-        raise ValueError('Informe os dados do alimento.')
-    card = GroceryRetailCardIn.model_validate(payload['card']).model_dump()
+    food = GroceryFoodIn.model_validate(payload)
+    card = food.card.model_dump()
     unit = {'g': 'kg', 'ml': 'L', 'un': 'un'}[card['package_unit']]
-    reference = payload.get('reference')
     quote = None
+    reference = food.reference
     if reference is not None:
-        if (not isinstance(reference, dict) or not {'market_id', 'last_updated'} <= set(reference)
+        if (not {'market_id', 'last_updated'} <= set(reference)
                 or set(reference) - {'market_id', 'last_updated', 'price', 'product_store_url', 'product_sku', 'in_stock', 'last_verified_at'}):
             raise ValueError('Informe o mercado de origem e a data da referência.')
         quote = PriceIn.model_validate({'price': card['price_avg'], **reference, 'card_id': card['id']})
         if quote.last_updated > datetime.now(timezone.utc):
             raise ValueError('A data da pesquisa não pode estar no futuro.')
+    if food.quotes:
+        ids = [row.market_id for row in food.quotes]
+        markets = await conn.fetch('SELECT id FROM grocery_markets WHERE id=ANY($1::text[])', ids)
+        if {row['id'] for row in markets} != set(ids):
+            raise ValueError('Supermercado não encontrado. Atualize o catálogo.')
+    automatic_price = card['price_avg'] is None
+    if automatic_price:
+        # Temporary zero permits creating an unquoted package without inventing a price.
+        # The final aggregate is written below, inside the route's same transaction.
+        card['price_avg'] = Decimal('0')
     previous = await conn.fetchrow('SELECT linked_ingredient_slug FROM grocery_retail_cards WHERE id=$1', card['id'])
     slug = card['linked_ingredient_slug'] or (previous['linked_ingredient_slug'] if previous else None)
     if not slug:
@@ -177,3 +186,17 @@ async def save_food(conn, payload):
     await save_record(conn, 'card', card)
     if quote:
         await save_record(conn, 'quote', quote.model_dump())
+
+    if food.quotes is not None:
+        for row in food.quotes:
+            if row.price is None:
+                await save_record(conn, 'remove_quote', {'card_id': card['id'], 'market_id': row.market_id})
+            else:
+                await save_record(conn, 'quote', {'card_id': card['id'], **row.model_dump()})
+    if automatic_price:
+        average = await conn.fetchval(
+            """SELECT AVG(p.price) FROM grocery_market_prices p
+               JOIN grocery_markets m ON m.id=p.market_id
+               WHERE p.card_id=$1 AND m.active""", card['id'])
+        average = Decimal(str(average)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) if average is not None else Decimal('0')
+        await conn.execute('UPDATE grocery_retail_cards SET price_avg=$2,updated_at=now() WHERE id=$1', card['id'], average)

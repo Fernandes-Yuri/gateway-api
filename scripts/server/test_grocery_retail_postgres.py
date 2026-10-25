@@ -34,6 +34,7 @@ async def test_migration_import_dimension_validation_and_rollback():
         await conn.execute((ROOT / 'migrations/064_grocery_retail_cards_updated_at.sql').read_text())
         await conn.execute((ROOT / 'migrations/070_grocery_card_image_credits.sql').read_text())
         await conn.execute((ROOT / 'migrations/073_grocery_super_urls.sql').read_text())
+        await conn.execute((ROOT / 'migrations/074_grocery_unified_curation.sql').read_text())
         data = dict(id='butter-200g', name='Manteiga', category='Laticínios',
             image_url='https://example.org/image.png', package_display='Pote 200g',
             package_net_value=200, package_unit='g', kcal_per_package=1400, price_avg='12.90',
@@ -57,6 +58,7 @@ async def test_migration_import_dimension_validation_and_rollback():
             await conn.execute(import_sql(GroceryImport(cards=[data])))
         await conn.execute('ROLLBACK')
         assert (await load_cards(conn))[0]['package_unit'] == 'g'
+        await conn.execute((ROOT / 'migrations/074_grocery_unified_curation_rollback.sql').read_text())
         await conn.execute((ROOT / 'migrations/073_grocery_super_urls_rollback.sql').read_text())
         await conn.execute((ROOT / 'migrations/070_grocery_card_image_credits_rollback.sql').read_text())
         await conn.execute((ROOT / 'migrations/064_grocery_retail_cards_updated_at_rollback.sql').read_text())
@@ -93,7 +95,7 @@ async def test_single_food_save_derives_units_and_preserves_existing_recipe_meta
         """)
         for migration in ['058_grocery_retail_cards_and_markets.sql', '061_grocery_dietary_fiber.sql',
                           '063_grocery_retail_nutrition_facts.sql', '064_grocery_retail_cards_updated_at.sql',
-                          '070_grocery_card_image_credits.sql', '073_grocery_super_urls.sql']:
+                          '070_grocery_card_image_credits.sql', '073_grocery_super_urls.sql', '074_grocery_unified_curation.sql']:
             await conn.execute((ROOT / 'migrations' / migration).read_text())
         await conn.execute("INSERT INTO grocery_markets(id,name,logo_url,website_url) VALUES('fonte','Mercado','','')")
         card = dict(id='oleo-900', name='Óleo de Soja', category='Óleos vegetais',
@@ -139,6 +141,51 @@ async def test_single_food_save_derives_units_and_preserves_existing_recipe_meta
         assert corrected_details['food_ids'] == metadata['food_ids']
         assert await conn.fetchval("SELECT package_net_value FROM grocery_retail_cards WHERE id='oleo-900'") == 20
         assert await conn.fetchval("SELECT package_unit FROM grocery_retail_cards WHERE id='oleo-900'") == 'un'
+
+        # One atomic food mutation creates ten quotes and an EAN, with no manual price.
+        await conn.executemany("INSERT INTO grocery_markets(id,name,logo_url,website_url) VALUES($1,$1,'','')",
+                               [(f'm{i}',) for i in range(10)])
+        batch_card = {**card, 'id': 'batch', 'package_unit': 'un', 'package_net_value': 20,
+                      'package_display': '20 un', 'barcode_ean': '4006381333931'}
+        del batch_card['price_avg']
+        quotes = [dict(market_id=f'm{i}', price=f'{i+1}.00', product_sku=f'00{i}',
+                       product_store_url=f'https://example.org/p/{i}', in_stock=True,
+                       last_updated='2026-01-01T00:00:00Z', last_verified_at='2026-01-02T00:00:00Z') for i in range(10)]
+        async with conn.transaction():
+            await save_record(conn, 'food', {'card': batch_card, 'quotes': quotes})
+        assert await conn.fetchval("SELECT COUNT(*) FROM grocery_market_prices WHERE card_id='batch'") == 10
+        saved_card = await conn.fetchrow("SELECT * FROM grocery_retail_cards WHERE id='batch'")
+        assert saved_card['price_avg'] == Decimal('5.50') and saved_card['barcode_ean'] == '4006381333931'
+        # Omissions preserve other markets; empty prices delete only the specified row.
+        await conn.execute("UPDATE grocery_markets SET active=FALSE WHERE id='m9'")
+        async with conn.transaction():
+            await save_record(conn, 'food', {'card': batch_card, 'quotes': [
+                dict(market_id='m0', price=None), {**quotes[1], 'price': '10.01'}]})
+        assert await conn.fetchval("SELECT COUNT(*) FROM grocery_market_prices WHERE card_id='batch'") == 9
+        assert await conn.fetchval("SELECT price_avg FROM grocery_retail_cards WHERE id='batch'") == Decimal('6.50')
+        loaded = next(row for row in await load_cards(conn) if row['id'] == 'batch')
+        assert loaded['price_avg'] == Decimal('6.50')
+        # A database failure on the final quote must roll back card, ingredient and earlier quotes.
+        before_card = dict(await conn.fetchrow("SELECT * FROM grocery_retail_cards WHERE id='batch'"))
+        before_ingredient = dict(await conn.fetchrow("SELECT * FROM grocery_ingredients"))
+        before_quotes = [dict(row) for row in await conn.fetch("SELECT * FROM grocery_market_prices WHERE card_id='batch' ORDER BY market_id")]
+        await conn.execute("""CREATE FUNCTION reject_test_quote() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN IF NEW.product_sku='FAIL' THEN RAISE EXCEPTION 'deliberate batch failure'; END IF; RETURN NEW; END $$;
+          CREATE TRIGGER reject_test_quote BEFORE INSERT OR UPDATE ON grocery_market_prices FOR EACH ROW EXECUTE FUNCTION reject_test_quote();""")
+        with pytest.raises(asyncpg.RaiseError, match='deliberate batch failure'):
+            async with conn.transaction():
+                await save_record(conn, 'food', {'card': {**batch_card, 'name': 'Nome revertido'},
+                    'quotes': [quotes[0], {**quotes[1], 'product_sku': 'FAIL'}]})
+        assert dict(await conn.fetchrow("SELECT * FROM grocery_retail_cards WHERE id='batch'")) == before_card
+        assert dict(await conn.fetchrow("SELECT * FROM grocery_ingredients")) == before_ingredient
+        assert [dict(row) for row in await conn.fetch("SELECT * FROM grocery_market_prices WHERE card_id='batch' ORDER BY market_id")] == before_quotes
+        async with conn.transaction():
+            await save_record(conn, 'food', {'card': {**batch_card, 'price_avg': '25.00'}, 'quotes': []})
+        assert await conn.fetchval("SELECT price_avg FROM grocery_retail_cards WHERE id='batch'") == Decimal('25.00')
+        async with conn.transaction():
+            await save_record(conn, 'food', {'card': batch_card, 'quotes': [dict(market_id=f'm{i}', price=None) for i in range(10)]})
+        assert await conn.fetchval("SELECT price_avg FROM grocery_retail_cards WHERE id='batch'") == 0
+        assert await conn.fetchval("SELECT COUNT(*) FROM grocery_market_prices WHERE card_id='batch'") == 0
     finally:
         await conn.execute('ROLLBACK')
         await conn.execute('SET search_path TO public')
