@@ -137,7 +137,7 @@ async def save_food(conn, payload):
     quote = None
     if reference is not None:
         if (not isinstance(reference, dict) or not {'market_id', 'last_updated'} <= set(reference)
-                or set(reference) - {'market_id', 'last_updated', 'price', 'product_store_url'}):
+                or set(reference) - {'market_id', 'last_updated', 'price', 'product_store_url', 'product_sku', 'in_stock', 'last_verified_at'}):
             raise ValueError('Informe o mercado de origem e a data da referência.')
         quote = PriceIn.model_validate({'price': card['price_avg'], **reference, 'card_id': card['id']})
         if quote.last_updated > datetime.now(timezone.utc):

@@ -1,0 +1,11 @@
+BEGIN;
+SET LOCAL lock_timeout = '10s';
+ALTER TABLE grocery_markets
+ ADD COLUMN cart_type TEXT NOT NULL DEFAULT 'VTEX'
+ CHECK (cart_type IN ('VTEX','SHOPIFY','CUSTOM_PARAM','ASSISTED')),
+ ADD COLUMN cart_url_template TEXT;
+ALTER TABLE grocery_market_prices
+ ADD COLUMN product_sku TEXT,
+ ADD COLUMN in_stock BOOLEAN NOT NULL DEFAULT TRUE,
+ ADD COLUMN last_verified_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+COMMIT;
