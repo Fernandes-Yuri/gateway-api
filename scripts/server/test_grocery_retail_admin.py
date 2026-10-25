@@ -60,7 +60,7 @@ def test_admin_snapshot_defaults_to_active_records(admin_client):
     response = http.get('/api/admin/grocery/retail', headers=AUTH)
     assert response.status_code == 200
     assert 'WHERE active' in conn.fetch.call_args_list[0].args[0]
-    assert 'WHERE active = TRUE' in conn.fetch.call_args_list[2].args[0]
+    assert 'WHERE active = TRUE' in conn.fetch.call_args_list[3].args[0]
 
 
 async def test_saves_photo_packaging_nutrition_and_ingredient_without_kg_rounding():
