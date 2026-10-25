@@ -75,7 +75,7 @@ def trace_llm(channel: str, stage: str, trace_id=None, **fields) -> str:
         }
         line = json.dumps(record, ensure_ascii=False)
         path = _path()
-        from services.wa_channel_storage import file_lock
+        from core.file_lock import file_lock
         with _lock, file_lock(path):
             new_file = not os.path.exists(path)
             with open(path, "a", encoding="utf-8") as f:

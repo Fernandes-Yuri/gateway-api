@@ -23,6 +23,11 @@ from services.ingredient_catalog import (admin_price_rows, load_ingredients, key
                                         sale_unit_options)
 from services.grocery_contributions import GroceryPriceContribution, AVERAGES_SQL, UPSERT_SQL
 
+from schemas.grocery_cards import GroceryRetailCardOut
+from services.grocery_cards import load_cards
+from services.grocery_retail_admin import save_record
+from schemas.grocery_cards import GroceryAdminMutation
+
 router = APIRouter()
 
 
@@ -710,3 +715,60 @@ async def get_nutrition_catalog():
         return await nutrition_snapshot(_state.db_pool, AVERAGES_SQL)
     except Exception:
         raise HTTPException(503, "Catálogo nutricional indisponível no momento.")
+
+
+# Retail packages are separate from canonical ingredient prices.
+
+
+@router.get("/api/catalog/grocery/cards", response_model=list[GroceryRetailCardOut])
+async def list_grocery_retail_cards(category: Optional[str] = None, q: Optional[str] = None):
+    if not _state.db_pool:
+        raise HTTPException(503, "Catálogo de compras indisponível.")
+    async with _state.db_pool.acquire() as conn:
+        async with conn.transaction(readonly=True, isolation="repeatable_read"):
+            return await load_cards(conn, category, q)
+
+
+@router.get("/api/admin/grocery/retail")
+async def get_admin_grocery_retail(_auth=Depends(require_service_token)):
+    if not _state.db_pool:
+        raise HTTPException(503, "Catálogo de compras indisponível.")
+    async with _state.db_pool.acquire() as conn:
+        async with conn.transaction(readonly=True, isolation="repeatable_read"):
+            cards = await load_cards(conn, include_inactive=True)
+            markets = await conn.fetch("SELECT * FROM grocery_markets ORDER BY name,id")
+            ingredients = await conn.fetch("""SELECT slug,name,unit,active,details->>'group' AS group,
+                COALESCE((details->>'minimum')::numeric,0) AS minimum,
+                COALESCE((details->>'step')::numeric,1) AS step,
+                (details->>'grams_per_unit')::numeric AS grams_per_unit,
+                COALESCE(details->'aliases','[]'::jsonb) AS aliases
+                FROM grocery_ingredients ORDER BY name""")
+    return {"cards": cards, "markets": [dict(m) for m in markets],
+            "ingredients": [dict(i) for i in ingredients]}
+
+
+@router.put("/api/admin/grocery/retail")
+async def put_admin_grocery_retail(body: GroceryAdminMutation, _auth=Depends(require_service_token)):
+    if not _state.db_pool:
+        raise HTTPException(503, "Catálogo de compras indisponível.")
+    try:
+        async with _state.db_pool.acquire() as conn:
+            async with conn.transaction():
+                await save_record(conn, body.kind, body.payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except ForeignKeyViolationError as exc:
+        raise HTTPException(422, "Produto, mercado ou ingrediente não encontrado. Atualize o catálogo.") from exc
+    return {"success": True}
+
+
+@router.get("/api/admin/grocery/nutrition-suggestions", dependencies=[Depends(require_service_token)])
+async def grocery_nutrition_suggestions(q: str, amount: float, unit: Literal['g', 'ml', 'un'], total_grams: Optional[float] = None):
+    from services.grocery_nutrition_reference import suggestions
+    if not 2 <= len(q.strip()) <= 200:
+        raise HTTPException(422, 'Informe o nome do alimento, com 2 a 200 caracteres.')
+    try:
+        return {'candidates': suggestions(q, amount, unit, total_grams),
+                'notice': 'Valores médios da tabela, por embalagem. Confira o alimento e os valores antes de usar. Dados ausentes não representam zero.'}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc

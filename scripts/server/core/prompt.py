@@ -1,7 +1,7 @@
 """Prompt de sistema canonico do assistente Braga.
 
 Extraido do monolito server.py (linhas 1640-1655) na Fase A passo 4.
-Centralizado em core/ para que routers (chat, ws_orb, whatsapp) leiam a
+Centralizado em core/ para que routers (chat, ws_orb) leiam a
 mesma fonte sem redeclarar a persona e as travas clinicas.
 """
 from braga_persona import PERSONA

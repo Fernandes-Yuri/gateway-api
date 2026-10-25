@@ -16,7 +16,7 @@ class Acquisition:
 
 class CaregiverAlertsTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.conn = Mock(fetchval=AsyncMock(return_value=True))
+        self.conn = Mock(fetchval=AsyncMock(return_value=True), fetch=AsyncMock(return_value=[]))
         self.pool = Mock(acquire=Mock(return_value=Acquisition(self.conn)))
         self.dispatch = Mock(return_value=True)
         app = FastAPI()

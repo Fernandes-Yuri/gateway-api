@@ -11,6 +11,7 @@ rate-limiter por IP, sanitize_zero_trust_text em campos livres, faixa
 clinica valida em vitais (SBC/SBD), status de exame em lista fechada e
 LGPD Art. 18 no delete de conta (ON DELETE CASCADE).
 """
+import asyncio
 import base64
 import json
 import logging
@@ -21,7 +22,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api_identity import firebase_uid, require_owner, require_family_access
@@ -76,8 +77,6 @@ class ProfileSyncDto(BaseModel):
     phone: Optional[str] = None
     consentAcceptedAt: Optional[str] = None
     notificationsEnabled: Optional[bool] = True
-    # Segredo TOTP (base32) do vinculo de WhatsApp; o app pode gerar localmente.
-    totpSecret: Optional[str] = None
     locationEnabled: Optional[bool] = True
     currentXp: Optional[int] = 0
     totalXp: Optional[int] = 0
@@ -270,46 +269,9 @@ async def sync_profile(p: ProfileSyncDto, request: Request, uid: str = Depends(f
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 
-    # Segredo TOTP do vinculo de WhatsApp. O app pode gerar localmente (caso em que
-    # ele ja conhece o segredo e calcula o codigo no clique sem chamar o servidor);
-    # senao o gateway gera e devolve para o app persistir. Nunca regenera o de uma
-    # conta existente: isso invalidaria o segredo guardado no aparelho.
-    totp_secret = getattr(p, "totpSecret", None)
-    if totp_secret:
-        try:
-            s_clean = str(totp_secret).strip().replace(" ", "").upper()
-            if not s_clean:
-                totp_secret = None
-            else:
-                pad = (8 - len(s_clean) % 8) % 8
-                raw = base64.b32decode(s_clean + "=" * pad, casefold=True)
-                if not raw:
-                    totp_secret = None
-                else:
-                    totp_secret = s_clean
-        except Exception:
-            totp_secret = None
-
-    if _state.has_wa_link and not totp_secret:
-        totp_secret = _state.generate_totp_secret()
-
     async with db_pool.acquire() as conn:
         await conn.execute(query, *values)
-        if _state.has_wa_link:
-            existing = await conn.fetchrow(
-                "SELECT totp_secret FROM profiles WHERE id = $1", p.id
-            )
-            if existing and existing["totp_secret"]:
-                totp_secret = existing["totp_secret"]
-            elif totp_secret:
-                try:
-                    await conn.execute(
-                        "UPDATE profiles SET totp_secret = $2 WHERE id = $1 AND totp_secret IS NULL",
-                        p.id, totp_secret,
-                    )
-                except Exception as _totp_err:
-                    print(f"[TOTP Secret] Falha ao gravar segredo para {p.id}: {_totp_err}")
-    return {"status": "success", "id": p.id, "totpSecret": totp_secret}
+    return {"status": "success", "id": p.id}
 
 
 @router.get("/api/profile/{user_id}")
@@ -324,23 +286,6 @@ async def get_profile(user_id: str, uid: str = Depends(firebase_uid)):
             raise HTTPException(status_code=404, detail="Perfil não encontrado")
         d = dict(row)
 
-        # Migracao tardia do segredo TOTP do vinculo de WhatsApp.
-        # Contas criadas antes da migration 009 (ou que nunca sincronizaram
-        # perfil depois dela) nao tem totp_secret: o app nao consegue montar o
-        # link de vinculo e o botao "Vincular meu WhatsApp" simplesmente nao
-        # faz nada. Nesse momento — o login puxa o perfil — geramos e
-        # persistimos o segredo faltante. Nao regenera quem ja tem.
-        if _state.has_wa_link and not d.get("totp_secret"):
-            try:
-                novo = _state.generate_totp_secret()
-                await conn.execute(
-                    "UPDATE profiles SET totp_secret = $2 WHERE id = $1 AND totp_secret IS NULL",
-                    user_id, novo,
-                )
-                d["totp_secret"] = novo
-            except Exception as _totp_err:
-                print(f"[TOTP Secret] Falha ao gerar segredo faltante para {user_id}: {_totp_err}")
-
         if d.get("birth_date"):
             d["birth_date"] = d["birth_date"].isoformat()
         if d.get("created_at"):
@@ -350,13 +295,66 @@ async def get_profile(user_id: str, uid: str = Depends(firebase_uid)):
         return d
 
 
+@router.get("/api/profile/{user_id}/avatar")
+async def profile_avatar_metadata(user_id: str, uid: str = Depends(firebase_uid)):
+    """Identidade visual compartilhada; mesma audiência autenticada do arquivo de avatar.
+
+    Não usa o endpoint clínico de perfil para exibir autores e familiares.
+    A projeção explícita impede exposição dos demais campos de profiles.
+    """
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco indisponível")
+    async with _state.db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT photo_url, avatar_identifier FROM profiles WHERE id=$1", user_id)
+    if row is None:
+        raise HTTPException(404, "Perfil não encontrado")
+    return JSONResponse({"id": user_id, "photo_url": row.get("photo_url"),
+                         "avatar_identifier": row.get("avatar_identifier")},
+                        headers={"Cache-Control": "private, no-store"})
+
+
 @router.delete("/api/profile/{user_id}", status_code=status.HTTP_200_OK)
-async def delete_profile(user_id: str, uid: str = Depends(firebase_uid)):
+async def delete_profile(user_id: str, background_tasks: BackgroundTasks, uid: str = Depends(firebase_uid)):
+    require_owner(uid, user_id)
     if _state.db_pool is None:
         raise HTTPException(503, "Banco indisponível")
-    require_owner(uid, user_id)
     from services.account_deletion import delete_account
-    return await delete_account(_state.db_pool, user_id, actor="próprio titular")
+    from services.account_lifecycle import account_contact, process_account_mail
+    email, name = await account_contact(user_id)
+    result = await delete_account(_state.db_pool, user_id, actor="próprio titular", receipt_email=email, receipt_name=name)
+    # A solicitação explícita do titular conclui também a identidade de acesso.
+    # Clientes antigos podem repetir user.delete(); UserNotFound continua idempotente.
+    from firebase_admin import auth as fb_auth
+    try:
+        await asyncio.to_thread(fb_auth.delete_user, user_id)
+    except fb_auth.UserNotFoundError:
+        pass
+    except Exception:
+        raise HTTPException(503, "Os dados foram removidos, mas a exclusão do acesso ainda está pendente. Tente novamente para concluir.")
+    background_tasks.add_task(process_account_mail, _state.db_pool)
+    return result
+
+
+@router.post("/api/profile/{user_id}/deactivate")
+async def deactivate_profile(user_id: str, background_tasks: BackgroundTasks, uid: str = Depends(firebase_uid)):
+    require_owner(uid, user_id)
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco indisponível.")
+    from services.account_lifecycle import account_contact, deactivate_account, process_account_mail
+    email, name = await account_contact(user_id)
+    result = await deactivate_account(_state.db_pool, user_id, email, name)
+    background_tasks.add_task(process_account_mail, _state.db_pool)
+    return result
+
+
+@router.post("/api/profile/{user_id}/reactivate")
+async def reactivate_profile(user_id: str, request: Request, uid: str = Depends(firebase_uid)):
+    require_owner(uid, user_id)
+    if not _state.db_pool:
+        raise HTTPException(503, "Banco indisponível.")
+    from services.account_lifecycle import reactivate_account
+    return await reactivate_account(_state.db_pool, user_id, getattr(request.state, "firebase_auth_time", None))
 
 
 # =============================================================
@@ -433,7 +431,7 @@ async def upload_profile_avatar(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Content-Length inválido.") from exc
 
-    content = await file.read()
+    content = await file.read(AVATAR_MAX_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="A foto enviada está vazia.")
     if len(content) > AVATAR_MAX_BYTES:
@@ -451,10 +449,11 @@ async def upload_profile_avatar(
         logger.warning("[avatar] Moderacao indisponivel para user_id=%s — upload recusado", user_id)
         raise HTTPException(
             status_code=503,
-            detail="Não foi possível verificar a foto agora. Tente novamente em instantes.",
+            detail="A verificação de publicação está indisponível. Sua foto atual foi mantida. Tente novamente em instantes.",
+            headers={"Retry-After": "60"},
         )
     if not aprovada:
-        logger.info("[avatar] Foto reprovada na moderacao user_id=%s motivo=%s", user_id, motivo)
+        logger.info("[avatar] Foto reprovada na moderacao")
         raise HTTPException(
             status_code=422,
             detail=motivo or "Foto não aprovada. Escolha outra imagem.",
@@ -854,7 +853,7 @@ async def get_social_feed(
     # exige conta logada e o limit e forcado a <=100 pela validacao do Query.
     db_pool = _state.db_pool
     if not db_pool:
-        return []
+        raise HTTPException(503, "Mural temporariamente indisponível. Tente novamente.")
     query = """
     SELECT sp.id, sp.user_id, sp.post_type, sp.title, sp.description, sp.created_at, sp.edited_at,
            sp.visibility,
@@ -1133,7 +1132,6 @@ async def sync_league_membership(m: LeagueMembershipSyncDto, uid: str = Depends(
 
 @router.post("/api/sync/audit-log")
 async def sync_audit_log(a: AuditLogSyncDto, uid: str = Depends(firebase_uid)):
-    require_owner(uid, a.userId)
     db_pool = _state.db_pool
     if not db_pool:
         return {"status": "offline_mode"}
@@ -1145,6 +1143,8 @@ async def sync_audit_log(a: AuditLogSyncDto, uid: str = Depends(firebase_uid)):
     """
     log_id = a.id or str(uuid.uuid4())
     async with db_pool.acquire() as conn:
+        if uid != a.userId:
+            await require_family_access(conn, uid, a.userId)
         row = await conn.fetchrow(query, log_id, a.userId, a.eventType, a.action, a.metadataJson)
     return {"status": "success", "id": str(row["id"]) if row else log_id}
 
@@ -1189,8 +1189,6 @@ class _AppState:
     db_pool = None
     rate_limiter = None
     dispatch_clinical_alert = None
-    has_wa_link = False
-    generate_totp_secret = None
     log_fine_tuning_sample = None
 
 
@@ -1198,12 +1196,9 @@ _state = _AppState()
 
 
 def configure_state(*, db_pool=None, rate_limiter=None, dispatch_clinical_alert=None,
-                    has_wa_link=False, generate_totp_secret=None,
                     log_fine_tuning_sample=None):
     """Chamado por server.py ao subir a aplicacao."""
     _state.db_pool = db_pool
     _state.rate_limiter = rate_limiter
     _state.dispatch_clinical_alert = dispatch_clinical_alert
-    _state.has_wa_link = has_wa_link
-    _state.generate_totp_secret = generate_totp_secret
     _state.log_fine_tuning_sample = log_fine_tuning_sample

@@ -45,7 +45,7 @@ async def _profile_height(conn: Any, patient_id: str) -> Optional[float]:
 
 async def record_weight(conn: Any, *, patient_id: str, weight_kg: float,
                         actor_id: str, confirmation_code: Optional[str] = None,
-                        source: str = "whatsapp") -> dict:
+                        source: str = "app") -> dict:
     """
     Grava o peso na biometria do paciente, na transação do chamador.
 

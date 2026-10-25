@@ -1,13 +1,12 @@
 # Doses por horário - contrato gateway v1
 
-A fase 1 fornece a regra compartilhada e o protocolo para Android e WhatsApp.
+A fase 1 fornece a regra compartilhada e o protocolo para Android.
 Notificações agrupadas, botões de conversa e fila Room serão implementados nas fases seguintes.
 O lote de tomadas é diferente do endpoint existente `/medications/batch`, que cadastra medicamentos.
 
 ## Operações
 
 Autenticação existente da API e permissões do Care OS. O ator vem da identidade autenticada.
-O WhatsApp usa a conta vinculada e chama o serviço diretamente na transação do adaptador.
 IDs opacos não concedem permissão. Apenas a conta que prepara pode confirmar/recuperar o lote.
 
 | Método | Caminho | Permissão |
@@ -103,7 +102,7 @@ Erro inesperado de banco reverte logs, baixas e resultado integralmente.
 A resposta só sai após commit. 503 pede recuperar o lote antes de repetir a ação.
 
 IDs UTC, índice único das ocorrências e logs canônicos, locks ordenados e transação compartilhada
-impedem segunda baixa entre app, WhatsApp e cuidadores. Triggers de inserção também
+impedem segunda baixa entre app e cuidadores. Triggers de inserção também
 cobrem a versão anterior durante a janela entre migration e reinício do serviço. O histórico pode conter duplicações antigas;
 esses logs permanecem preservados, com uma ocorrência sinalizada para revisão.
 O resultado terminal fica persistido, com proteção contra reabertura no banco.
@@ -153,3 +152,5 @@ reenvio/recuperação, exclusões, falha parcial, revogação, expiração, muda
 rollback integral, importação legada, migração de duplicações e travas de banco.
 O ensaio do runner real cobre cadeia completa, upgrade do baseline, dados sintéticos preservados,
 falha deliberada e repetição idempotente. CI é gate do deploy do ambiente de ensaio.
+
+Canal ativo de preparação: `app`. Requisições com `channel=whatsapp` são rejeitadas após a retirada do atendimento antigo.

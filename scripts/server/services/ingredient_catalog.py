@@ -139,6 +139,7 @@ def build_admin_rows(ingredients, legacy, community, categories=(), contribution
         result.append({
             "slug": item["slug"], "name": item["name"], "unit": item["unit"],
             "group": _group_of(item, groups), "active": item["active"],
+            "aliases": item.get("aliases", []),
             "minimum": item.get("minimum", 50), "step": item.get("step", 1),
             "grams_per_unit": item.get("grams_per_unit"),
             "price_avg": _price_of(row),

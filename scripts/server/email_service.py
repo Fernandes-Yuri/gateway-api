@@ -29,7 +29,7 @@ def is_email_configured() -> bool:
 # ==================== TEMPLATES HTML ====================
 
 def _otp_html(code: str) -> str:
-    """Template de verificação de e-mail — azul confiança."""
+    """Template de verificação de e-mail — identidade esmeralda."""
     return """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -37,9 +37,9 @@ def _otp_html(code: str) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Confirmação de E-mail - Braga Saúde</title>
 </head>
-<body style="font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,sans-serif; background:#F0F4F8; margin:0; padding:24px;">
+<body style="font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,sans-serif; background:#F0FDF4; margin:0; padding:24px;">
   <div style="max-width:520px; margin:0 auto; background:#FFF; border-radius:16px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-    <div style="background:linear-gradient(135deg,#2563EB 0%,#1D4ED8 100%); padding:32px 24px; text-align:center; color:#FFF;">
+    <div style="background:linear-gradient(135deg,#00A884 0%,#008F70 100%); padding:32px 24px; text-align:center; color:#FFF;">
       <h1 style="margin:0; font-size:26px; font-weight:700;">Braga Saúde</h1>
       <p style="margin:6px 0 0 0; font-size:14px; opacity:0.9;">Confirmação de Cadastro</p>
     </div>
@@ -49,11 +49,11 @@ def _otp_html(code: str) -> str:
         <strong>Seja muito bem-vindo ao Braga Saúde!</strong> 🎉<br><br>
         Para ativar sua conta e proteger seus dados, utilize o código de verificação abaixo:
       </p>
-      <div style="background:#EFF6FF; border:2px dashed #2563EB; border-radius:12px; padding:24px; text-align:center; margin:28px 0;">
-        <div style="font-size:12px; font-weight:700; color:#2563EB; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:8px;">Seu Código de Verificação</div>
-        <div style="font-size:42px; font-weight:800; color:#1D4ED8; letter-spacing:10px; font-family:'Courier New',monospace; margin:0;">""" + code + """</div>
+      <div style="background:#F0FDF4; border:2px dashed #00A884; border-radius:12px; padding:24px; text-align:center; margin:28px 0;">
+        <div style="font-size:12px; font-weight:700; color:#00A884; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:8px;">Seu Código de Verificação</div>
+        <div style="font-size:42px; font-weight:800; color:#008F70; letter-spacing:10px; font-family:'Courier New',monospace; margin:0;">""" + code + """</div>
       </div>
-      <div style="background:#F8FAFC; border-radius:8px; padding:14px 16px; font-size:14px; color:#64748B; line-height:1.6; border-left:4px solid #2563EB;">
+      <div style="background:#F8FAFC; border-radius:8px; padding:14px 16px; font-size:14px; color:#64748B; line-height:1.6; border-left:4px solid #00A884;">
         ⏱️ <strong>Validade:</strong> Este código expira em <strong>15 minutos</strong>.<br>
         🔒 <strong>Segurança:</strong> Se você não solicitou este cadastro, ignore este e-mail.
       </div>
@@ -75,9 +75,9 @@ def _reset_html(code: str) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Recuperação de Senha - Braga Saúde</title>
 </head>
-<body style="font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,sans-serif; background:#FFFBEB; margin:0; padding:24px;">
+<body style="font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,sans-serif; background:#F0FDF4; margin:0; padding:24px;">
   <div style="max-width:520px; margin:0 auto; background:#FFF; border-radius:16px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-    <div style="background:linear-gradient(135deg,#F59E0B 0%,#D97706 100%); padding:32px 24px; text-align:center; color:#FFF;">
+    <div style="background:linear-gradient(135deg,#00A884 0%,#008F70 100%); padding:32px 24px; text-align:center; color:#FFF;">
       <h1 style="margin:0; font-size:26px; font-weight:700;">Braga Saúde</h1>
       <p style="margin:6px 0 0 0; font-size:14px; opacity:0.9;">Recuperação de Acesso</p>
     </div>
@@ -87,11 +87,11 @@ def _reset_html(code: str) -> str:
         Recebemos uma solicitação para <strong>redefinir a senha</strong> da sua conta no Braga Saúde.<br><br>
         Utilize o código de segurança abaixo para criar uma nova senha:
       </p>
-      <div style="background:#FFFBEB; border:2px dashed #F59E0B; border-radius:12px; padding:24px; text-align:center; margin:28px 0;">
-        <div style="font-size:12px; font-weight:700; color:#D97706; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:8px;">Código de Recuperação</div>
-        <div style="font-size:42px; font-weight:800; color:#B45309; letter-spacing:10px; font-family:'Courier New',monospace; margin:0;">""" + code + """</div>
+      <div style="background:#F0FDF4; border:2px dashed #00A884; border-radius:12px; padding:24px; text-align:center; margin:28px 0;">
+        <div style="font-size:12px; font-weight:700; color:#008F70; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:8px;">Código de Recuperação</div>
+        <div style="font-size:42px; font-weight:800; color:#008F70; letter-spacing:10px; font-family:'Courier New',monospace; margin:0;">""" + code + """</div>
       </div>
-      <div style="background:#FEF3C7; border-radius:8px; padding:14px 16px; font-size:14px; color:#92400E; line-height:1.6; border-left:4px solid #F59E0B;">
+      <div style="background:#F0FDF4; border-radius:8px; padding:14px 16px; font-size:14px; color:#008F70; line-height:1.6; border-left:4px solid #00A884;">
         ⏱️ <strong>Validade:</strong> Este código expira em <strong>15 minutos</strong>.<br>
         🔒 <strong>Segurança:</strong> Se você não solicitou a redefinição, <strong>não se preocupe</strong> — sua senha atual continua segura. Apenas ignore este e-mail.
       </div>
@@ -275,3 +275,37 @@ async def send_security_code_email(to_email: str, code: str, purpose: str = "EMA
     if purpose == "PASSWORD_RESET":
         return await send_password_reset_email(to_email, code)
     return await send_otp_email(to_email, code)
+
+
+def _account_lifecycle_html(user_name: str, *, paused: bool) -> str:
+    name = html.escape(user_name or "")
+    title = "Sua conta foi pausada" if paused else "Confirmação de exclusão da conta"
+    detail = (
+        "Sua conta Braga Saúde foi pausada. Seus registros sincronizados e configurações foram preservados, "
+        "e os avisos push foram desativados. Para retornar, faça login novamente com o método que você já usa."
+        if paused else
+        "A exclusão da sua conta Braga Saúde foi concluída. A identidade de acesso, os dados do perfil "
+        "e os arquivos vinculados foram removidos dos sistemas ativos. "
+        "Registros mínimos de auditoria da exclusão e históricos que pertencem a outros titulares podem permanecer."
+    )
+    return f'''<!DOCTYPE html><html lang="pt-BR"><meta charset="UTF-8">
+    <body style="font-family:Arial,sans-serif;background:#F0FDF4;padding:24px">
+    <main style="max-width:560px;margin:auto;background:#FFFFFF;border-radius:16px;overflow:hidden">
+    <header style="background:linear-gradient(135deg,#00A884,#008F70);padding:28px;color:white">
+    <h1 style="font-size:22px">{title}</h1><div>Braga Saúde</div></header>
+    <section style="padding:24px;color:#334155;line-height:1.6"><p>Olá{", " + name if name else ""}.</p>
+    <p>{detail}</p><p>Guarde esta mensagem como confirmação da sua solicitação.</p></section></main></body></html>'''
+
+
+async def send_account_deletion_email(to_email: str, user_name: str = "") -> Dict[str, Any]:
+    success = await asyncio.to_thread(_send_gmail_sync, to_email, "Confirmação de exclusão da conta - Braga Saúde",
+        _account_lifecycle_html(user_name, paused=False),
+        "A exclusão da sua conta Braga Saúde foi concluída nos sistemas ativos. Registros mínimos de auditoria podem permanecer.")
+    return {"success": success}
+
+
+async def send_account_deactivation_email(to_email: str, user_name: str = "") -> Dict[str, Any]:
+    success = await asyncio.to_thread(_send_gmail_sync, to_email, "Sua conta foi pausada - Braga Saúde",
+        _account_lifecycle_html(user_name, paused=True),
+        "Sua conta foi pausada. Os registros sincronizados permanecem salvos e os avisos push foram desativados. Faça login novamente para reativar.")
+    return {"success": success}

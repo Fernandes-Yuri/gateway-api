@@ -67,9 +67,21 @@ fi
 
 echo "=== [3/4] Executando Migrations do Banco de Dados (RDS) ==="
 if [ -f "migrate.py" ]; then
+    # Não permitir gravações do atendimento antigo durante o expurgo.
+    if [ ! -f "$APP_DIR/.retired_health_whatsapp_v1" ]; then
+        sudo systemctl stop braga-gateway.service
+        python3 scripts/purge_retired_channel_files.py
+    fi
     python3 migrate.py
     python3 scripts/purge_legacy_exam_files.py
 fi
+
+# Não persistir dumps com memória de atendimentos. A política global também
+# desabilita processamento pelo systemd-coredump quando o core_pattern usa pipe.
+sudo install -d -m 0755 /etc/systemd/system/braga-gateway.service.d /etc/systemd/coredump.conf.d
+sudo install -m 0644 infra/systemd/braga-gateway.service.d/10-private-memory.conf /etc/systemd/system/braga-gateway.service.d/10-private-memory.conf
+sudo install -m 0644 infra/systemd/coredump.conf.d/10-braga-privacy.conf /etc/systemd/coredump.conf.d/10-braga-privacy.conf
+sudo systemctl daemon-reload
 
 echo "=== [4/4] Reiniciando Braga Gateway ==="
 sudo systemctl restart braga-gateway.service

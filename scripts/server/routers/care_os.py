@@ -395,7 +395,7 @@ async def update_medication(
 
 @router.post("/api/medications/{medication_id}/take")
 async def take_medication(medication_id: str, payload: MedicationTakeRequest, uid: str = Depends(firebase_uid)):
-    # Passo 3.1: lógica no serviço compartilhado (endpoint REST + WhatsApp),
+    # Passo 3.1: lógica no serviço compartilhado (endpoints do aplicativo),
     # sem caminho paralelo só-com-log. A transação envolve a tomada inteira.
     from services.medication_take import take_medication as _take
     async with _pool().acquire() as conn:
@@ -686,6 +686,36 @@ async def symptom_check_in(payload: SymptomCheckInCreate, uid: str = Depends(fir
             payload.disposition, payload.input_method,
         )
     return {"id": str(row["id"]), "patient_id": patient_id}
+
+
+@router.get("/api/patients/{patient_id}/symptoms-diary")
+async def get_symptoms_diary(patient_id: str, limit: int = 30, uid: str = Depends(firebase_uid)):
+    """Histórico de check-ins de sintomas para o app Android."""
+    async with _pool().acquire() as conn:
+        await require_patient_permission(conn, uid, patient_id, "care:read")
+        safe_limit = min(max(1, limit), 100)
+        rows = await conn.fetch(
+            """SELECT id, patient_id, reported_by, reported_at, symptoms_text,
+                      sleep_quality, disposition, input_method
+               FROM symptoms_diary
+               WHERE patient_id = $1
+               ORDER BY reported_at DESC
+               LIMIT $2""",
+            patient_id, safe_limit,
+        )
+        return [
+            {
+                "id": str(r["id"]),
+                "patient_id": r["patient_id"],
+                "reported_by": r["reported_by"],
+                "reported_at": r["reported_at"].isoformat() if r["reported_at"] else None,
+                "symptoms_text": r["symptoms_text"],
+                "sleep_quality": r["sleep_quality"],
+                "disposition": r["disposition"],
+                "input_method": r["input_method"],
+            }
+            for r in rows
+        ]
 
 
 @router.get("/api/patients/{patient_id}/clinical-correlations")
@@ -997,7 +1027,7 @@ async def ingest_ble(payload: BleTelemetryRequest, uid: str = Depends(firebase_u
     return {"status":"recorded","receipt_id":str(receipt['id']),"vital_sign_id":str(vital['id']),"protocol":"GATT"}
 
 
-# Contrato de doses v1, compartilhado com adaptadores WhatsApp.
+# Contrato de doses v1 do aplicativo.
 from schemas.medication_doses import (
     DoseBatchConfirm, DoseBatchPrepare, DoseBatchResponse, DoseError,
     DoseGroupsResponse, DoseScheduleResponse, DoseScheduleUpdate,
@@ -1112,7 +1142,7 @@ async def medication_dose_capabilities(uid: str = Depends(firebase_uid)):
     return {"medication_batch_contract": 1, "enabled": dose_contract_enabled(),
             "structured_quantities": True, "integer_units_min": 1, "integer_units_max": 20,
             "proposal_ttl_seconds": 300, "offline_result_recovery": True,
-            "grouping": "exact_local_time", "supported_channels": ["app", "whatsapp"]}
+            "grouping": "exact_local_time", "supported_channels": ["app"]}
 
 
 router.include_router(dose_router)

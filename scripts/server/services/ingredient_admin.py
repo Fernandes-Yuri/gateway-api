@@ -102,7 +102,7 @@ def _clean_food_ids(food_ids):
     return cleaned
 
 
-def validate_payload(data, *, partial=False):
+def validate_payload(data, *, partial=False, existing_name=None):
     """Valida o corpo de criação/edição e devolve apenas os campos aceitos."""
     if not isinstance(data, dict):
         raise ValueError("Envie um objeto com os campos do ingrediente.")
@@ -114,7 +114,8 @@ def validate_payload(data, *, partial=False):
         raise ValueError("Informe ao menos um campo para editar.")
     result = {}
     if "name" in data:
-        result["name"] = _validate_clean_name(data["name"])
+        name = _clean_text(data["name"], "Nome", MAX_NAME)
+        result["name"] = name if partial and name == existing_name else _validate_clean_name(name)
     if "unit" in data:
         if data["unit"] not in ALLOWED_UNITS:
             raise ValueError("Unidade deve ser kg, L ou un.")
@@ -223,8 +224,11 @@ async def create_ingredient(conn, data):
 
 
 async def update_ingredient(conn, slug, data, *, bump=True):
-    payload = validate_payload(data, partial=True)
     current = await _load_row(conn, slug)
+    # Legacy catalog names may contain preparation terms. Saving a package or
+    # its photo must preserve an unchanged name instead of rejecting that record.
+    # New names still pass the full validation below.
+    payload = validate_payload(data, partial=True, existing_name=current['name'])
     current_details = as_json(current["details"]) or {}
     if "name" in payload:
         check_name_free(payload["name"], await _taken_names(conn, slug=slug))
@@ -237,12 +241,19 @@ async def update_ingredient(conn, slug, data, *, bump=True):
     if "unit" in payload and unit != current["unit"]:
         avisos.append(f"Unidade alterada de {current['unit']} para {unit}: preços manuais e médias da comunidade ligados à unidade antiga deixam de valer e o item volta a ficar pendente.")
     if "name" in payload and name != current["name"]:
-        avisos.append("Nome alterado: o preço manual antigo fica no cache legado, mas deixa de ser aplicado a este ingrediente.")
+        # Bind old name-based prices to the stable ingredient before renaming.
+        # Values, packaging and research dates stay untouched.
+        await conn.execute("""UPDATE grocery_price_cache SET ingredient_slug=$1
+            WHERE ingredient_slug IS NULL AND food_name=$2 AND price_unit=$3""",
+            slug, current["name"], current["unit"])
     if not active and current["active"]:
         avisos.append("Ingrediente desativado: some da lista de compras e do app; reative quando quiser.")
     await conn.execute(
         "UPDATE grocery_ingredients SET name=$2, unit=$3, details=$4::jsonb, active=$5 WHERE slug=$1",
         slug, name, unit, _as_json(details), active)
+    if "name" in payload:
+        await conn.execute("UPDATE grocery_retail_cards SET name=$2,updated_at=now() WHERE linked_ingredient_slug=$1 AND name IS DISTINCT FROM $2",
+                           slug, name)
     revision = await bump_revision(conn) if bump else None
     print(f"[ADMIN-CATALOG] Ingrediente editado: {slug} ({name}) campos={sorted(payload)}")
     return {"slug": slug, "name": name, "unit": unit, "active": active, "revision": revision,

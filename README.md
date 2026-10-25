@@ -1,7 +1,7 @@
 # Braga Saúde — Gateway API
 
 > Backend principal do assistente de saúde por voz Braga Saúde.  
-> FastAPI + PostgreSQL + Groq AI + WhatsApp Cloud API + Firebase Admin.
+> FastAPI + PostgreSQL + Groq AI + Firebase Admin.
 
 ## 🏗️ Tech Stack
 
@@ -11,7 +11,6 @@
 - **Groq Cloud** (LLMs clínicos: qwen/qwen3.8-27b, llama-3.3-70b-versatile, whisper-large-v3)
 - **Voz Desacoplada (On-Device):** Síntese neural transferida 100% para o cliente Android (0% carga de TTS na EC2)
 - **Firebase Admin** (FCM push + autenticação)
-- **WhatsApp Cloud API** (mensageria multimodal: recepção/transcrição de áudio com resposta estrita em texto)
 - **Gmail SMTP** (emails de verificação/recuperação)
 
 ## 🚀 Quick Start
@@ -21,7 +20,6 @@
 - PostgreSQL 16+
 - chave de API Groq
 - conta Firebase + serviceAccountKey.json
-- conta WhatsApp Business API
 
 ### Setup
 
@@ -91,7 +89,6 @@ scripts/server/
 │   ├── auth.py            #   /api/auth/* (OTP, cadastro, sessão)
 │   ├── sync.py            #   /api/sync/* (22 endpoints, gravar/sincronizar)
 │   ├── care_os.py         #   contratos D62: família, farmácia, médico e resgate
-│   └── whatsapp.py        #   /api/whatsapp/* (webhook, recepção de áudio e respostas em texto)
 ├── schemas/               # Contratos Pydantic canônicos do Care OS
 ├── services/              # Regras de autorização e workers do Care OS
 ├── routers/admin.py       #   /api/admin/* — portal do webservice (D-WS1):
@@ -105,7 +102,6 @@ scripts/server/
 ├── config.py              # Centralized env vars & paths
 ├── orb_router.py          # Voice assistant routes (Orb)
 ├── ws_orb.py              # WebSocket handler
-├── whatsapp_service.py    # WhatsApp Cloud API client
 ├── email_service.py       # Gmail SMTP sender
 ├── assistant_preferences.py
 ├── family_api.py
@@ -137,7 +133,6 @@ scripts/server/
 | POST | `/v1/chat/completions` | `chat` | Chat conversacional (canal REST) |
 | WebSocket | `/ws/orb` | — | Chat de voz streaming (Orb) |
 | GET | `/api/app/latest` | `app` | Última versão do app (OTA) |
-| GET/POST | `/api/whatsapp/webhook` | `whatsapp` | Webhook da WhatsApp Cloud API |
 | POST | `/api/feedback/reply` | `sync` | Resposta a feedback (suporte) |
 
 ### Care OS D62 — cuidado longitudinal
@@ -187,7 +182,7 @@ Nenhuma credencial de banco vai para o Render; o RDS permanece privado.
 | GET | `/api/admin/blocked-ips` | Blocklist autoritativa (`security_blocked_ips`) |
 | GET | `/api/admin/metrics/active-users` | `?days=7` — COUNT(DISTINCT user_id) em `audit_logs` |
 | GET | `/api/admin/metrics/engagement` | Distribuição de streak e nível por faixa |
-| GET | `/api/admin/metrics/notifications` | Opt-in + ações por canal (whatsapp/fcm/app) |
+| GET | `/api/admin/metrics/notifications` | Opt-in + ações por canal (fcm/app) |
 | GET | `/api/admin/metrics/feature-usage` | Top ações registradas (`?days=30`) |
 
 ```bash
@@ -255,12 +250,11 @@ cloudflared tunnel route dns braga-gateway your-domain.com
 cloudflared service install <TOKEN>
 ```
 
-### Síntese de Voz On-Device & WhatsApp em Texto
+### Síntese de voz no aplicativo
 
 Desde a eliminação de TTS remoto na EC2:
 - A síntese de voz neural foi transferida integralmente para os dispositivos clientes (App Android com Sherpa-ONNX local).
 - O backend economiza ciclos de CPU/RAM e não mantém binários de inferência C++ em execução contínua.
-- O WhatsApp recebe e transcreve áudios (Whisper via Groq), mas responde **exclusivamente em texto** para máxima clareza e acessibilidade.
 
 ## 🔒 Segurança
 
@@ -279,7 +273,7 @@ Desde a eliminação de TTS remoto na EC2:
 ADA e OMS para usuários autenticados. A resposta inclui instituição, versão do
 documento e parâmetro clínico; os filtros opcionais são `category` e `item_key`.
 A migration `016_clinical_references_sources.sql` atualiza registros existentes
-de forma idempotente e mantém a fonte rastreável para Android, portal e WhatsApp.
+de forma idempotente e mantém a fonte rastreável para Android e portal.
 
 ### Contrato único de exames
 

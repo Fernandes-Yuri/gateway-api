@@ -1,4 +1,4 @@
-"""Consultas de saúde do app reusadas no WhatsApp (PR2, passo 2.1).
+"""Consultas de saúde compartilhadas do aplicativo (PR2, passo 2.1).
 
 Cada consulta é uma leitura pura sobre vital_signs, devolvendo sempre
 OperationResult estruturado: valor + unidade + hora da medição, ordenada pela

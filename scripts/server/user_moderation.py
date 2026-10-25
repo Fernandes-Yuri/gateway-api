@@ -31,6 +31,20 @@ async def require_not_restricted(uid, request, *, auth_time=None):
             from security_telemetry import mark_signal
             mark_signal('restricted_access')
             raise HTTPException(401 if level == 'suspended' else 403, row['reason'])
+    if not (method == 'DELETE' and path == f'/api/profile/{uid}'):
+        async with pool.acquire() as conn:
+            deleted = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM user_deletion_logs WHERE user_id=$1) "
+                "AND NOT EXISTS(SELECT 1 FROM profiles WHERE id=$1)", uid)
+        if deleted is True:
+            raise HTTPException(401, 'Esta conta foi excluída. Entre com outra conta para continuar.')
+    async with pool.acquire() as conn:
+        paused = await conn.fetchval('SELECT paused_at FROM profiles WHERE id=$1', uid)
+    if paused is not None:
+        if path != f'/api/profile/{uid}/reactivate' or method != 'POST':
+            raise HTTPException(403, 'Conta pausada. Faça um novo login para retornar.')
+        if auth_time is None or auth_time <= int(paused.timestamp()):
+            raise HTTPException(401, 'Faça um novo login para reativar sua conta.')
     if auth_time is not None:
         async with pool.acquire() as conn:
             revoked_at = await conn.fetchval('SELECT session_revoked_at FROM profiles WHERE id=$1', uid)

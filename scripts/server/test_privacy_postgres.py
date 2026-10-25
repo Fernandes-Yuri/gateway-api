@@ -33,11 +33,12 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
         self.pool = await asyncpg.create_pool(TEST_DSN, min_size=1, max_size=2, setup=setup)
         async with self.pool.acquire() as conn:
             await conn.execute((ROOT / "scripts/docker/init_schema.sql").read_text(encoding="utf-8"))
-            for number in (10, 17, 31, 32, 33):
+            for number in (10, 17, 18, 31, 32, 33):
                 migration = next((ROOT / "migrations").glob(f"{number:03d}_*.sql"))
                 await conn.execute(migration.read_text(encoding="utf-8"))
             await conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)")
             await conn.execute((ROOT / "migrations/056_firebase_account_reconciliation.sql").read_text(encoding="utf-8"))
+            await conn.execute((ROOT / "migrations/071_account_pause_and_mail.sql").read_text(encoding="utf-8"))
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('paciente','Paciente'),('cuidador','Cuidador')")
 
     async def test_exam_storage_removal_preserves_patient_and_medications(self):
@@ -89,15 +90,45 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM prescription_files"),0)
                 self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM user_deletion_logs"),2)
 
+    async def test_push_cleanup_is_scoped_and_retry_removes_orphans_without_duplicate_audit(self):
+        async with self.pool.acquire() as conn:
+            for i in range(5):
+                await conn.execute("INSERT INTO device_push_tokens(token,user_id) VALUES ($1,'paciente')", f"patient-{i}")
+            await conn.execute("INSERT INTO device_push_tokens(token,user_id) VALUES ('other','cuidador')")
+        with patch.object(account_deletion, "cleanup_account_files", AsyncMock(return_value=True)):
+            self.assertTrue((await account_deletion.delete_account(self.pool, "paciente", actor="titular"))["success"])
+            async with self.pool.acquire() as conn:
+                self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM device_push_tokens WHERE user_id='paciente'"), 0)
+                self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM device_push_tokens WHERE user_id='cuidador'"), 1)
+                await conn.execute("INSERT INTO device_push_tokens(token,user_id) VALUES ('legacy','paciente')")
+            self.assertTrue((await account_deletion.delete_account(self.pool, "paciente", actor="titular"))["success"])
+        async with self.pool.acquire() as conn:
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM device_push_tokens WHERE user_id='paciente'"), 0)
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM user_deletion_logs WHERE user_id='paciente'"), 1)
+
+    async def test_deletion_removes_posts_and_cross_account_reactions_but_preserves_other_posts(self):
+        async with self.pool.acquire() as conn:
+            patient_post = await conn.fetchval("INSERT INTO social_posts(user_id,post_type,title) VALUES ('paciente','milestone','Teste') RETURNING id")
+            other_post = await conn.fetchval("INSERT INTO social_posts(user_id,post_type,title) VALUES ('cuidador','milestone','Preservado') RETURNING id")
+            await conn.execute("INSERT INTO post_reactions(post_id,user_id) VALUES ($1,'cuidador'),($2,'paciente')", patient_post, other_post)
+        with patch.object(account_deletion, "cleanup_account_files", AsyncMock(return_value=True)):
+            await account_deletion.delete_account(self.pool, "paciente", actor="titular")
+        async with self.pool.acquire() as conn:
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM social_posts WHERE user_id='paciente'"), 0)
+            self.assertEqual(await conn.fetchval("SELECT id FROM social_posts WHERE user_id='cuidador'"), other_post)
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM post_reactions"), 0)
+
     async def test_failed_transaction_rolls_back_every_deletion_and_cleanup_job(self):
         async with self.pool.acquire() as conn:
             await conn.execute("INSERT INTO feedbacks(user_id,category,message) VALUES ('paciente','bug','Teste')")
+            await conn.execute("INSERT INTO device_push_tokens(token,user_id) VALUES ('rollback-token','paciente')")
             await conn.execute("CREATE FUNCTION reject_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'falha de teste'; END $$")
             await conn.execute("CREATE TRIGGER reject_delete BEFORE DELETE ON profiles FOR EACH ROW EXECUTE FUNCTION reject_delete()")
         with self.assertRaises(asyncpg.PostgresError):
             await account_deletion.delete_account(self.pool,"paciente",actor="titular")
         async with self.pool.acquire() as conn:
             self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM feedbacks"),1)
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM device_push_tokens WHERE user_id='paciente'"),1)
             self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM account_storage_cleanup"),0)
             self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM user_deletion_logs"),0)
 

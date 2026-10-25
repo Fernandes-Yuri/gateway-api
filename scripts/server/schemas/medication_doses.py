@@ -46,7 +46,7 @@ class DoseBatchPrepare(StrictRequest):
     group_id: UUID
     expected_schedule_digest: str = Field(pattern=r'^[0-9a-f]{64}$')
     occurrence_ids: list[UUID] = Field(min_length=1, max_length=200)
-    channel: Literal['app', 'whatsapp']
+    channel: Literal['app']
 
     @field_validator('occurrence_ids')
     @classmethod
@@ -119,7 +119,7 @@ class DoseBatchResponse(BaseModel):
     batch_id: UUID
     patient_id: str
     actor_id: str
-    channel: Literal['app', 'whatsapp']
+    channel: Literal['app']
     state: Literal['prepared', 'confirmed', 'partially_confirmed', 'failed', 'cancelled', 'expired']
     prepared_at: datetime
     expires_at: datetime

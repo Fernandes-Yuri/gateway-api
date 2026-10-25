@@ -25,7 +25,6 @@ from fastapi.testclient import TestClient
 from api_identity import firebase_uid
 from routers import care_os
 from routers.care_os import _minimal_pdf, _sanitize_pdf_text
-from services import care_automations
 
 
 class _MockPool:
@@ -171,82 +170,6 @@ class TestRescueCardAudit(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
 
 
-class TestCareAutomationsIODecoupling(unittest.IsolatedAsyncioTestCase):
-    async def test_claim_returns_id_when_fresh(self):
-        conn = MagicMock()
-        conn.fetchrow = AsyncMock(return_value={"id": "claim-uuid-1"})
-        claim = await care_automations._claim(conn, "pat-1", "care-1", "NIGHTLY_BULLETIN", "key-1")
-        self.assertEqual(claim, "claim-uuid-1")
-
-    async def test_claim_returns_none_when_conflict_unmet(self):
-        conn = MagicMock()
-        conn.fetchrow = AsyncMock(return_value=None)
-        claim = await care_automations._claim(conn, "pat-1", "care-1", "NIGHTLY_BULLETIN", "key-1")
-        self.assertIsNone(claim)
-
-    async def test_deliver_or_release_executes_io_before_pool_acquisition(self):
-        events = []
-        conn = MagicMock()
-        conn.execute = AsyncMock(side_effect=lambda *args: events.append("db_execute"))
-
-        pool = MagicMock()
-        @asynccontextmanager
-        async def acquire():
-            events.append("pool_acquire")
-            yield conn
-        pool.acquire = acquire
-
-        async def mock_sender(phone, message, ntype):
-            events.append("sender_io")
-            return True
-
-        delivered = await care_automations._deliver_or_release(
-            pool, mock_sender, "claim-100", "11999998888", "Mensagem", "NIGHTLY_BULLETIN",
-        )
-        self.assertTrue(delivered)
-
-        # O sender externo deve ocorrer ANTES de adquirir a conexao do pool
-        self.assertEqual(events, ["sender_io", "pool_acquire", "db_execute"])
-        conn.execute.assert_awaited_once_with(
-            "UPDATE care_notification_deliveries SET delivered_at=now() WHERE id=$1", "claim-100",
-        )
-
-    async def test_send_nightly_bulletins_decouples_network_io(self):
-        db_conn = MagicMock()
-        db_conn.fetch = AsyncMock(return_value=[{
-            "patient_id": "p1", "caregiver_id": "c1",
-            "caregiver_name": "Carla", "patient_name": "Paulo", "phone": "11977776666",
-        }])
-        db_conn.fetchrow = AsyncMock(side_effect=[
-            {"id": "claim-p1"},  # _claim
-            {"systolic_pressure": 125, "diastolic_pressure": 82},  # vital
-        ])
-        db_conn.fetchval = AsyncMock(return_value=3)  # medication_logs count
-        db_conn.execute = AsyncMock()
-
-        pool_events = []
-        @asynccontextmanager
-        async def mock_acquire():
-            pool_events.append("acquire_start")
-            yield db_conn
-            pool_events.append("acquire_end")
-
-        pool = MagicMock()
-        pool.acquire = mock_acquire
-
-        async def mock_sender(phone, msg, ntype):
-            pool_events.append("sender_send")
-            return True
-
-        sent = await care_automations.send_nightly_bulletins(pool, mock_sender)
-        self.assertEqual(sent, 1)
-
-        # Garante que a 1a conexao (extracao) fechou ANTES de disparar o sender
-        self.assertEqual(pool_events, [
-            "acquire_start", "acquire_end",   # Fase 1: DB extraction & claim
-            "sender_send",                   # Fase 2: Network I/O desacoplado
-            "acquire_start", "acquire_end",   # Fase 3: Conexao pontual para UPDATE
-        ])
 
 
 class TestMinimalPdfSanitization(unittest.TestCase):

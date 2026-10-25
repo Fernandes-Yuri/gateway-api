@@ -104,6 +104,7 @@ class SecureContracts(unittest.IsolatedAsyncioTestCase):
         conn.transaction.assert_called_once()
         sql_calls = [call.args for call in conn.execute.await_args_list]
         self.assertIn(("DELETE FROM profiles WHERE id=$1","firebase-uid"),sql_calls)
+        self.assertIn(("DELETE FROM device_push_tokens WHERE user_id=$1","firebase-uid"),sql_calls)
         self.assertTrue(any("user_deletion_logs" in call[0] for call in sql_calls))
 
     async def test_database_failure_prevents_storage_cleanup(self):

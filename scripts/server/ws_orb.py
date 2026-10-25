@@ -15,6 +15,7 @@ from orb_router import (recall as _recall, remember as _remember,
                         symptom_repeat as _symptom_repeat,
                         SYMPTOM_KINDS as _SYMPTOM_KINDS,
                         ESCALATION_SUFFIX as _ESCALATION_SUFFIX)
+from orb_semantics import validated_label, is_current_emergency, original_text, conversation_only, validate_envelope
 from trace_llm import trace_llm as _trace
 
 ALLOWED_ACTIONS = {
@@ -39,6 +40,7 @@ class OrbMessage(BaseModel):
 
 
 class OrbRequest(BaseModel):
+    nlu_context: dict | None = None
     type: Literal['chat']
     id: str = Field(min_length=1, max_length=128)
     messages: list[OrbMessage] = Field(min_length=1, max_length=100)
@@ -117,6 +119,7 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
     async def generate(send, uid, req):
         started = time.monotonic()
         prompt = next((m.content for m in reversed(req.messages) if m.role == 'user'), '')
+        prompt = original_text(prompt)
         if not prompt.strip():
             await send(dict(type='error', id=req.id, code='INVALID_REQUEST', message='Mensagem vazia.'))
             return
@@ -142,7 +145,7 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
         # ANTES do roteador — grava na agenda do paciente (vinculo validado).
         if getattr(req, 'acting_as', None) == 'caregiver' and getattr(req, 'patient_id', None):
             from voice_scheduling import quer_agendar as _quer_agendar
-            if _quer_agendar(prompt):
+            if _quer_agendar(prompt) and not is_current_emergency(prompt) and not conversation_only(prompt, req.nlu_context):
                 from orb_llm import compose_envelope
                 try:
                     from server import db_pool as _pool
@@ -179,7 +182,7 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
                     _TID_BY_REQ.pop(req.id, None)
                     return
         from orb_router import route_chat as _route_chat
-        routed = _route_chat(prompt) if enable_router else None
+        routed = _route_chat(prompt, model_name=model, nlu_context=req.nlu_context) if enable_router else None
         preferences = {}
         if memory_handler and (routed is None or routed.get('acao') == 'CONVERSA'):
             memory_reply, preferences = await memory_handler(uid, prompt, req.messages)
@@ -261,6 +264,7 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
                         if m.role == 'user' else _assistant_fala(m.content))
                    for m in req.messages[-20:] if m.role in ('user', 'assistant')]
         full, buffer = '', ''
+        speech_chunks = []
         count, pending_count = 0, 0
         first_ms = None
         usage = {}
@@ -277,6 +281,7 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
                     timeout=first_timeout)
             except asyncio.TimeoutError as exc:
                 raise TimeoutError('Classification stalled') from exc
+            label = validated_label(prompt, label, req.nlu_context)
             _trace('chat-ws', 'classify_response', tid, label=label,
                    latency_ms=round((time.monotonic() - _t0) * 1000))
             if label == 'CONSULTAR_METRICAS':
@@ -312,7 +317,7 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
                             deadline = now + chunk_timeout
                             if first_ms is None:
                                 first_ms = round((now - started) * 1000)
-                                await send(dict(type='chunk', id=req.id, content=delta))
+                                speech_chunks.append(delta)
                             else:
                                 if not buffer:
                                     flush_at = now + batch_interval
@@ -321,12 +326,12 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
                             next_delta = asyncio.create_task(anext(stream))
                         now = time.monotonic()
                         if buffer and (pending_count >= 3 or now >= flush_at):
-                            await send(dict(type='chunk', id=req.id, content=buffer))
+                            speech_chunks.append(buffer)
                             buffer, pending_count = '', 0
                         if now >= deadline:
                             raise TimeoutError('Generation stalled')
                     if buffer:
-                        await send(dict(type='chunk', id=req.id, content=buffer))
+                        speech_chunks.append(buffer)
                 finally:
                     next_delta.cancel()
                     await asyncio.gather(next_delta, return_exceptions=True)
@@ -349,6 +354,16 @@ def install_orb_routes(app, *, pool_provider, system_prompt, model, url, token,
                 or not isinstance(parsed.get('parametros'), dict)):
             _trace('chat-ws', 'speak_invalid', tid, reason='schema', full_text=full[:500])
             raise ValueError('Invalid structured response')
+        safe = validate_envelope(prompt, parsed, req.nlu_context)
+        # A fala livre só chega ao app depois de validada; corrigir apenas o
+        # evento done ainda permitiria exibir/vocalizar uma promessa falsa.
+        if speech_chunks:
+            outgoing = speech_chunks if safe['fala'] == parsed['fala'] else [safe['fala']]
+            first_ms = round((time.monotonic() - started) * 1000)
+            for chunk in outgoing:
+                await send(dict(type='chunk', id=req.id, content=chunk))
+        parsed = safe
+        full = json.dumps(parsed, ensure_ascii=False)
         try:
             await asyncio.to_thread(log_sample, user_prompt=prompt, assistant_reply=full,
                                     source='app_chat', system_prompt=system_used,

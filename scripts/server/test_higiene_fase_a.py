@@ -2,7 +2,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from fastapi.testclient import TestClient
 
 import config
 import orb_router
@@ -14,18 +13,6 @@ class HigieneFaseATest(unittest.IsolatedAsyncioTestCase):
         """Item 1: dataset canônico deve ser dataset_braga.jsonl."""
         self.assertIn("dataset_braga.jsonl", config.default_dataset_path)
 
-    def test_health_whatsapp_operational_status(self):
-        """Item 5: /health reporta configured, otp_paused e operational."""
-        client = TestClient(server.app)
-        res = client.get("/health")
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertIn("whatsapp", data)
-        wa = data["whatsapp"]
-        self.assertIn("configured", wa)
-        self.assertIn("otp_paused", wa)
-        self.assertIn("operational", wa)
-        self.assertEqual(wa["operational"], wa["configured"] and not wa["otp_paused"])
 
     def test_normalize_aliasing_behavior(self):
         """Item 7: normalize() sem redundância de aliasing."""
@@ -48,8 +35,7 @@ class HigieneFaseATest(unittest.IsolatedAsyncioTestCase):
             return True
 
         with patch.object(server, "load_devices", return_value=devices), \
-                patch.object(server, "dispatch_push", side_effect=fake_push), \
-                patch.object(server, "HAS_WHATSAPP", False):
+                patch.object(server, "dispatch_push", side_effect=fake_push):
             pool = MagicMock()
             triggered = await server.dispatch_clinical_alert(
                 pool, "patient", systolic=170, diastolic=110

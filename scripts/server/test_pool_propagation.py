@@ -45,8 +45,7 @@ class PoolPropagationTest(unittest.TestCase):
             with patch.object(server, "HAS_POSTGRES", True), \
                  patch.object(server, "DATABASE_URL", "postgresql://u:p@h/db"), \
                  patch("asyncpg.create_pool", AsyncMock(return_value=fake_pool)), \
-                 patch.object(server, "HAS_SCHEDULER", False), \
-                 patch.object(server, "HAS_WA_LINK", False):
+                 patch.object(server, "HAS_SCHEDULER", False):
                 self._run_lifecycle(after_startup=_snapshot)
 
                 for router, pool_seen in captured['routers']:
@@ -69,8 +68,7 @@ class PoolPropagationTest(unittest.TestCase):
             with patch.object(server, "HAS_POSTGRES", True), \
                  patch.object(server, "DATABASE_URL", "postgresql://u:p@h/db"), \
                  patch("asyncpg.create_pool", AsyncMock(return_value=fake_pool)), \
-                 patch.object(server, "HAS_SCHEDULER", False), \
-                 patch.object(server, "HAS_WA_LINK", False):
+                 patch.object(server, "HAS_SCHEDULER", False):
                 self._run_lifecycle()
                 # Apos shutdown + close, todos voltam a None.
                 for router in server._POOL_ROUTERS:

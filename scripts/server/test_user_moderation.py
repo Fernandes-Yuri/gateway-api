@@ -76,6 +76,7 @@ class RestrictionEnforcement(unittest.IsolatedAsyncioTestCase):
 
     async def check(self, level, method, path, status=None):
         conn = AsyncMock()
+        conn.fetchval.return_value = None
         conn.fetchrow.return_value = {'level': level, 'reason': 'Abuso'} if level else None
         pool = MagicMock()
         pool.acquire.return_value.__aenter__.return_value = conn
@@ -105,7 +106,7 @@ class RestrictionEnforcement(unittest.IsolatedAsyncioTestCase):
     async def test_sessao_anterior_ao_bloqueio_exige_novo_login(self):
         conn = AsyncMock()
         conn.fetchrow.return_value = None
-        conn.fetchval.return_value = datetime.fromtimestamp(100, timezone.utc)
+        conn.fetchval.side_effect = lambda sql, *args: datetime.fromtimestamp(100, timezone.utc) if "session_revoked_at" in sql else None
         pool = MagicMock()
         pool.acquire.return_value.__aenter__.return_value = conn
         with patch.object(user_moderation, '_pool_provider', lambda: pool):
