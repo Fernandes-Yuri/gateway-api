@@ -105,3 +105,18 @@ class GroceryImport(BaseModel):
 class GroceryAdminMutation(BaseModel):
     kind: Literal['food', 'card', 'card_with_ingredient', 'market', 'quote', 'remove_quote']
     payload: dict
+
+
+class BasketItemIn(BaseModel):
+    card_id: str = Field(min_length=1, max_length=100)
+    quantity: int = Field(gt=0, le=999, strict=True)
+
+
+class BasketComparisonIn(BaseModel):
+    items: list[BasketItemIn] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode='after')
+    def unique_cards(self):
+        if len({item.card_id for item in self.items}) != len(self.items):
+            raise ValueError('Informe cada produto uma única vez.')
+        return self

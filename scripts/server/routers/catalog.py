@@ -26,7 +26,8 @@ from services.grocery_contributions import GroceryPriceContribution, AVERAGES_SQ
 from schemas.grocery_cards import GroceryRetailCardOut
 from services.grocery_cards import load_cards
 from services.grocery_retail_admin import save_record
-from schemas.grocery_cards import GroceryAdminMutation
+from schemas.grocery_cards import GroceryAdminMutation, BasketComparisonIn
+from services.grocery_basket import load_comparison
 
 router = APIRouter()
 
@@ -776,5 +777,17 @@ async def grocery_nutrition_suggestions(q: str, amount: float, unit: Literal['g'
     try:
         return {'candidates': suggestions(q, amount, unit, total_grams),
                 'notice': 'Valores médios da tabela, por embalagem. Confira o alimento e os valores antes de usar. Dados ausentes não representam zero.'}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post('/api/catalog/grocery/basket-comparison')
+async def grocery_basket_comparison(body: 'BasketComparisonIn'):
+    if not _state.db_pool:
+        raise HTTPException(503, 'Comparação de mercados indisponível.')
+    try:
+        async with _state.db_pool.acquire() as conn:
+            async with conn.transaction(readonly=True, isolation='repeatable_read'):
+                return await load_comparison(conn, {item.card_id: item.quantity for item in body.items})
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
