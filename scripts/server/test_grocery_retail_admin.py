@@ -46,12 +46,21 @@ def test_editorial_endpoints_require_existing_admin_authorization(admin_client):
 def test_admin_snapshot_includes_inactive_records_and_ingredient_choices(admin_client):
     http, conn = admin_client
     conn.fetch.side_effect = [[], [], [dict(id='x', name='X', active=False)], [dict(slug='butter', name='Manteiga', unit='kg')]]
-    response = http.get('/api/admin/grocery/retail', headers=AUTH)
+    response = http.get('/api/admin/grocery/retail?include_inactive=true', headers=AUTH)
     assert response.status_code == 200
     assert response.json()['markets'][0]['active'] is False
     assert response.json()['ingredients'][0]['slug'] == 'butter'
     assert 'WHERE TRUE' in conn.fetch.call_args_list[0].args[0]
     assert 'WHERE TRUE' in conn.fetch.call_args_list[1].args[0]
+
+
+def test_admin_snapshot_defaults_to_active_records(admin_client):
+    http, conn = admin_client
+    conn.fetch.side_effect = [[], [], [dict(id='x', name='X', active=True)], [dict(slug='butter', name='Manteiga', unit='kg')]]
+    response = http.get('/api/admin/grocery/retail', headers=AUTH)
+    assert response.status_code == 200
+    assert 'WHERE active' in conn.fetch.call_args_list[0].args[0]
+    assert 'WHERE active = TRUE' in conn.fetch.call_args_list[3].args[0]
 
 
 async def test_saves_photo_packaging_nutrition_and_ingredient_without_kg_rounding():

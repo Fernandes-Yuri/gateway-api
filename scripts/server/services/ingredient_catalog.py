@@ -166,9 +166,9 @@ def _group_of(item, groups):
     return item.get("canonical_group_slug") or ""
 
 
-async def admin_price_rows(conn, averages_sql):
+async def admin_price_rows(conn, averages_sql, active_only: bool = True):
     """Linhas administrativas com o mesmo snapshot repetível do enriquecimento."""
-    ingredients = await load_ingredients(conn, active_only=False)
+    ingredients = await load_ingredients(conn, active_only=active_only)
     legacy = await conn.fetch("SELECT * FROM grocery_price_cache")
     community = await conn.fetch(averages_sql)
     categories = await conn.fetch("SELECT remote_id,details->>'category' AS category FROM food_catalog WHERE active")
