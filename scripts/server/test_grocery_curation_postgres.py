@@ -61,3 +61,76 @@ async def test_curation_preserves_basics_photos_legacy_links_and_history():
         await conn.execute('SET search_path TO public')
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
+
+async def test_purge_non_canonical_072_inactivates_items_and_reverses():
+    parsed = urlparse(DSN)
+    if parsed.hostname not in ('127.0.0.1', 'localhost') or parsed.path != '/braga_privacy_test':
+        raise RuntimeError('Somente banco efêmero local braga_privacy_test')
+    conn = await asyncpg.connect(DSN)
+    schema = 'purge_072_' + uuid.uuid4().hex
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+        await conn.execute(f'SET search_path TO "{schema}"')
+        await conn.execute("""
+            CREATE TABLE grocery_ingredients(slug TEXT PRIMARY KEY,name TEXT,unit TEXT,details JSONB,active BOOLEAN DEFAULT TRUE);
+            CREATE TABLE food_catalog(remote_id TEXT PRIMARY KEY,name TEXT,details JSONB,active BOOLEAN DEFAULT TRUE);
+            CREATE TABLE grocery_retail_cards(id TEXT PRIMARY KEY,linked_ingredient_slug TEXT,image_url TEXT,active BOOLEAN DEFAULT TRUE);
+            CREATE TABLE nutrition_catalog_settings(id INTEGER PRIMARY KEY,revision INTEGER);
+            CREATE TABLE schema_migrations(version TEXT PRIMARY KEY,applied_at TIMESTAMPTZ DEFAULT now());
+            INSERT INTO nutrition_catalog_settings VALUES(1,10);
+        """)
+        for slug, name in [
+            ('feijao-carioca', 'Feijão Carioca'),
+            ('bertalha', 'Bertalha'),
+            ('taioba', 'Taioba'),
+            ('arroz-branco-tipo-1', 'Arroz Branco Tipo 1'),
+            ('melissa-fresca', 'Melissa Fresca'),
+            ('maca-gala-com-casca', 'Maçã Gala')
+        ]:
+            await conn.execute(
+                'INSERT INTO grocery_ingredients(slug,name,unit,details) VALUES($1,$2,$3,$4)',
+                slug, name, 'kg', json.dumps({'food_ids': [f'food_{slug}']})
+            )
+            await conn.execute(
+                'INSERT INTO food_catalog(remote_id,name,details) VALUES($1,$2,$3)',
+                f'food_{slug}', name, json.dumps({'shoppingComponents': [slug]})
+            )
+            await conn.execute('INSERT INTO grocery_retail_cards VALUES($1,$2,$3,TRUE)', f'card_{slug}', slug, '')
+
+        await conn.execute("INSERT INTO food_catalog VALUES('food_217','Chá de Cidreira','{\"shoppingComponents\":[\"melissa-fresca\",\"maca-gala-com-casca\"]}',TRUE)")
+
+        await conn.execute((ROOT / 'migrations/072_purge_non_canonical_grocery_items.sql').read_text())
+
+        ing_active = {r['slug']: r['active'] for r in await conn.fetch('SELECT slug,active FROM grocery_ingredients')}
+        assert ing_active['feijao-carioca'] is True
+        assert ing_active['arroz-branco-tipo-1'] is True
+        assert ing_active['maca-gala-com-casca'] is True
+        assert ing_active['bertalha'] is False
+        assert ing_active['taioba'] is False
+        assert ing_active['melissa-fresca'] is False
+
+        food_active = {r['remote_id']: r['active'] for r in await conn.fetch('SELECT remote_id,active FROM food_catalog')}
+        assert food_active['food_feijao-carioca'] is True
+        assert food_active['food_arroz-branco-tipo-1'] is True
+        assert food_active['food_bertalha'] is False
+        assert food_active['food_taioba'] is False
+        assert food_active['food_217'] is False
+
+        card_active = {r['id']: r['active'] for r in await conn.fetch('SELECT id,active FROM grocery_retail_cards')}
+        assert card_active['card_feijao-carioca'] is True
+        assert card_active['card_bertalha'] is False
+
+        assert await conn.fetchval('SELECT revision FROM nutrition_catalog_settings WHERE id=1') == 11
+        assert await conn.fetchval("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='072_purge_non_canonical_grocery_items')") is True
+
+        await conn.execute((ROOT / 'migrations/072_purge_non_canonical_grocery_items_rollback.sql').read_text())
+        assert await conn.fetchval('SELECT bool_and(active) FROM grocery_ingredients') is True
+        assert await conn.fetchval('SELECT bool_and(active) FROM food_catalog') is True
+        assert await conn.fetchval('SELECT bool_and(active) FROM grocery_retail_cards') is True
+        assert await conn.fetchval('SELECT revision FROM nutrition_catalog_settings WHERE id=1') == 12
+        assert await conn.fetchval("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='072_purge_non_canonical_grocery_items')") is False
+    finally:
+        await conn.execute('ROLLBACK')
+        await conn.execute('SET search_path TO public')
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
