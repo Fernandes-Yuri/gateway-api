@@ -38,7 +38,7 @@ def test_offline_service_returns_503(client):
     http, _ = client
     catalog.configure_state()
     assert http.get('/api/catalog/grocery/cards').status_code == 503
-    assert http.post('/api/catalog/grocery/basket-comparison', json={'items': []}).status_code == 404
+    assert http.post('/api/catalog/grocery/basket-comparison', json={'items': [{'card_id': 'a', 'quantity': 1}]}).status_code == 503
 
 
 def test_editorial_import_is_escaped_and_transactional():
