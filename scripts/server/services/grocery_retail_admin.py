@@ -57,6 +57,8 @@ async def save_record(conn, kind, payload):
             if err['loc'] else 'dados do cadastro' for err in exc.errors()))
         raise ValueError('Revise os campos: ' + fields) from exc
     data = record.model_dump()
+    if kind == 'card' and 'barcode_ean' not in record.model_fields_set:
+        data.pop('barcode_ean')
     # JSONB uses an explicit JSON string with asyncpg's default codec.
     if kind == 'card':
         facts = data.get('nutrition_facts') or []
@@ -131,6 +133,8 @@ async def save_food(conn, payload):
     """
     food = GroceryFoodIn.model_validate(payload)
     card = food.card.model_dump()
+    if 'barcode_ean' not in food.card.model_fields_set:
+        card.pop('barcode_ean')
     unit = {'g': 'kg', 'ml': 'L', 'un': 'un'}[card['package_unit']]
     quote = None
     reference = food.reference

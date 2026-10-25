@@ -355,3 +355,11 @@ async def test_invalid_universal_ean_rejected(ean):
     with pytest.raises(ValueError):
         await save_record(conn, 'food', {'card': product(barcode_ean=ean), 'quotes': []})
     conn.execute.assert_not_awaited()
+
+
+async def test_legacy_card_edit_does_not_erase_ean_when_omitted():
+    conn = AsyncMock()
+    conn.fetchval.return_value = 'kg'
+    conn.fetchrow.return_value = {'name': 'Manteiga', 'linked_ingredient_slug': 'butter'}
+    await save_record(conn, 'card', product())
+    assert 'barcode_ean' not in conn.execute.call_args.args[0]

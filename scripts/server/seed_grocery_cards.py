@@ -29,6 +29,8 @@ def import_sql(payload):
         for row in rows:
             data = row.model_dump()
             if table == 'grocery_retail_cards':
+                if 'barcode_ean' not in row.model_fields_set:
+                    data.pop('barcode_ean')
                 data['nutrition_facts'] = json.dumps(data['nutrition_facts'], default=float)
             identity = tuple(data[k] for k in keys)
             if identity in seen:
