@@ -1,6 +1,7 @@
 """Catálogo de alimentos e ingredientes servido a partir do RDS."""
 import json
 from decimal import Decimal
+from services.food_semantic_metadata import FoodPlanningMetadata
 from services.grocery_physical_metadata import IngredientPhysicalMetadata, FoodComponentMetadata
 from unicodedata import normalize, combining
 
@@ -220,6 +221,9 @@ async def nutrition_snapshot(pool, averages_sql):
             ingredients = await enrich_prices(conn, await load_ingredients(conn), averages_sql)
             foods = [as_json(r["food"]) for r in rows]
             for food in foods:
+                # Legacy snapshots remain readable during a staged rollout.
+                if "semanticMetadata" in food:
+                    food.update(FoodPlanningMetadata.model_validate(food).model_dump())
                 food["component_proportions"] = FoodComponentMetadata.model_validate(food).component_proportions
             if not settings or not foods:
                 raise ValueError("Catálogo nutricional não configurado.")

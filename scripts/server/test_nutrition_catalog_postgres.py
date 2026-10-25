@@ -92,3 +92,19 @@ class NutritionCatalogPostgres(unittest.IsolatedAsyncioTestCase):
                 await conn.execute((ROOT / "migrations/040_nutrition_catalog_rds.sql").read_text())
             await conn.execute("ROLLBACK")
             self.assertEqual(await conn.fetchval("SELECT count(*) FROM food_catalog WHERE remote_id IS NULL"), 1)
+
+    async def test_semantic_migration_snapshot_and_rollback(self):
+        async with self.pool.acquire() as conn:
+            for number in (41, 42, 43, 45, 46):
+                path = next(p for p in (ROOT / "migrations").glob(f"{number:03d}_*.sql") if not p.stem.endswith("_rollback"))
+                await conn.execute(path.read_text())
+            before = await conn.fetchval("SELECT count(*) FROM food_catalog WHERE active")
+            await conn.execute((ROOT / "migrations/072_food_semantic_metadata.sql").read_text())
+        snapshot = await nutrition_snapshot(self.pool, AVERAGES_SQL)
+        self.assertEqual(before, len(snapshot["foods"]))
+        for food in snapshot["foods"]:
+            self.assertIn("semanticMetadata", food)
+            self.assertGreater(food["maxDailyGrams"], 0)
+        async with self.pool.acquire() as conn:
+            await conn.execute((ROOT / "migrations/072_food_semantic_metadata_rollback.sql").read_text())
+            self.assertEqual(0, await conn.fetchval("SELECT count(*) FROM food_catalog WHERE details ? 'semanticMetadata'"))
