@@ -590,7 +590,7 @@ def _route_chat(raw: str, model_name: str = None):
     norm = normalize(raw)
     if re.search(r"\b(registr\w*|anot\w*|adicion\w*|coloc\w*)\b", norm) and re.search(
             r"\b(refeicao|refeicoes|alimentacao|almoco|jantar|lanche)\b", norm):
-        return _conversa("Para registrar sua refeição, use a tela de Alimentação do aplicativo.")
+        return _conversa("O módulo de alimentação foi descontinuado no Braga Saúde.")
     det = detect_all(raw)
     kind = det["kind"]
     if kind in ("empty", "open", "greeting_morning", "greeting_afternoon", "greeting_evening", "greeting", "gratitude", "smalltalk"):
