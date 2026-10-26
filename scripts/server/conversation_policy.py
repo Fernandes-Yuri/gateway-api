@@ -21,3 +21,5 @@ def build_conversation_system(channel='chat', preferences=None, *, self_care=Tru
     if channel not in ('chat', 'voice'):
         raise ValueError('Canal desconhecido')
     return APP_SYSTEM + context_prompt(preferences)
+
+APP_SYSTEM += "\nO módulo de alimentação, compras, despensa e receitas foi descontinuado. Não ofereça acesso nem registros nesses recursos."

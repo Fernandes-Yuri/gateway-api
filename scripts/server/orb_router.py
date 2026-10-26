@@ -483,13 +483,8 @@ def detect_all(raw: str) -> dict:
         return {"kind": "meds"}
     if any(v in norm for v in _MEAL_VERBS) or any(w in norm for w in _NUTRI_WORDS):
         return {"kind": "nutrition"}
-    try:
-        from orb_actions import extract_grocery_items
-    except Exception:
-        extract_grocery_items = None
-    if extract_grocery_items is not None and re.search(
-            r"\b(lista|compr\w*|mercado|feira|adiciona|adicione|anota|anote)\b", norm):
-        return {"kind": "grocery", "items": extract_grocery_items(norm)}
+    if re.search(r"\b(lista|despensa|receitas|mercado|feira)\b", norm):
+        return {"kind": "grocery"}
     # AUD-G17: data/hora agora é resolvido ANTES da PA (movido para cima).
     if re.search(r"\bbom dia\b|\botimo dia\b", norm):
         return {"kind": "greeting_morning"}
@@ -656,18 +651,8 @@ def _route_chat(raw: str, model_name: str = None):
             "Entendi. Eu não receito nem ajusto remédio, isso é com seu médico. "
             "Você pode anotar a tomada nos lembretes do aplicativo, e se preferir o assistente de voz te ajuda a preencher."
         )
-    if kind == "nutrition":
-        if re.search(r"\b(registr\w*|anot\w*|adicion\w*|coloc\w*)\b", normalize(raw)):
-            return _conversa("Para registrar sua refeição, use a tela de Alimentação do aplicativo.")
-        return None
-    if kind == "grocery":
-        items = det.get("items", [])
-        if items:
-            shown = ", ".join(items)
-            return {"fala": f"Preparei sua lista com {shown}. Toque em confirmar para abrir.",
-                    "acao": "ABRIR_LISTA_COMPRAS", "parametros": {"items": items}}
-        return {"fala": "Toque em confirmar para abrir sua lista de compras.",
-                "acao": "ABRIR_LISTA_COMPRAS", "parametros": {"items": []}}
+    if kind in ("nutrition", "grocery"):
+        return _conversa("O módulo de alimentação, compras, despensa e receitas foi descontinuado no Braga Saúde.")
     if kind == "app":
         return _conversa(
             DOWNLOAD_REPLY
@@ -718,38 +703,10 @@ def recall(memory: dict, key: str, ttl: int = MEMORY_TTL_S, now: float = None):
     return kind
 
 
-_ATE_RE = re.compile(r"\b(ja comi|comi sim|isso mesmo|foi isso|acabei de comer|sim,? comi|anota\w*|item|itens)\b")
-_GROCERY_RE = re.compile(r"\b(lista|compra|comprar|mercado|feira)\b")
-
-_FOLLOWUP_CHAT = {
-    "ate": ("Que bom! Você pode registrar na tela de alimentação do aplicativo, "
-            "o registro por voz ainda não está disponível para esses itens."),
-    "grocery": ("Combinado! Você pode montar a lista na tela de alimentação do aplicativo, "
-                "o registro por voz ainda não está disponível para esses itens."),
-}
-_FOLLOWUP_WA = {
-    "ate": ("Que bom! Me conta o que foi que eu te oriento com carinho. "
-            "E se quiser registrar a refeição, me fala os itens por aqui mesmo."),
-    "grocery": ("Combinado! Você pode anotar os itens na lista de compras do aplicativo, na tela de alimentação."),
-}
-
-
 def resolve_followup(raw: str, last_kind, channel: str = "chat"):
-    """Resposta de follow-up quando a msg anterior pediu clarificação.
-
-    last_kind: kind lembrado (só 'nutrition' é clarificável).
-    Retorna envelope CONVERSA ou None.
-    """
-    if last_kind != "nutrition":
-        return None
-    if not raw or not raw.strip():
-        return None
-    norm = words_to_digits(normalize(raw))
-    table = _FOLLOWUP_WA if channel == "wa" else _FOLLOWUP_CHAT
-    if _GROCERY_RE.search(norm):
-        return _conversa(table["grocery"])
-    if _ATE_RE.search(norm):
-        return _conversa(table["ate"])
+    """Não sugere ações alimentares em conversas iniciadas antes da retirada."""
+    if last_kind == "nutrition" and raw and re.search(r"\b(comi|lista|compra|anota\w*|item|itens)\b", normalize(raw)):
+        return _conversa("O módulo de alimentação foi descontinuado no Braga Saúde.")
     return None
 
 

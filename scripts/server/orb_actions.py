@@ -5,15 +5,8 @@ o canal, o rótulo nem existe para o classificador — fica impossível,
 por construção, prometer o que não dá para cumprir.
 """
 
-import re
 
 ACTION_CATALOG = {
-    "ABRIR_LISTA_COMPRAS": {
-        "channels": ("chat",),
-        "needs_confirmation": False,  # a tela pré-preenchida É a confirmação
-        "slots": ("items",),
-        "closing": "Lista aberta com {items}. Confirma na tela?",
-    },
     "REGISTRAR_PRESSAO": {
         "channels": ("voice",),
         "needs_confirmation": True,
@@ -69,30 +62,6 @@ SOURCE_CHANNEL = {
 def actions_for_channel(channel: str) -> tuple:
     """Rótulos com executor neste canal (para o classificador)."""
     return tuple(a for a, c in ACTION_CATALOG.items() if channel in c["channels"])
-
-
-def extract_grocery_items(text: str, max_items: int = 10) -> list:
-    """Slots de lista em texto livre (sem catálogo — lista aceita qualquer item)."""
-    t = (text or "").lower()
-    if not re.search(r"(adiciona|adicione|adicionar|coloca|coloque|colocar|anota|anote|anotar|"
-                      r"abre|abrir|abro|abra|compra|comprar|compre|preciso de|precisa de|falta|lista de compras?)", t):
-        return []
-    t = re.sub(
-        r".*?(adiciona|adicione|adicionar|coloca|coloque|colocar|anota|anote|anotar|"
-        r"abre|abrir|abro|abra|compra|comprar|compre|preciso de|precisa de|falta|lista de compras?)\s+",
-        "", t, count=1)
-    for _ in range(3):
-        smaller = re.sub(r"(?:\s+|^)(minha lista|sua lista|a lista|minhas compras|na lista|no mercado|da lista|de compras?|na|no|pra|para|na minha|no meu|da semana)\s*$", "", t)
-        if smaller == t:
-            break
-        t = smaller
-    items = [i.strip(" .") for i in re.split(r",|\be\b", t) if len(i.strip()) > 2]
-    seen, out = set(), []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            out.append(item)
-    return out[:max_items]
 
 
 def closing_fala(action: str, params: dict) -> str:

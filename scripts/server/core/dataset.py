@@ -31,8 +31,6 @@ def detect_clinical_category(text: str, action: Optional[str] = None) -> str:
         return "vitals_heartrate"
     if action == "REGISTRAR_OXIGENACAO":
         return "vitals_oxygen"
-    if action in ("BUSCAR_ALIMENTO", "ABRIR_LISTA_COMPRAS"):
-        return "nutrition"
 
     lower = text.lower()
     if any(w in lower for w in ["pressão", "sistólica", "diastólica", "12 por 8", "12/8", "pressao"]):

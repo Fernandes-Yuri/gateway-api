@@ -333,6 +333,64 @@ def ensaio_de_demostracao(dsn: str, baseline: Path) -> None:
     ok(f"upgrade simulado aplicado com ledger íntegro ({ledger} versões)")
 
 
+async def ensaio_retirada_alimentacao(dsn: str) -> None:
+    """Exercita o SQL manual só no banco efêmero já validado pelo ensaio."""
+    sql = migrate._strip_transaction_control(
+        (BASE_DIR / "scripts/maintenance/retire_nutrition.sql").read_text())
+    conn = await asyncpg.connect(dsn)
+    try:
+        # O gate deve recusar a limpeza antes de qualquer DDL.
+        try:
+            async with conn.transaction():
+                await conn.execute(sql)
+        except asyncpg.RaiseError:
+            pass
+        else:
+            falha("limpeza alimentar rodou sem confirmação explícita")
+
+        # Dependência externa desconhecida deve abortar toda a operação.
+        await conn.execute("CREATE TABLE nutrition_external_reference (food_id integer REFERENCES public.food_catalog(id))")
+        try:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL braga.allow_nutrition_purge = 'on'")
+                await conn.execute(sql)
+        except asyncpg.DependentObjectsStillExistError:
+            pass
+        else:
+            falha("limpeza ignorou dependência externa")
+        if not await conn.fetchval("SELECT to_regclass('public.grocery_publication_heads') IS NOT NULL"):
+            falha("limpeza parcial sobreviveu ao rollback")
+        await conn.execute("DROP TABLE nutrition_external_reference")
+
+        await conn.execute("INSERT INTO profiles(id, full_name) VALUES ('retirement-test', 'Sintético') ON CONFLICT DO NOTHING")
+        await conn.execute("INSERT INTO vital_signs(user_id, measured_at) VALUES ('retirement-test', NOW())")
+        kept = await conn.fetchval("SELECT array_agg(table_name::text ORDER BY table_name) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'")
+        import re
+        removed = set(re.findall(r'DROP TABLE IF EXISTS public\.(\w+)', sql))
+        kept = [table for table in kept if table not in removed]
+
+        async def snapshot():
+            result = {}
+            for table in kept:
+                rows = await conn.fetch(f'SELECT to_jsonb(t) - \'daily_calorie_target\' AS row FROM public."{table}" t')
+                result[table] = sorted(str(row['row']) for row in rows)
+            return result
+
+        before = await snapshot()
+        for _ in range(2):
+            async with conn.transaction():
+                await conn.execute("SET LOCAL braga.allow_nutrition_purge = 'on'")
+                await conn.execute(sql)
+        if before != await snapshot():
+            falha("limpeza alterou dados dos módulos preservados")
+        for table in removed:
+            if await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", 'public.' + table):
+                falha(f"tabela alimentar sobreviveu: {table}")
+        ok("limpeza alimentar: gate, rollback, preservação de dados e idempotência validados")
+    finally:
+        await conn.close()
+
+
 def main() -> None:
     dsn = _dsn_valido()
     migrate.MIGRATIONS_DATABASE_URL = dsn
@@ -385,6 +443,8 @@ def main() -> None:
         if antes_da_repeticao != depois_da_repeticao:
             falha("a segunda execução do runner alterou o estado do banco.")
         ok("segunda execução não alterou o estado (fingerprint estável)")
+
+    asyncio.run(ensaio_retirada_alimentacao(dsn))
 
     print("[ensaio] ENSAIO CONCLUÍDO: runner real passou em todas as etapas.")
 

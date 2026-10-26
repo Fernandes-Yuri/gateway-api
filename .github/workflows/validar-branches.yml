@@ -1,7 +1,7 @@
 name: Validar alterações
 on:
   push:
-    branches: ['master', 'feat/**', 'fix/**']
+    branches: ['master', 'feat/**', 'fix/**', 'ops/**']
   pull_request:
     branches: [master]
 permissions:
@@ -36,8 +36,6 @@ jobs:
       - run: pip install --require-hashes -r requirements-dev.lock
       - run: ruff check scripts/server/ scripts/ migrate.py
       - run: python -m unittest discover scripts/server/ "test_*.py"
-      - name: Validar catálogo e curadoria em PostgreSQL
-        run: PYTHONPATH=.:scripts/server python -m pytest -q scripts/server/test_grocery_cards.py scripts/server/test_grocery_basket.py scripts/server/test_grocery_nutrition_reference.py scripts/server/test_grocery_retail_admin.py scripts/server/test_grocery_retail_postgres.py scripts/server/test_grocery_curation_postgres.py
       - run: PYTHONPATH=scripts/server python -m unittest discover research/ "test_*.py"
 
   ensaio-migracoes:

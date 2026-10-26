@@ -360,7 +360,7 @@ class RouterWireTests(unittest.TestCase):
         # Two-step: 1 classifica + 1 fala.
         self.assertEqual(len(self.payloads), 2)
 
-    def test_nutrition_conversation_and_followup_use_llm(self):
+    def test_nutrition_retirement_does_not_call_provider(self):
         with self.connect() as ws:
             ws.send_json(dict(type='chat', id='one', messages=[dict(role='user', content='almocei arroz e feijão')]))
             first = self.terminal(ws)[-1]
@@ -368,8 +368,8 @@ class RouterWireTests(unittest.TestCase):
             ws.send_json(dict(type='chat', id='two', messages=[dict(role='user', content='já comi')]))
             second = self.terminal(ws)[-1]
             self.assertEqual((second['type'], second['action']), ('done', 'CONVERSA'))
-            self.assertEqual(json.loads(second['fullContent'])['fala'], SPEECH)
-        self.assertEqual(len(self.payloads), 4)
+            self.assertIn('descontinuado', json.loads(second['fullContent'])['fala'])
+        self.assertEqual(self.payloads, [])
 
     def test_template_never_repeats_verbatim(self):
         with self.connect() as ws:
@@ -414,12 +414,12 @@ class RouterWireTests(unittest.TestCase):
     def test_receipt_ack_closing(self):
         # Agente B1: recibo válido volta com closing; inválido é rejeitado.
         with self.connect() as ws:
-            ws.send_json(dict(type='receipt', id='r1', action='ABRIR_LISTA_COMPRAS',
-                              params={'items': ['aveia']}, idempotencyKey='k1'))
+            ws.send_json(dict(type='receipt', id='r1', action='LEMBRETES',
+                              params={}, idempotencyKey='k1'))
             ack = ws.receive_json()
             self.assertEqual(ack['type'], 'receipt_ack')
             self.assertEqual(ack['status'], 'ok')
-            self.assertIn('aveia', ack['closing'])
+            self.assertIn('Lembretes', ack['closing'])
             ws.send_json(dict(type='receipt', id='r2', action='VOAR', params={},
                               idempotencyKey='k2'))
             err = ws.receive_json()
