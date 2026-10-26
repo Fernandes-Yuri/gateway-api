@@ -131,10 +131,10 @@ class RouterTests(unittest.TestCase):
 
     # ---- Nutrição sem fantasma ----
     def test_meal_mention(self):
-        self.assertIn("descontinuado", route_chat("almocei arroz e feijão")["fala"])
+        self.assertIsNone(route_chat("almocei arroz e feijão"))
 
     def test_nutrition_question(self):
-        self.assertIn("descontinuado", route_chat("o que posso almoçar?")["fala"])
+        self.assertIsNone(route_chat("o que posso almoçar?"))
 
     # ---- Social (passam ao LLM para resposta calorosa e humana) ----
     def test_good_morning(self):

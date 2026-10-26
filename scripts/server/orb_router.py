@@ -483,7 +483,7 @@ def detect_all(raw: str) -> dict:
         return {"kind": "meds"}
     if any(v in norm for v in _MEAL_VERBS) or any(w in norm for w in _NUTRI_WORDS):
         return {"kind": "nutrition"}
-    if re.search(r"\b(lista|despensa|receitas|mercado|feira)\b", norm):
+    if re.search(r"\b(lista de compras|despensa|receitas culinarias|receitas da (?:minha )?lista|mercado|feira)\b|\b(?:adiciona|adicione|anota|anote|coloca|coloque)\b.*\blista\b", norm):
         return {"kind": "grocery"}
     # AUD-G17: data/hora agora é resolvido ANTES da PA (movido para cima).
     if re.search(r"\bbom dia\b|\botimo dia\b", norm):
@@ -651,7 +651,9 @@ def _route_chat(raw: str, model_name: str = None):
             "Entendi. Eu não receito nem ajusto remédio, isso é com seu médico. "
             "Você pode anotar a tomada nos lembretes do aplicativo, e se preferir o assistente de voz te ajuda a preencher."
         )
-    if kind in ("nutrition", "grocery"):
+    if kind == "nutrition":
+        return None
+    if kind == "grocery":
         return _conversa("O módulo de alimentação, compras, despensa e receitas foi descontinuado no Braga Saúde.")
     if kind == "app":
         return _conversa(

@@ -360,7 +360,7 @@ class RouterWireTests(unittest.TestCase):
         # Two-step: 1 classifica + 1 fala.
         self.assertEqual(len(self.payloads), 2)
 
-    def test_nutrition_retirement_does_not_call_provider(self):
+    def test_nutrition_conversation_and_followup_use_llm(self):
         with self.connect() as ws:
             ws.send_json(dict(type='chat', id='one', messages=[dict(role='user', content='almocei arroz e feijão')]))
             first = self.terminal(ws)[-1]
@@ -368,8 +368,8 @@ class RouterWireTests(unittest.TestCase):
             ws.send_json(dict(type='chat', id='two', messages=[dict(role='user', content='já comi')]))
             second = self.terminal(ws)[-1]
             self.assertEqual((second['type'], second['action']), ('done', 'CONVERSA'))
-            self.assertIn('descontinuado', json.loads(second['fullContent'])['fala'])
-        self.assertEqual(self.payloads, [])
+            self.assertEqual(json.loads(second['fullContent'])['fala'], SPEECH)
+        self.assertEqual(len(self.payloads), 4)
 
     def test_template_never_repeats_verbatim(self):
         with self.connect() as ws:
