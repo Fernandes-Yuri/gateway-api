@@ -281,18 +281,11 @@ class DetectAllTests(unittest.TestCase):
                 self.assertIn("Você pode", env["fala"])
                 self.assertIn("assistente de voz", env["fala"])
 
-    def test_grocery_items_envelope(self):
-        det = detect_all("adiciona aveia e banana na lista")
-        self.assertEqual(det["kind"], "grocery")
-        self.assertEqual(det["items"], ["aveia", "banana"])
-        env = route_chat("adiciona aveia e banana na lista")
-        self.assertEqual(env["acao"], "ABRIR_LISTA_COMPRAS")
-        self.assertEqual(env["parametros"]["items"], ["aveia", "banana"])
-        self.assertIn("aveia", env["fala"])
-        # Sem itens: ainda abre a lista, sem inventar.
-        env2 = route_chat("abre minha lista de compras")
-        self.assertEqual(env2["acao"], "ABRIR_LISTA_COMPRAS")
-        self.assertEqual(env2["parametros"]["items"], [])
+    def test_grocery_retirement_does_not_offer_an_action(self):
+        env = route_chat("abre minha lista de compras")
+        self.assertEqual(env["acao"], "CONVERSA")
+        self.assertIn("descontinuado", env["fala"])
+        self.assertEqual(env["parametros"], {})
 
 
 class DedupeTests(unittest.TestCase):
@@ -344,18 +337,18 @@ class FollowupTests(unittest.TestCase):
     def test_grocery_wa(self):
         env = resolve_followup("põe na lista", "nutrition", channel="wa")
         self.assertIsNotNone(env)
-        self.assertIn("lista", env["fala"].lower())
+        self.assertIn("descontinuado", env["fala"].lower())
 
     def test_ate_item_quote(self):
         # Usuário quotando o template de volta ("anotar item por item").
         env = resolve_followup("entendi, você consegue anotar aí item por item", "nutrition", channel="chat")
         self.assertIsNotNone(env)
-        self.assertIn("tela de alimentação", env["fala"])
+        self.assertIn("descontinuado", env["fala"])
 
     def test_explicit_list_wins(self):
         env = resolve_followup("anota na lista", "nutrition", channel="chat")
         self.assertIsNotNone(env)
-        self.assertIn("lista", env["fala"].lower())
+        self.assertIn("descontinuado", env["fala"].lower())
 
     def test_no_memory_no_followup(self):
         self.assertIsNone(resolve_followup("já comi", None))

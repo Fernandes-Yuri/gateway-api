@@ -72,8 +72,8 @@ KIND_CASES = [
     ("tô na correria aqui", "smalltalk", {}),
     ("vou descer ali rapidinho", "smalltalk", {}),
     ("beleza então", "smalltalk", {}),
-    ("adiciona aveia e banana na lista", "grocery", {"items": ["aveia", "banana"]}),
-    ("abre minha lista de compras", "grocery", {"items": []}),
+    ("adiciona aveia e banana na lista", "grocery", {}),
+    ("abre minha lista de compras", "grocery", {}),
     ("por que o céu é azul?", "open", {}),
     ("me conta sobre aposentadoria hoje?", "open", {}),
 ]

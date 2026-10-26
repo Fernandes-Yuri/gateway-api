@@ -66,7 +66,6 @@ class ProfileSyncDto(BaseModel):
     hasBoneIssue: Optional[bool] = False
     hasMuscularIssue: Optional[bool] = False
     hydrationTargetMl: Optional[int] = 2000
-    dailyCalorieTarget: Optional[float] = 1800
     stepGoal: Optional[int] = 8000
     weightGoal: Optional[float] = None
     sleepStartTime: Optional[str] = "22:00"

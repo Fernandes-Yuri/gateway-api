@@ -24,6 +24,6 @@ jobs:
           cache: pip
           cache-dependency-path: requirements*.lock
       - run: pip install --require-hashes -r requirements-dev.lock
-      - run: ruff check scripts/server/routers/admin.py scripts/server/routers/catalog.py scripts/server/portal_auth_security.py scripts/server/test_portal_auth_security.py scripts/server/services/meli_price_fetcher.py
+      - run: ruff check scripts/server/routers/admin.py scripts/server/routers/catalog.py scripts/server/portal_auth_security.py scripts/server/test_portal_auth_security.py
       - run: python -m unittest test_portal_auth_security -v
         working-directory: scripts/server

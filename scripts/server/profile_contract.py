@@ -41,7 +41,7 @@ PROFILE_FIELDS = {
     'has_diabetes': 'hasDiabetes', 'has_hypertension': 'hasHypertension',
     'has_thyroid_issue': 'hasThyroidIssue', 'has_renal_issue': 'hasRenalIssue',
     'has_bone_issue': 'hasBoneIssue', 'has_muscular_issue': 'hasMuscularIssue',
-    'hydration_target_ml': 'hydrationTargetMl', 'daily_calorie_target': 'dailyCalorieTarget',
+    'hydration_target_ml': 'hydrationTargetMl',
     'step_goal': 'stepGoal', 'weight_goal': 'weightGoal', 'sleep_start_time': 'sleepStartTime',
     'sleep_end_time': 'sleepEndTime', 'emergency_contact_name': 'emergencyContactName',
     'emergency_contact_relation': 'emergencyContactRelation', 'emergency_contact_phone': 'emergencyContactPhone',

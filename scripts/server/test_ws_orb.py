@@ -414,12 +414,12 @@ class RouterWireTests(unittest.TestCase):
     def test_receipt_ack_closing(self):
         # Agente B1: recibo válido volta com closing; inválido é rejeitado.
         with self.connect() as ws:
-            ws.send_json(dict(type='receipt', id='r1', action='ABRIR_LISTA_COMPRAS',
-                              params={'items': ['aveia']}, idempotencyKey='k1'))
+            ws.send_json(dict(type='receipt', id='r1', action='LEMBRETES',
+                              params={}, idempotencyKey='k1'))
             ack = ws.receive_json()
             self.assertEqual(ack['type'], 'receipt_ack')
             self.assertEqual(ack['status'], 'ok')
-            self.assertIn('aveia', ack['closing'])
+            self.assertIn('Lembretes', ack['closing'])
             ws.send_json(dict(type='receipt', id='r2', action='VOAR', params={},
                               idempotencyKey='k2'))
             err = ws.receive_json()

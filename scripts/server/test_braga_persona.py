@@ -19,7 +19,7 @@ class ConversationContractTests(unittest.TestCase):
     def test_explicit_meal_request_explains_actual_capability(self):
         reply = route_chat("registre minha refeição")
         self.assertEqual(reply["acao"], "CONVERSA")
-        self.assertIn("Alimentação", reply["fala"])
+        self.assertIn("descontinuado", reply["fala"])
         self.assertNotIn("anota item por item", reply["fala"])
 
 

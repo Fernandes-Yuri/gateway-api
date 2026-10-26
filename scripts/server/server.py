@@ -281,7 +281,7 @@ class FamilyMessageSyncDto(BaseModel):
 # 503/offline_mode em producao. (Detectado na revisao pre-push: os testes
 # locais passavam justamente por esperarem pool None offline.)
 _POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
-                 sync_router, admin_router, care_os_router, catalog_router, whatsapp_intake_router, whatsapp_internal_router)
+                 sync_router, admin_router, care_os_router, whatsapp_intake_router, whatsapp_internal_router)
 
 
 def _propagate_db_pool():
@@ -329,12 +329,6 @@ async def startup():
             if conteudo_verificacao.habilitado():
                 conteudo_tasks = conteudo_verificacao.start(db_pool)
             # O canal público de APK foi aposentado. Não inicia o socket de promoção.
-
-            try:
-                from services.price_cascade import seed_inicial
-                await seed_inicial(db_pool)
-            except Exception as e:
-                print(f"[Startup] Aviso ao rodar seed_inicial de alimentos: {e}")
 
         # Pass the coroutine directly: a sync lambda runs in an executor without an event loop.
         if db_pool and HAS_SCHEDULER:
@@ -398,19 +392,7 @@ async def startup():
                     args=[_periodo], id=_id,
                     replace_existing=True, max_instances=1, coalesce=True,
                 )
-            async def _price_cascade_job():
-                try:
-                    from services.price_cascade import atualizar_precos
-                    await atualizar_precos(db_pool)
-                except Exception as err:
-                    print(f"[price_cascade] Falha no job semanal de preços: {err}")
-
-            retention_scheduler.add_job(
-                _price_cascade_job,
-                CronTrigger(day_of_week="mon", hour=3, minute=0, timezone="America/Sao_Paulo"),
-                id="grocery_price_cascade_weekly", replace_existing=True, max_instances=1, coalesce=True,
-            )
-            print("[Scheduler] Rotinas pró-ativas registradas: 09h00, 14h30, 20h30. Job semanal IPCA registrado: Seg 03h00.")
+            print("[Scheduler] Rotinas pró-ativas registradas: 09h00, 14h30, 20h30.")
             retention_scheduler.start()
 
 
@@ -697,7 +679,6 @@ app.include_router(admin_router.router)
 care_os_router.configure_state(db_pool=None, public_base_url=PUBLIC_API_BASE_URL)
 app.include_router(care_os_router.router)
 
-catalog_router.configure_state(db_pool=None)
 app.include_router(catalog_router.router)
 
 # Configuracao dos modulos core extraidos (Fase A passo 6).
