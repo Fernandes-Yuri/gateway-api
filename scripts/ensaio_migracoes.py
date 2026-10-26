@@ -338,7 +338,11 @@ async def ensaio_retirada_alimentacao(dsn: str) -> None:
     sql = migrate._strip_transaction_control(
         (BASE_DIR / "scripts/maintenance/retire_nutrition.sql").read_text())
     conn = await asyncpg.connect(dsn)
+    tx = conn.transaction()
+    await tx.start()
     try:
+        if not await conn.fetchval("SELECT to_regclass('public.food_catalog') IS NOT NULL"):
+            return  # Baseline já publicado sem alimentação.
         # O gate deve recusar a limpeza antes de qualquer DDL.
         try:
             async with conn.transaction():
@@ -388,6 +392,7 @@ async def ensaio_retirada_alimentacao(dsn: str) -> None:
                 falha(f"tabela alimentar sobreviveu: {table}")
         ok("limpeza alimentar: gate, rollback, preservação de dados e idempotência validados")
     finally:
+        await tx.rollback()
         await conn.close()
 
 
@@ -410,9 +415,13 @@ def main() -> None:
         rodar_runner(baseline)
         ok("baseline publicado aplicado do zero")
         asyncio.run(confere_ledger(dsn, baseline))
+        asyncio.run(ensaio_retirada_alimentacao(dsn))
 
         alvos = {t for sql in novos.values() for t in ALVO.findall(sql)}
+        alvos.update({"profiles", "medications", "vital_signs", "daily_metrics", "medication_logs", "prescription_files", "family_bindings", "symptoms_diary"})
         candidatas = asyncio.run(tabelas_candidatas(dsn, alvos))
+        priority = ["profiles", "medications", "vital_signs", "daily_metrics", "medication_logs"]
+        candidatas.sort(key=lambda table: priority.index(table) if table in priority else len(priority))
         semeadas, puladas = asyncio.run(semear(dsn, candidatas))
         for p in puladas:
             print(f"[ensaio] não semeada: {p}")
@@ -443,8 +452,6 @@ def main() -> None:
         if antes_da_repeticao != depois_da_repeticao:
             falha("a segunda execução do runner alterou o estado do banco.")
         ok("segunda execução não alterou o estado (fingerprint estável)")
-
-    asyncio.run(ensaio_retirada_alimentacao(dsn))
 
     print("[ensaio] ENSAIO CONCLUÍDO: runner real passou em todas as etapas.")
 
