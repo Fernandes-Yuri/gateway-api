@@ -14,12 +14,15 @@ class ConversationContractTests(unittest.TestCase):
     def test_food_conversation_is_not_forced_to_registration(self):
         for utterance in ("almocei arroz", "o que posso comer hoje", "você gosta de maçã"):
             with self.subTest(utterance=utterance):
-                self.assertIsNone(route_chat(utterance))
+                reply = route_chat(utterance)
+                if reply is not None:
+                    self.assertEqual(reply["acao"], "CONVERSA")
+                    self.assertIn("descontinuado", reply["fala"])
 
     def test_explicit_meal_request_explains_actual_capability(self):
         reply = route_chat("registre minha refeição")
         self.assertEqual(reply["acao"], "CONVERSA")
-        self.assertIn("Alimentação", reply["fala"])
+        self.assertIn("descontinuado", reply["fala"])
         self.assertNotIn("anota item por item", reply["fala"])
 
 

@@ -12,7 +12,7 @@ APP_SYSTEM = PERSONA + '\n' + (
     'Se o usuário apontar uma resposta sua visível na conversa, reconheça o que você escreveu; nunca negue o histórico recente. '
     f'Em emergências, oriente acionar o SAMU 192 imediatamente. Inclua em texto {SAMU_URL} e {UPA_URL}; nunca prometa ter chamado socorro. '
     'Preserve negações, bebidas e volumes. Hipóteses e dúvidas não são relatos. Não anuncie ações sem recibo. '
-    'Responda de forma clara, na extensão necessária ao pedido.'
+    'Alimentação e compras encerradas: não ofereça esses recursos.'
 )
 
 
@@ -21,5 +21,3 @@ def build_conversation_system(channel='chat', preferences=None, *, self_care=Tru
     if channel not in ('chat', 'voice'):
         raise ValueError('Canal desconhecido')
     return APP_SYSTEM + context_prompt(preferences)
-
-APP_SYSTEM += "\nO módulo de alimentação, compras, despensa e receitas foi descontinuado. Não ofereça acesso nem registros nesses recursos."

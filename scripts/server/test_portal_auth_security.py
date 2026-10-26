@@ -10,8 +10,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from routers import admin
-from routers.catalog import ManualPriceUpdate
-from pydantic import ValidationError
 import portal_auth_security
 
 
@@ -145,12 +143,6 @@ class PortalAuthTest(unittest.TestCase):
         sql, challenge_id, binding, purpose = self.conn.fetchrow.call_args.args
         self.assertIn('DELETE FROM', sql)
         self.assertEqual((challenge_id, binding, purpose), ('a' * 32, 'b' * 64, 'reset'))
-
-    def test_preco_rejeita_negativo_infinito_excesso_e_centavos(self):
-        for price in [-1, 0, float('inf'), float('nan'), 100000000, 1.234]:
-            with self.assertRaises(ValidationError):
-                ManualPriceUpdate(price=price)
-        self.assertEqual(ManualPriceUpdate(price=8.50).price, 8.50)
 
     def test_cadastro_e_recuperacao_usam_mesmo_totp(self):
         with patch.dict('os.environ', {'ADMIN_TOTP_SECRET': 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'}), patch.object(portal_auth_security.time, 'time', return_value=59):

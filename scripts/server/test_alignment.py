@@ -56,13 +56,14 @@ class ProfileTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 validate_profile(Profile(id='uid', fullName='', **change))
 
-    def test_consent_allergies_and_fractional_calories_round_trip_values(self):
+    def test_consent_allergies_survive_and_retired_calories_are_ignored(self):
         p = Profile(id='uid', fullName="O'Brien", consentAcceptedAt='2026-09-08T10:00:00-03:00', foodAllergies=['Ovos'], dailyCalorieTarget=1800.5)
         sql, values = profile_upsert(p)
         self.assertNotIn(p.fullName, sql)
         self.assertIn(p.fullName, values)
         self.assertIn(['Ovos'], values)
-        self.assertIn(1800.5, values)
+        self.assertNotIn(1800.5, values)
+        self.assertNotIn("daily_calorie_target", sql)
         self.assertTrue(any(isinstance(v, datetime) and v.utcoffset() == timedelta(hours=-3) for v in values))
 
 
