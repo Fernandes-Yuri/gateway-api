@@ -45,7 +45,7 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
     async def test_social_reaction_change_removal_and_private_audience(self):
         from datetime import datetime, timezone
         async with self.pool.acquire() as conn:
-            await conn.execute("ALTER TABLE social_posts ADD COLUMN visibility TEXT NOT NULL DEFAULT 'PUBLIC'")
+            await conn.execute("ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'PUBLIC'")
             public = await conn.fetchval("INSERT INTO social_posts(user_id,post_type,title) VALUES ('paciente','milestone','Teste') RETURNING id")
             private = await conn.fetchval("INSERT INTO social_posts(user_id,post_type,title,visibility) VALUES ('paciente','milestone','Privado','FAMILY') RETURNING id")
         state = SimpleNamespace(db_pool=self.pool)
