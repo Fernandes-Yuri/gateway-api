@@ -63,6 +63,11 @@ class SocialReactionTests(unittest.TestCase):
         self.assertIn("post_id = $1 AND user_id = $2", sql)
         self.assertEqual((uuid.UUID(self.post), "reader"), (post, owner))
 
+    def test_account_switch_cannot_remove_new_accounts_reaction(self):
+        response = self.client.delete(f"/api/social/posts/{self.post}/reaction?expected_user_id=previous-account")
+        self.assertEqual(403, response.status_code)
+        self.conn.execute.assert_not_awaited()
+
     def test_anonymous_cannot_add_or_remove(self):
         self.client.app.dependency_overrides.clear()
         self.assertEqual(401, self.client.post("/api/sync/post-reaction", json=self.payload).status_code)

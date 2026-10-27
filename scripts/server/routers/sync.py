@@ -925,7 +925,10 @@ async def sync_post_reaction(r: PostReactionSyncDto, uid: str = Depends(firebase
 
 
 @router.delete("/api/social/posts/{post_id}/reaction")
-async def delete_post_reaction(post_id: uuid.UUID, uid: str = Depends(firebase_uid)):
+async def delete_post_reaction(post_id: uuid.UUID, expected_user_id: Optional[str] = None,
+                               uid: str = Depends(firebase_uid)):
+    if expected_user_id is not None:
+        require_owner(uid, expected_user_id)
     if not _state.db_pool:
         raise HTTPException(503, "Reação não removida: banco indisponível.")
     # Idempotente e restrita ao titular. Não exige vínculo ainda ativo para
