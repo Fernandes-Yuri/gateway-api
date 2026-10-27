@@ -169,9 +169,9 @@ class SocialPostSyncDto(BaseModel):
 
 
 class PostReactionSyncDto(BaseModel):
-    postId: str
+    postId: uuid.UUID
     userId: str
-    reactionType: Optional[str] = "apoio"
+    reactionType: Optional[Literal["apoio", "palmas", "forca"]] = "apoio"
     createdAt: str
 
 
@@ -859,7 +859,9 @@ async def get_social_feed(
            p.full_name as user_name, p.community_nickname as user_nickname, p.avatar_identifier, p.photo_url,
            (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = sp.id) as reaction_count,
            EXISTS(SELECT 1 FROM post_reactions pr
-                  WHERE pr.post_id = sp.id AND pr.user_id = $3) as has_user_reacted
+                  WHERE pr.post_id = sp.id AND pr.user_id = $3) as has_user_reacted,
+           (SELECT pr.reaction_type FROM post_reactions pr
+                  WHERE pr.post_id = sp.id AND pr.user_id = $3) as user_reaction_type
     FROM social_posts sp
     JOIN profiles p ON sp.user_id = p.id
     WHERE sp.is_visible = TRUE
@@ -892,24 +894,47 @@ async def get_social_feed(
 
 @router.post("/api/sync/post-reaction")
 async def sync_post_reaction(r: PostReactionSyncDto, uid: str = Depends(firebase_uid)):
-    # AUD-G07: antes aceitava qualquer userId do body — permitia forjar reacoes
-    # em nome de outro usuario. Agora exige token Firebase e valida dono.
-    if uid != r.userId:
-        raise HTTPException(403, "Não autorizado: reações só podem ser gravadas para a própria conta.")
-    db_pool = _state.db_pool
-    if not db_pool:
-        return {"status": "offline_mode"}
+    require_owner(uid, r.userId)
+    if not _state.db_pool:
+        raise HTTPException(503, "Reação não persistida: banco indisponível.")
+    # A audiência é a mesma do mural: não aceitar reação em publicação privada
+    # de outra família, oculta ou inexistente. Repetir substitui o tipo sem duplicar.
     query = """
     INSERT INTO post_reactions (post_id, user_id, reaction_type, created_at)
-    VALUES ($1::uuid, $2, $3, $4)
-    ON CONFLICT (post_id, user_id) DO NOTHING;
+    SELECT sp.id, $2::varchar, $3::varchar, $4::timestamptz FROM social_posts sp
+    WHERE sp.id = $1 AND sp.is_visible = TRUE AND (
+        sp.visibility = 'PUBLIC' OR sp.user_id = $2::varchar OR EXISTS (
+            SELECT 1 FROM family_bindings b WHERE b.status = 'ACTIVE' AND (
+                (b.patient_id = sp.user_id AND b.caregiver_id = $2::varchar) OR
+                (b.caregiver_id = sp.user_id AND b.patient_id = $2::varchar)
+            )
+        )
+    )
+    ON CONFLICT (post_id, user_id) DO UPDATE SET reaction_type = EXCLUDED.reaction_type
+    RETURNING post_id;
     """
     try:
-        c_at = datetime.fromisoformat(r.createdAt.replace("Z", "+00:00"))
-    except Exception:
-        c_at = datetime.utcnow()
-    async with db_pool.acquire() as conn:
-        await conn.execute(query, r.postId, r.userId, r.reactionType or "apoio", c_at)
+        created_at = parse_social_timestamp(r.createdAt)
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Data da reação inválida.")
+    async with _state.db_pool.acquire() as conn:
+        saved = await conn.fetchval(query, r.postId, uid, r.reactionType or "apoio", created_at)
+    if saved is None:
+        raise HTTPException(404, "Publicação indisponível.")
+    return {"status": "success"}
+
+
+@router.delete("/api/social/posts/{post_id}/reaction")
+async def delete_post_reaction(post_id: uuid.UUID, expected_user_id: Optional[str] = None,
+                               uid: str = Depends(firebase_uid)):
+    if expected_user_id is not None:
+        require_owner(uid, expected_user_id)
+    if not _state.db_pool:
+        raise HTTPException(503, "Reação não removida: banco indisponível.")
+    # Idempotente e restrita ao titular. Não exige vínculo ainda ativo para
+    # permitir retirar a própria reação após perder acesso à publicação.
+    async with _state.db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM post_reactions WHERE post_id = $1 AND user_id = $2", post_id, uid)
     return {"status": "success"}
 
 
