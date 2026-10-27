@@ -41,6 +41,32 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
             await conn.execute((ROOT / "migrations/071_account_pause_and_mail.sql").read_text(encoding="utf-8"))
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('paciente','Paciente'),('cuidador','Cuidador')")
 
+    async def test_social_reaction_change_removal_and_private_audience(self):
+        from datetime import datetime, timezone
+        async with self.pool.acquire() as conn:
+            await conn.execute("ALTER TABLE social_posts ADD COLUMN visibility TEXT NOT NULL DEFAULT 'PUBLIC'")
+            public = await conn.fetchval("INSERT INTO social_posts(user_id,post_type,title) VALUES ('paciente','milestone','Teste') RETURNING id")
+            private = await conn.fetchval("INSERT INTO social_posts(user_id,post_type,title,visibility) VALUES ('paciente','milestone','Privado','FAMILY') RETURNING id")
+        state = SimpleNamespace(db_pool=self.pool)
+        payload = dict(postId=public, userId="cuidador", createdAt=datetime.now(timezone.utc).isoformat())
+        with patch.object(sync, "_state", state):
+            for kind in ("apoio", "palmas", "palmas"):
+                await sync.sync_post_reaction(sync.PostReactionSyncDto(**payload, reactionType=kind), uid="cuidador")
+            async with self.pool.acquire() as conn:
+                self.assertEqual(1, await conn.fetchval("SELECT COUNT(*) FROM post_reactions WHERE post_id=$1", public))
+                self.assertEqual("palmas", await conn.fetchval("SELECT reaction_type FROM post_reactions WHERE post_id=$1", public))
+                await conn.execute("INSERT INTO post_reactions(post_id,user_id) VALUES ($1,'paciente')", public)
+            await sync.delete_post_reaction(public, uid="cuidador")
+            await sync.delete_post_reaction(public, uid="cuidador")
+            async with self.pool.acquire() as conn:
+                self.assertEqual(["paciente"], [r["user_id"] for r in await conn.fetch("SELECT user_id FROM post_reactions WHERE post_id=$1", public)])
+            with self.assertRaises(HTTPException) as caught:
+                await sync.sync_post_reaction(sync.PostReactionSyncDto(**{**payload, "postId": private}), uid="cuidador")
+            self.assertEqual(404, caught.exception.status_code)
+            async with self.pool.acquire() as conn:
+                await conn.execute("INSERT INTO family_bindings(patient_id,caregiver_id,caregiver_name,caregiver_relation,connection_code,status,expires_at) VALUES ('paciente','cuidador','Teste','Familiar','reaction-test','ACTIVE',NOW()+INTERVAL '1 day')")
+            await sync.sync_post_reaction(sync.PostReactionSyncDto(**{**payload, "postId": private}), uid="cuidador")
+
     async def test_exam_storage_removal_preserves_patient_and_medications(self):
         async with self.pool.acquire() as conn:
             await conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)")
