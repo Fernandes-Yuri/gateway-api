@@ -901,12 +901,12 @@ async def sync_post_reaction(r: PostReactionSyncDto, uid: str = Depends(firebase
     # de outra família, oculta ou inexistente. Repetir substitui o tipo sem duplicar.
     query = """
     INSERT INTO post_reactions (post_id, user_id, reaction_type, created_at)
-    SELECT sp.id, $2, $3, $4 FROM social_posts sp
+    SELECT sp.id, $2::varchar, $3::varchar, $4::timestamptz FROM social_posts sp
     WHERE sp.id = $1 AND sp.is_visible = TRUE AND (
-        sp.visibility = 'PUBLIC' OR sp.user_id = $2 OR EXISTS (
+        sp.visibility = 'PUBLIC' OR sp.user_id = $2::varchar OR EXISTS (
             SELECT 1 FROM family_bindings b WHERE b.status = 'ACTIVE' AND (
-                (b.patient_id = sp.user_id AND b.caregiver_id = $2) OR
-                (b.caregiver_id = sp.user_id AND b.patient_id = $2)
+                (b.patient_id = sp.user_id AND b.caregiver_id = $2::varchar) OR
+                (b.caregiver_id = sp.user_id AND b.patient_id = $2::varchar)
             )
         )
     )
