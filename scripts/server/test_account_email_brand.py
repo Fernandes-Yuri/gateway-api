@@ -23,3 +23,26 @@ class AccountEmailBrand(unittest.IsolatedAsyncioTestCase):
             result = await email.send_account_deletion_email('owner@example.test', 'Pessoa')
         self.assertTrue(result['success'])
         self.assertEqual(send.call_args.args[0], 'owner@example.test')
+
+    def test_fallback_triggers_when_primary_fails(self):
+        with patch.object(email, '_is_primary_configured', return_value=True), \
+             patch.object(email, '_is_fallback_configured', return_value=True), \
+             patch.object(email, '_send_smtp_payload') as mock_send:
+            # Primário falha, fallback tem sucesso
+            mock_send.side_effect = [RuntimeError("SMTP Primary Auth Failed"), True]
+
+            success = email._send_gmail_sync('user@example.test', 'Assunto', '<b>HTML</b>', 'Texto')
+            self.assertTrue(success)
+            self.assertEqual(mock_send.call_count, 2)
+            # Primeira chamada: primário
+            self.assertEqual(mock_send.call_args_list[0].args[4], email.GMAIL_FROM_EMAIL)
+            # Segunda chamada: fallback
+            self.assertEqual(mock_send.call_args_list[1].args[4], email.FALLBACK_FROM_EMAIL)
+
+    def test_primary_success_does_not_trigger_fallback(self):
+        with patch.object(email, '_is_primary_configured', return_value=True), \
+             patch.object(email, '_is_fallback_configured', return_value=True), \
+             patch.object(email, '_send_smtp_payload', return_value=True) as mock_send:
+            success = email._send_gmail_sync('user@example.test', 'Assunto', '<b>HTML</b>', 'Texto')
+            self.assertTrue(success)
+            self.assertEqual(mock_send.call_count, 1)
