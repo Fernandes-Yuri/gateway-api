@@ -19,47 +19,75 @@ GMAIL_SMTP_USERNAME = os.getenv("GMAIL_SMTP_USERNAME", "").strip()
 GMAIL_SMTP_APP_PASSWORD = os.getenv("GMAIL_SMTP_APP_PASSWORD", "")
 GMAIL_FROM_EMAIL = os.getenv("GMAIL_FROM_EMAIL", GMAIL_SMTP_USERNAME).strip()
 GMAIL_FROM_NAME = os.getenv("GMAIL_FROM_NAME", "Braga Saúde")
+GMAIL_REPLY_TO = os.getenv("GMAIL_REPLY_TO", "contato@bragasaude.online").strip()
+
+# Configuração de Fallback / Contingência (e-mail legado caso o primário falhe)
+FALLBACK_SMTP_HOST = os.getenv("FALLBACK_SMTP_HOST", "smtp.gmail.com")
+FALLBACK_SMTP_PORT = int(os.getenv("FALLBACK_SMTP_PORT", "465"))
+FALLBACK_SMTP_USERNAME = os.getenv("FALLBACK_SMTP_USERNAME", "").strip()
+FALLBACK_SMTP_APP_PASSWORD = os.getenv("FALLBACK_SMTP_APP_PASSWORD", "")
+FALLBACK_FROM_EMAIL = os.getenv("FALLBACK_FROM_EMAIL", FALLBACK_SMTP_USERNAME).strip()
+FALLBACK_FROM_NAME = os.getenv("FALLBACK_FROM_NAME", "Braga Saúde")
+FALLBACK_REPLY_TO = os.getenv("FALLBACK_REPLY_TO", "contatobragasaude@gmail.com").strip()
+
+
+def _is_primary_configured() -> bool:
+    """Verifica se o canal primário possui credenciais mínimas."""
+    return bool(GMAIL_SMTP_USERNAME and GMAIL_SMTP_APP_PASSWORD and GMAIL_FROM_EMAIL)
+
+
+def _is_fallback_configured() -> bool:
+    """Verifica se o canal de contingência (fallback) possui credenciais mínimas."""
+    return bool(FALLBACK_SMTP_USERNAME and FALLBACK_SMTP_APP_PASSWORD and FALLBACK_FROM_EMAIL)
 
 
 def is_email_configured() -> bool:
-    """Indica se há credenciais suficientes para enviar e-mail pelo Gmail."""
-    return bool(GMAIL_SMTP_USERNAME and GMAIL_SMTP_APP_PASSWORD and GMAIL_FROM_EMAIL)
+    """Indica se há credenciais suficientes para enviar e-mail pelo canal primário ou pelo fallback."""
+    return _is_primary_configured() or _is_fallback_configured()
 
 
 # ==================== TEMPLATES HTML ====================
 
 def _otp_html(code: str) -> str:
-    """Template de verificação de e-mail — identidade esmeralda."""
+    """Template de verificação de e-mail — identidade esmeralda institucional."""
     return """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Confirmação de E-mail - Braga Saúde</title>
+  <title>Confirmação de Cadastro - Braga Saúde</title>
 </head>
-<body style="font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,sans-serif; background:#F0FDF4; margin:0; padding:24px;">
-  <div style="max-width:520px; margin:0 auto; background:#FFF; border-radius:16px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-    <div style="background:linear-gradient(135deg,#00A884 0%,#008F70 100%); padding:32px 24px; text-align:center; color:#FFF;">
-      <h1 style="margin:0; font-size:26px; font-weight:700;">Braga Saúde</h1>
-      <p style="margin:6px 0 0 0; font-size:14px; opacity:0.9;">Confirmação de Cadastro</p>
+<body style="font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,sans-serif; background:#F0FDF4; margin:0; padding:16px;">
+  <div style="max-width:520px; margin:0 auto; background:#FFF; border-radius:16px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.06); border:1px solid #E2E8F0;">
+    <div style="background:linear-gradient(135deg,#00A884 0%,#008F70 100%); padding:32px 20px; text-align:center; color:#FFF;">
+      <h1 style="margin:0; font-size:24px; font-weight:700;">Braga Saúde</h1>
+      <p style="margin:6px 0 0 0; font-size:14px; opacity:0.95;">Confirmação de Cadastro</p>
     </div>
-    <div style="padding:32px 28px;">
-      <p style="font-size:16px; line-height:1.6; color:#334155; margin-bottom:24px;">
+    <div style="padding:28px 24px;">
+      <p style="font-size:16px; line-height:1.6; color:#334155; margin:0 0 20px 0;">
         Olá!<br><br>
         <strong>Seja muito bem-vindo ao Braga Saúde!</strong> 🎉<br><br>
-        Para ativar sua conta e proteger seus dados, utilize o código de verificação abaixo:
+        Para ativar sua conta e proteger seus dados, utilize o código de verificação abaixo no aplicativo:
       </p>
-      <div style="background:#F0FDF4; border:2px dashed #00A884; border-radius:12px; padding:24px; text-align:center; margin:28px 0;">
-        <div style="font-size:12px; font-weight:700; color:#00A884; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:8px;">Seu Código de Verificação</div>
-        <div style="font-size:42px; font-weight:800; color:#008F70; letter-spacing:10px; font-family:'Courier New',monospace; margin:0;">""" + code + """</div>
+      <div style="background:#F0FDF4; border:2px dashed #00A884; border-radius:12px; padding:18px 12px; text-align:center; margin:24px 0;">
+        <div style="font-size:11px; font-weight:700; color:#00A884; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:6px;">Seu Código de Verificação</div>
+        <div style="font-size:34px; font-weight:800; color:#008F70; letter-spacing:6px; font-family:'Courier New',Courier,monospace; margin:0; display:inline-block; white-space:nowrap;">""" + code + """</div>
       </div>
-      <div style="background:#F8FAFC; border-radius:8px; padding:14px 16px; font-size:14px; color:#64748B; line-height:1.6; border-left:4px solid #00A884;">
+      <div style="background:#F8FAFC; border-radius:8px; padding:14px 16px; font-size:13px; color:#64748B; line-height:1.6; border-left:4px solid #00A884;">
         ⏱️ <strong>Validade:</strong> Este código expira em <strong>15 minutos</strong>.<br>
-        🔒 <strong>Segurança:</strong> Se você não solicitou este cadastro, ignore este e-mail.
+        🔒 <strong>Segurança:</strong> Se você não solicitou este cadastro, ignore este e-mail com segurança.
       </div>
     </div>
-    <div style="background:#F1F5F9; padding:20px; text-align:center; font-size:12px; color:#64748B; border-top:1px solid #E2E8F0;">
-      Braga Saúde • Cuidando de quem sempre cuidou de você 💚
+    <div style="background:#F8FAFC; padding:20px; text-align:center; font-size:12px; color:#64748B; border-top:1px solid #E2E8F0; line-height:1.6;">
+      <p style="margin:0 0 6px 0; font-weight:600; color:#475569;">
+        ⚠️ Esta é uma mensagem automática. Por favor, não responda diretamente a este e-mail.
+      </p>
+      <p style="margin:0 0 10px 0;">
+        Dúvidas ou suporte? Fale conosco em <a href="mailto:contato@bragasaude.online" style="color:#00A884; text-decoration:none; font-weight:600;">contato@bragasaude.online</a>
+      </p>
+      <div style="font-size:11px; color:#94A3B8;">
+        Braga Saúde • Cuidando de quem sempre cuidou de você 💚
+      </div>
     </div>
   </div>
 </body>
@@ -67,7 +95,7 @@ def _otp_html(code: str) -> str:
 
 
 def _reset_html(code: str) -> str:
-    """Template de recuperação de senha — âmbar alerta."""
+    """Template de recuperação de senha — identidade esmeralda com foco em segurança."""
     return """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -75,29 +103,37 @@ def _reset_html(code: str) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Recuperação de Senha - Braga Saúde</title>
 </head>
-<body style="font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,sans-serif; background:#F0FDF4; margin:0; padding:24px;">
-  <div style="max-width:520px; margin:0 auto; background:#FFF; border-radius:16px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.08);">
-    <div style="background:linear-gradient(135deg,#00A884 0%,#008F70 100%); padding:32px 24px; text-align:center; color:#FFF;">
-      <h1 style="margin:0; font-size:26px; font-weight:700;">Braga Saúde</h1>
-      <p style="margin:6px 0 0 0; font-size:14px; opacity:0.9;">Recuperação de Acesso</p>
+<body style="font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,sans-serif; background:#F0FDF4; margin:0; padding:16px;">
+  <div style="max-width:520px; margin:0 auto; background:#FFF; border-radius:16px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.06); border:1px solid #E2E8F0;">
+    <div style="background:linear-gradient(135deg,#00A884 0%,#008F70 100%); padding:32px 20px; text-align:center; color:#FFF;">
+      <h1 style="margin:0; font-size:24px; font-weight:700;">Braga Saúde</h1>
+      <p style="margin:6px 0 0 0; font-size:14px; opacity:0.95;">Recuperação de Acesso</p>
     </div>
-    <div style="padding:32px 28px;">
-      <p style="font-size:16px; line-height:1.6; color:#334155; margin-bottom:24px;">
+    <div style="padding:28px 24px;">
+      <p style="font-size:16px; line-height:1.6; color:#334155; margin:0 0 20px 0;">
         Olá!<br><br>
         Recebemos uma solicitação para <strong>redefinir a senha</strong> da sua conta no Braga Saúde.<br><br>
         Utilize o código de segurança abaixo para criar uma nova senha:
       </p>
-      <div style="background:#F0FDF4; border:2px dashed #00A884; border-radius:12px; padding:24px; text-align:center; margin:28px 0;">
-        <div style="font-size:12px; font-weight:700; color:#008F70; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:8px;">Código de Recuperação</div>
-        <div style="font-size:42px; font-weight:800; color:#008F70; letter-spacing:10px; font-family:'Courier New',monospace; margin:0;">""" + code + """</div>
+      <div style="background:#F0FDF4; border:2px dashed #00A884; border-radius:12px; padding:18px 12px; text-align:center; margin:24px 0;">
+        <div style="font-size:11px; font-weight:700; color:#008F70; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:6px;">Código de Recuperação</div>
+        <div style="font-size:34px; font-weight:800; color:#008F70; letter-spacing:6px; font-family:'Courier New',Courier,monospace; margin:0; display:inline-block; white-space:nowrap;">""" + code + """</div>
       </div>
-      <div style="background:#F0FDF4; border-radius:8px; padding:14px 16px; font-size:14px; color:#008F70; line-height:1.6; border-left:4px solid #00A884;">
+      <div style="background:#F0FDF4; border-radius:8px; padding:14px 16px; font-size:13px; color:#008F70; line-height:1.6; border-left:4px solid #00A884;">
         ⏱️ <strong>Validade:</strong> Este código expira em <strong>15 minutos</strong>.<br>
-        🔒 <strong>Segurança:</strong> Se você não solicitou a redefinição, <strong>não se preocupe</strong> — sua senha atual continua segura. Apenas ignore este e-mail.
+        🔒 <strong>Segurança:</strong> Se você não solicitou a redefinição, <strong>não se preocupe</strong> — sua conta continua segura. Basta ignorar este e-mail.
       </div>
     </div>
-    <div style="background:#F1F5F9; padding:20px; text-align:center; font-size:12px; color:#64748B; border-top:1px solid #E2E8F0;">
-      Braga Saúde • Cuidando de quem sempre cuidou de você 💚
+    <div style="background:#F8FAFC; padding:20px; text-align:center; font-size:12px; color:#64748B; border-top:1px solid #E2E8F0; line-height:1.6;">
+      <p style="margin:0 0 6px 0; font-weight:600; color:#475569;">
+        ⚠️ Esta é uma mensagem automática. Por favor, não responda diretamente a este e-mail.
+      </p>
+      <p style="margin:0 0 10px 0;">
+        Dúvidas ou suporte? Fale conosco em <a href="mailto:contato@bragasaude.online" style="color:#00A884; text-decoration:none; font-weight:600;">contato@bragasaude.online</a>
+      </p>
+      <div style="font-size:11px; color:#94A3B8;">
+        Braga Saúde • Cuidando de quem sempre cuidou de você 💚
+      </div>
     </div>
   </div>
 </body>
@@ -143,39 +179,108 @@ def _welcome_html(user_name: str) -> str:
         💡 <strong>Dica:</strong> Seus dados ficam sempre seguros e sincronizados. Mesmo que você troque de celular, basta fazer login com a mesma conta para recuperar tudo.
       </div>
     </div>
-    <div style="background:#F1F5F9; padding:20px; text-align:center; font-size:12px; color:#64748B; border-top:1px solid #E2E8F0;">
-      Braga Saúde • Cuidando de quem sempre cuidou de você 💚
+    <div style="background:#F8FAFC; padding:20px; text-align:center; font-size:12px; color:#64748B; border-top:1px solid #E2E8F0; line-height:1.6;">
+      <p style="margin:0 0 6px 0; font-weight:600; color:#475569;">
+        ⚠️ Esta é uma mensagem automática. Por favor, não responda diretamente a este e-mail.
+      </p>
+      <p style="margin:0 0 10px 0;">
+        Dúvidas ou suporte? Fale conosco em <a href="mailto:contato@bragasaude.online" style="color:#00A884; text-decoration:none; font-weight:600;">contato@bragasaude.online</a>
+      </p>
+      <div style="font-size:11px; color:#94A3B8;">
+        Braga Saúde • Cuidando de quem sempre cuidou de você 💚
+      </div>
     </div>
   </div>
 </body>
 </html>"""
 
 
-# ==================== SERVIÇO DE ENVIO ====================
+# ==================== SERVIÇO DE ENVIO COM FALLBACK ====================
+
+def _send_smtp_payload(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    from_email: str,
+    from_name: str,
+    reply_to: str,
+    to_email: str,
+    subject: str,
+    html_content: str,
+    text_content: str,
+) -> bool:
+    """Dispara um e-mail individual via SMTP SSL seguro com cabeçalhos padronizados."""
+    message = EmailMessage()
+    message["From"] = f"{from_name} <{from_email}>"
+    message["To"] = to_email
+    message["Subject"] = subject
+    if reply_to:
+        message["Reply-To"] = f"{from_name} <{reply_to}>"
+    message["Auto-Submitted"] = "auto-generated"
+    message["X-Auto-Response-Suppress"] = "All"
+    message.set_content(text_content)
+    message.add_alternative(html_content, subtype="html")
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP_SSL(host, port, context=context, timeout=20) as smtp:
+        smtp.login(username, password)
+        smtp.send_message(message)
+    return True
+
 
 def _send_gmail_sync(to_email: str, subject: str, html_content: str, text_content: str) -> bool:
-    """Envia e-mail por SMTP seguro do Gmail de forma síncrona."""
+    """Envia e-mail por SMTP seguro com fallback automático para a conta legada."""
     if not is_email_configured():
-        print("[Email Service Error] Gmail SMTP não configurado. Defina GMAIL_SMTP_USERNAME, GMAIL_SMTP_APP_PASSWORD e GMAIL_FROM_EMAIL.")
+        print("[Email Service Error] Nenhum canal SMTP configurado (nem primário, nem fallback).")
         return False
 
-    try:
-        message = EmailMessage()
-        message["From"] = f"{GMAIL_FROM_NAME} <{GMAIL_FROM_EMAIL}>"
-        message["To"] = to_email
-        message["Subject"] = subject
-        message.set_content(text_content)
-        message.add_alternative(html_content, subtype="html")
+    # 1. Tentativa Primária (ex: no-reply@bragasaude.online)
+    if _is_primary_configured():
+        try:
+            success = _send_smtp_payload(
+                GMAIL_SMTP_HOST,
+                GMAIL_SMTP_PORT,
+                GMAIL_SMTP_USERNAME,
+                GMAIL_SMTP_APP_PASSWORD,
+                GMAIL_FROM_EMAIL,
+                GMAIL_FROM_NAME,
+                GMAIL_REPLY_TO,
+                to_email,
+                subject,
+                html_content,
+                text_content,
+            )
+            if success:
+                print(f"[Email Service] E-mail primário enviado com sucesso para {to_email} via {GMAIL_FROM_EMAIL}")
+                return True
+        except Exception as e:
+            print(f"[Email Service Warning] Falha no envio primário ({GMAIL_FROM_EMAIL}) para {to_email}: {e}. Acionando fallback...")
 
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(GMAIL_SMTP_HOST, GMAIL_SMTP_PORT, context=context, timeout=20) as smtp:
-            smtp.login(GMAIL_SMTP_USERNAME, GMAIL_SMTP_APP_PASSWORD)
-            smtp.send_message(message)
-        print(f"[Email Service] E-mail aceito pelo Gmail SMTP para {to_email}")
-        return True
-    except Exception as e:
-        print(f"[Email Service Error] Falha ao enviar e-mail pelo Gmail SMTP para {to_email}: {e}")
-        return False
+    # 2. Tentativa de Fallback (ex: contatobragasaude@gmail.com)
+    if _is_fallback_configured():
+        try:
+            success = _send_smtp_payload(
+                FALLBACK_SMTP_HOST,
+                FALLBACK_SMTP_PORT,
+                FALLBACK_SMTP_USERNAME,
+                FALLBACK_SMTP_APP_PASSWORD,
+                FALLBACK_FROM_EMAIL,
+                FALLBACK_FROM_NAME,
+                FALLBACK_REPLY_TO,
+                to_email,
+                subject,
+                html_content,
+                text_content,
+            )
+            if success:
+                print(f"[Email Service Fallback] E-mail de contingência enviado com sucesso via fallback ({FALLBACK_FROM_EMAIL}) para {to_email}")
+                return True
+        except Exception as e:
+            print(f"[Email Service Error] Falha também no envio via fallback ({FALLBACK_FROM_EMAIL}) para {to_email}: {e}")
+
+    print(f"[Email Service Error] Falha crítica: todos os canais de e-mail (primário e fallback) falharam para {to_email}")
+    return False
 
 
 async def send_otp_email(to_email: str, code: str) -> Dict[str, Any]:
