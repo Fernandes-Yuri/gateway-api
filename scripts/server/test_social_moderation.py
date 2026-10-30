@@ -76,6 +76,15 @@ class SocialModerationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(503, (await self.client.post(path, json=body)).status_code)
             self.assertEqual(503, (await self.client.delete(paths[1][0])).status_code)
 
+    async def test_moderation_rejects_account_switch_before_saving(self):
+        for method, path, body in [('POST', f'/api/social/posts/{self.post}/report', {'reason': 'spam'}),
+                                   ('POST', '/api/social/users/author/block', None),
+                                   ('GET', '/api/social/blocks', None)]:
+            response = await self.client.request(method, path + '?expected_user_id=previous-account', json=body)
+            self.assertEqual(403, response.status_code)
+        self.conn.execute.assert_not_awaited()
+        self.conn.fetchval.assert_not_awaited()
+
     async def test_admin_requires_service_identity_and_admin_role(self):
         for method, path, body in [('GET', '/api/admin/social-reports', None),
                                    ('POST', f'/api/admin/social-reports/{self.post}/action', {'action': 'dismiss'})]:

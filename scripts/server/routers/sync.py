@@ -903,7 +903,10 @@ class SocialReportDto(BaseModel):
 
 
 @router.post("/api/social/posts/{post_id}/report", status_code=201)
-async def report_social_post(post_id: uuid.UUID, body: SocialReportDto, uid: str = Depends(firebase_uid)):
+async def report_social_post(post_id: uuid.UUID, body: SocialReportDto, uid: str = Depends(firebase_uid),
+                             expected_user_id: Optional[str] = None):
+    if expected_user_id is not None:
+        require_owner(uid, expected_user_id)
     if not _state.db_pool:
         raise HTTPException(503, "Denúncia não enviada: banco indisponível.")
     await _state.rate_limiter.check("social_report", uid, limit=20, window_seconds=60, pool=_state.db_pool)
@@ -931,7 +934,9 @@ async def report_social_post(post_id: uuid.UUID, body: SocialReportDto, uid: str
 
 @router.post("/api/social/users/{target_user_id}/block")
 async def block_social_user(target_user_id: str = Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
-                            uid: str = Depends(firebase_uid)):
+                            uid: str = Depends(firebase_uid), expected_user_id: Optional[str] = None):
+    if expected_user_id is not None:
+        require_owner(uid, expected_user_id)
     if target_user_id == uid:
         raise HTTPException(422, "Você não pode bloquear sua própria conta.")
     if not _state.db_pool:
@@ -955,6 +960,18 @@ async def unblock_social_user(target_user_id: str = Path(min_length=1, max_lengt
     async with _state.db_pool.acquire() as conn:
         await conn.execute("DELETE FROM social_user_blocks WHERE user_id=$1 AND blocked_user_id=$2", uid, target_user_id)
     return {"status": "unblocked"}
+
+
+@router.get("/api/social/blocks")
+async def get_social_blocks(uid: str = Depends(firebase_uid), expected_user_id: Optional[str] = None):
+    if expected_user_id is not None:
+        require_owner(uid, expected_user_id)
+    if not _state.db_pool:
+        raise HTTPException(503, "Bloqueios indisponíveis.")
+    async with _state.db_pool.acquire() as conn:
+        rows = await conn.fetch("""SELECT blocked_user_id AS hidden_user_id FROM social_user_blocks WHERE user_id=$1
+            UNION SELECT user_id AS hidden_user_id FROM social_user_blocks WHERE blocked_user_id=$1""", uid)
+    return {"hidden_user_ids": [row["hidden_user_id"] for row in rows]}
 
 
 @router.post("/api/sync/post-reaction")

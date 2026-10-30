@@ -7,17 +7,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 from routers import admin, sync
 import test_privacy_postgres as privacy
-from test_moderation_postgres import ModerationPostgres
+import test_moderation_postgres as moderation
 
 
 @unittest.skipUnless(privacy.TEST_DSN, 'PostgreSQL efêmero disponível somente no CI')
 class SocialModerationPostgres(unittest.IsolatedAsyncioTestCase):
-    request = ModerationPostgres.request
+    request = moderation.ModerationPostgres.request
 
     async def asyncSetUp(self):
-        await ModerationPostgres.asyncSetUp(self)
+        await moderation.ModerationPostgres.asyncSetUp(self)
         async with self.pool.acquire() as conn:
-            for number in (23, 27, 47, 77):
+            await conn.execute('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS applied_at timestamptz DEFAULT NOW()')
+            for number in (23, 24, 27, 47, 77):
                 migration = next((privacy.ROOT / 'migrations').glob(f'{number:03d}_*.sql'))
                 await conn.execute(migration.read_text(encoding='utf-8'))
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('terceiro','Terceiro')")
@@ -27,7 +28,7 @@ class SocialModerationPostgres(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.sync_state.stop()
-        await ModerationPostgres.asyncTearDown(self)
+        await moderation.ModerationPostgres.asyncTearDown(self)
 
     async def report(self, uid='cuidador'):
         return await sync.report_social_post(self.post, sync.SocialReportDto(reason='spam'), uid=uid)
@@ -52,6 +53,8 @@ class SocialModerationPostgres(unittest.IsolatedAsyncioTestCase):
             await conn.execute("INSERT INTO social_posts(user_id,post_type,title) VALUES ('cuidador','milestone','Outra')")
         for _ in range(2):
             await sync.block_social_user('paciente', uid='cuidador')
+        for viewer, hidden in [('cuidador', 'paciente'), ('paciente', 'cuidador')]:
+            self.assertEqual([hidden], (await sync.get_social_blocks(uid=viewer))['hidden_user_ids'])
         for viewer, hidden in [('cuidador', 'paciente'), ('paciente', 'cuidador')]:
             feed = await sync.get_social_feed(limit=30, offset=0, uid=viewer)
             self.assertNotIn(hidden, [r['user_id'] for r in feed])
