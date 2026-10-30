@@ -36,8 +36,6 @@ from routers import auth as auth_router
 # Routers extraidos (Fase A passo 5): sincronizacao PostgreSQL.
 from routers import sync as sync_router
 from routers import emergency as emergency_router
-from routers import whatsapp_intake as whatsapp_intake_router
-from routers import whatsapp_internal as whatsapp_internal_router
 # Router administrativo do portal webservice (D-WS1 / D50): leituras e
 # operacoes admin protegidas por token de servico. O portal Next.js no
 # Render consome estes endpoints e deixa de acessar o RDS diretamente.
@@ -281,7 +279,7 @@ class FamilyMessageSyncDto(BaseModel):
 # 503/offline_mode em producao. (Detectado na revisao pre-push: os testes
 # locais passavam justamente por esperarem pool None offline.)
 _POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
-                 sync_router, admin_router, care_os_router, whatsapp_intake_router, whatsapp_internal_router)
+                 sync_router, admin_router, care_os_router)
 
 
 def _propagate_db_pool():
@@ -296,15 +294,12 @@ def _propagate_db_pool():
         _router._state.db_pool = db_pool
 
 
-intake_tasks = []
 conteudo_tasks = []
-app.include_router(whatsapp_intake_router.router)
-app.include_router(whatsapp_internal_router.router)
 
 
 @app.on_event("startup")
 async def startup():
-    global db_pool, intake_tasks, conteudo_tasks
+    global db_pool, conteudo_tasks
     if HAS_POSTGRES:
         for attempt in range(1, 6):
             try:
@@ -322,9 +317,6 @@ async def startup():
         if db_pool:
             await rate_limiter.load_blocked_ips_from_db(db_pool)
             _propagate_db_pool()  # routers extras: pool vivo a partir de agora
-            from services.wa_intake_worker import enabled as intake_enabled, start as start_intake
-            if intake_enabled():
-                intake_tasks = start_intake(db_pool)
             from services import conteudo_verificacao
             if conteudo_verificacao.habilitado():
                 conteudo_tasks = conteudo_verificacao.start(db_pool)
@@ -455,11 +447,6 @@ async def shutdown():
         await telemetry.stop()
     if globals().get("retention_scheduler"):
         retention_scheduler.shutdown(wait=False)
-    for task in intake_tasks:
-        task.cancel()
-    if intake_tasks:
-        await asyncio.gather(*intake_tasks,return_exceptions=True)
-        intake_tasks.clear()
     for task in conteudo_tasks:
         task.cancel()
     if conteudo_tasks:
@@ -694,17 +681,48 @@ dataset_module.configure_state(
 # permanecem aqui (compartilhados com ws_orb) e sao passados ao
 # router via configure_state.
 
-# CMS editorial: usa o pool e a identidade administrativa já configurados.
-from routers import editorial as editorial_router
-app.include_router(editorial_router.router)
+# Módulos descontinuados (SPEC-08): Editorial (Clínicas) e Triagem WhatsApp.
+# Respondem 410 Gone imediatamente sem consultar banco de dados.
+@app.api_route(
+    "/api/editorial",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+)
+@app.api_route(
+    "/api/editorial/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+)
+async def editorial_gone(path: str = ""):
+    return JSONResponse(
+        status_code=410,
+        content={"detail": "Módulo editorial descontinuado (SPEC-08)"},
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+
+@app.api_route(
+    "/api/whatsapp",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+)
+@app.api_route(
+    "/api/whatsapp/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+)
+async def whatsapp_gone(path: str = ""):
+    return JSONResponse(
+        status_code=410,
+        content={"detail": "Canal WhatsApp descontinuado (SPEC-08)"},
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
 
 # Verificação de integridade do conteúdo público: consulta autenticada
 # apenas para o painel; a coleta em si não expõe rota nenhuma.
 from routers import conteudo as conteudo_router
 app.include_router(conteudo_router.router)
-
-# Leitura pública do site estático, sem liberar a superfície administrativa.
-app.add_middleware(editorial_router.PublicEditorialCORS)
 
 # Última camada registrada: inclui respostas antecipadas de CORS e firewall.
 from response_security import ResponseSecurityHeaders

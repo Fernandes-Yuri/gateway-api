@@ -91,5 +91,20 @@ class TravaDeBancoNaoEfemeroTests(unittest.TestCase):
             ensaio.DSN = original
 
 
+class Migracao076Tests(unittest.TestCase):
+    def test_migracao_076_valida_expurgo_clinicas_e_whatsapp(self):
+        raiz = pathlib.Path(__file__).resolve().parents[2]
+        f = raiz / "migrations" / "076_retire_clinicas_and_whatsapp.sql"
+        self.assertTrue(f.exists(), "migração 076 ausente")
+        sql = f.read_text(encoding="utf-8")
+        self.assertIn("DROP TABLE IF EXISTS public.editorial_articles CASCADE;", sql)
+        self.assertIn("DROP TABLE IF EXISTS public.editorial_members CASCADE;", sql)
+        self.assertIn("DROP TABLE IF EXISTS public.editorial_media CASCADE;", sql)
+        self.assertIn("DROP TABLE IF EXISTS public.whatsapp_intake_conversations CASCADE;", sql)
+        self.assertIn("DROP TABLE IF EXISTS public.whatsapp_intake_messages CASCADE;", sql)
+        self.assertNotIn("BEGIN;", sql)
+        self.assertNotIn("COMMIT;", sql)
+
+
 if __name__ == "__main__":
     unittest.main()
