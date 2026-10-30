@@ -15,6 +15,9 @@
 # Web framework (versao verificada localmente + CI verde)
 fastapi==0.141.1
 uvicorn[standard]>=0.30.0
+# SPEC-04: parte de pecas com 2 workers Uvicorn (via gunicorn), aproveitando
+# os 2 vCPUs da EC2 t3.small apos o upgrade de escala pre-lancamento.
+gunicorn>=23.0
 starlette==1.6.0
 pydantic>=2.9,<3
 # Form data (multipart): exigido por rotas com UploadFile/File/Form

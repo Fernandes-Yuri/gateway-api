@@ -8,7 +8,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -19,6 +19,7 @@ from core.devices import (
     load_devices,
     save_devices,
     dispatch_push,
+    dispatch_push_broadcast,
     load_devices_by_user,
     register_device_token,
 )
@@ -168,25 +169,23 @@ async def send_alert(req: AlertNotificationRequest, uid: str = Depends(firebase_
     caller_role = caller.get("role")
     if req.targetRole in ("ALL", "ADMIN") and caller_role != "ADMIN":
         raise HTTPException(403, "Apenas administradores podem disparar alertas para todos.")
-    sent_count = 0
+    # SPEC-04: o destino do alerta, inclusive broadcast (targetRole ALL),
+    # sai por blocos com jitter assincrono (assistant ver core.devices) para
+    # evitar o thundering herd de cliques no mesmo segundo ao abrir a app.
+    tokens_alvo: List[str] = []
     for dev_uid, user_devices in devices.items():
         for dev in user_devices:
             if req.targetRole == "ALL" or dev.get("role") == req.targetRole:
-                success = await asyncio.to_thread(
-                    dispatch_push,
-                    token=dev["token"],
-                    title=req.title,
-                    body=req.message,
-                    data={
-                        "type": req.type,
-                        "sourceUserId": uid,
-                        "metricValue": req.metricValue or ""
-                    },
-                    messaging=_state.messaging,
-                    has_fcm=_state.has_fcm,
-                )
-                if success:
-                    sent_count += 1
+                tokens_alvo.append(dev["token"])
+    sent_count = await dispatch_push_broadcast(
+        tokens_alvo,
+        req.title,
+        req.message,
+        data={"type": req.type, "sourceUserId": uid,
+              "metricValue": req.metricValue or ""},
+        messaging=_state.messaging,
+        has_fcm=_state.has_fcm,
+    )
     return {"status": "dispatched", "recipients": sent_count}
 
 

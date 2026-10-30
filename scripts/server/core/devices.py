@@ -3,9 +3,11 @@
 Higiene Fase B: persistencia relacional via tabela device_push_tokens, com suporte
 a transicao suave a partir do legado registered_devices.json e compatibilidade in-memory.
 """
+import asyncio
 import json
 import os
-from typing import Any, Dict, List, Optional
+import random
+from typing import Any, Callable, Dict, List, Optional
 
 from config import DEVICES_PATH
 
@@ -243,3 +245,66 @@ def dispatch_push(token: str, title: str, body: str, data: Dict[str, str] = None
         # aconteceram. Registra a intencao e devolve False.
         print(f"[FCM Mock — NAO ENVIADO] Push para {token[:10]}...: {title} - {body}")
         return False
+
+
+# SPEC-04: tamanho do bloco e janela de jitter do broadcast (thundering herd).
+BROADCAST_LOTE_TAMANHO = 50
+BROADCAST_JITTER_MIN = 0.5
+BROADCAST_JITTER_MAX = 3.0
+
+
+async def dispatch_push_broadcast(
+    tokens: List[str],
+    title: str,
+    body: str,
+    data: Dict[str, str] = None,
+    include_notification: bool = True,
+    messaging=None,
+    has_fcm: bool = False,
+    send_fn: Optional[Callable[..., bool]] = None,
+    chunk_size: int = BROADCAST_LOTE_TAMANHO,
+    jitter_min: float = BROADCAST_JITTER_MIN,
+    jitter_max: float = BROADCAST_JITTER_MAX,
+) -> int:
+    """Envio escalonado de push para muitos tokens (broadcast/near-broadcast).
+
+    Distribui o disparo em blocos de `chunk_size` dispositivos com um
+    pequeno atraso aleatorio (`asyncio.sleep`, nunca bloqueia o event loop)
+    entre cada bloco. Assim, uma notificacao de alcance amplo nao faz
+    milhares de aberturas simultaneas do app no mesmo segundo no pico de
+    lancamento (150-200 RPS).
+
+    `send_fn` permite injecao em testes; por padrao usa `dispatch_push` via
+    `asyncio.to_thread` (o SDK FCM e bloqueante). Retorna o total de envios
+    confirmados com sucesso.
+    """
+    enviados = 0
+    toks = [t for t in (tokens or []) if t]
+    if not toks:
+        return 0
+    for inicio in range(0, len(toks), max(1, chunk_size)):
+        if inicio > 0:
+            # Jitter entre blocos: espalha a onda de cliques ao longo de ate
+            # ~2 minutos num catalogo grande de destinatarios.
+            await asyncio.sleep(random.uniform(jitter_min, jitter_max))
+        bloco = toks[inicio:inicio + max(1, chunk_size)]
+        for token in bloco:
+            try:
+                if send_fn is not None:
+                    # Injecao usada em testes (pode ser sync ou async).
+                    resultado = send_fn(token, title, body, data,
+                                        include_notification, messaging, has_fcm)
+                    ok = await resultado if asyncio.iscoroutine(resultado) else resultado
+                else:
+                    # To_thread: o SDK FCM e bloqueante; nao trava o event loop.
+                    ok = await asyncio.to_thread(
+                        dispatch_push,
+                        token=token, title=title, body=body, data=data,
+                        include_notification=include_notification,
+                        messaging=messaging, has_fcm=has_fcm,
+                    )
+                if ok:
+                    enviados += 1
+            except Exception as push_err:
+                print(f"[Broadcast Push] Falha no envio para {token[:10]}...: {push_err}")
+    return enviados

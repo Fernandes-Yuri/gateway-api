@@ -1,0 +1,27 @@
+[Unit]
+Description=Gateway Braga Saude (FastAPI/Uvicorn via Gunicorn, 2 workers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=ec2-user
+WorkingDirectory=/home/ec2-user/braga-gateway/app
+ExecStart=/home/ec2-user/braga-gateway/venv/bin/gunicorn server:app \
+    -w 2 \
+    -k uvicorn.workers.UvicornWorker \
+    --bind 0.0.0.0:8080 \
+    --timeout 30
+# Graceful shutdown: segue o padrao do systemd de servicos web.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=3
+# Privacidade: cultural heranca do drop-in 10-private-memory.conf
+# (LimitCORE=0 impede dumps com memoria do processo).
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

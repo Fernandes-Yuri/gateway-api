@@ -81,6 +81,8 @@ fi
 sudo install -d -m 0755 /etc/systemd/system/braga-gateway.service.d /etc/systemd/coredump.conf.d
 sudo install -m 0644 infra/systemd/braga-gateway.service.d/10-private-memory.conf /etc/systemd/system/braga-gateway.service.d/10-private-memory.conf
 sudo install -m 0644 infra/systemd/coredump.conf.d/10-braga-privacy.conf /etc/systemd/coredump.conf.d/10-braga-privacy.conf
+# SPEC-04: a unidade agora vive no repositorio (gunicorn com 2 workers Uvicorn).
+sudo install -m 0644 infra/systemd/braga-gateway.service /etc/systemd/system/braga-gateway.service
 sudo systemctl daemon-reload
 
 echo "=== [4/4] Reiniciando Braga Gateway ==="
