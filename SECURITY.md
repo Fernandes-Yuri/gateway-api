@@ -20,8 +20,10 @@ Se você acredita ter identificado uma falha de segurança, problema de integrid
 > ⚠️ **IMPORTANTE:** **NÃO abra uma issue pública** no GitHub para reportar vulnerabilidades de segurança ou vazamento de credenciais. A divulgação pública prematura pode colocar em risco dados sensíveis.
 
 ### Canal de Contato Confidencial
-Envie um e-mail detalhado para:
-📧 **contatobragasaude@gmail.com** com cópia para **workfjsyuri@gmail.com**
+Envie um e-mail detalhado ao canal oficial principal:
+📧 **contato@bragasaude.online**
+
+Se houver falha de entrega ou indisponibilidade do domínio oficial (DNS ou infraestrutura), use o canal secundário de contingência: **contatobragasaude@gmail.com**, com cópia para **workfjsyuri@gmail.com**. O Gmail permanece disponível como alternativa emergencial.
 
 ### O que incluir no seu relatório:
 1. **Descrição detalhada:** Resumo claro da falha identificada;

@@ -30,7 +30,7 @@ Os líderes do projeto são responsáveis por esclarecer e fazer cumprir nossos 
 
 ## Aplicação
 
-Instâncias de comportamento abusivo, de assédio ou inaceitável podem ser relatadas à equipe responsável pelo projeto através do e-mail: **contatobragasaude@gmail.com**. Todas as mensagens serão tratadas com confidencialidade, investigadas de forma pontual e justa.
+Instâncias de comportamento abusivo, de assédio ou inaceitável podem ser relatadas à equipe responsável pelo projeto através do canal oficial principal: **contato@bragasaude.online**. Em caso de falha de entrega ou indisponibilidade do domínio oficial, use o canal secundário de contingência: **contatobragasaude@gmail.com**. Todas as mensagens serão tratadas com confidencialidade, investigadas de forma pontual e justa.
 
 ## Atribuição
 
