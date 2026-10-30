@@ -1138,7 +1138,10 @@ async def cancel_dose_batch(batch_id: uuid.UUID, uid: str = Depends(firebase_uid
 
 
 @router.get('/api/medication-dose-capabilities')
-async def medication_dose_capabilities(uid: str = Depends(firebase_uid)):
+async def medication_dose_capabilities(response: Response, uid: str = Depends(firebase_uid)):
+    # SPEC-04: metadados estáticos de abertura do app. Header na Borda
+    # (Cloudflare) absorve o pico de abertura sem tocar no Gateway/RDS.
+    response.headers["Cache-Control"] = "public, max-age=300"
     return {"medication_batch_contract": 1, "enabled": dose_contract_enabled(),
             "structured_quantities": True, "integer_units_min": 1, "integer_units_max": 20,
             "proposal_ttl_seconds": 300, "offline_result_recovery": True,
