@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Path, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -865,6 +865,11 @@ async def get_social_feed(
     FROM social_posts sp
     JOIN profiles p ON sp.user_id = p.id
     WHERE sp.is_visible = TRUE
+      AND NOT EXISTS (
+          SELECT 1 FROM social_user_blocks sb
+          WHERE (sb.user_id = $3 AND sb.blocked_user_id = sp.user_id)
+             OR (sb.user_id = sp.user_id AND sb.blocked_user_id = $3)
+      )
       AND (
           sp.visibility = 'PUBLIC'
           OR sp.user_id = $3
@@ -892,6 +897,83 @@ async def get_social_feed(
         return result
 
 
+class SocialReportDto(BaseModel):
+    reason: Literal["offensive", "spam", "misinformation", "other"]
+    details: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post("/api/social/posts/{post_id}/report", status_code=201)
+async def report_social_post(post_id: uuid.UUID, body: SocialReportDto, uid: str = Depends(firebase_uid),
+                             expected_user_id: Optional[str] = None):
+    if expected_user_id is not None:
+        require_owner(uid, expected_user_id)
+    if not _state.db_pool:
+        raise HTTPException(503, "Denúncia não enviada: banco indisponível.")
+    await _state.rate_limiter.check("social_report", uid, limit=20, window_seconds=60, pool=_state.db_pool)
+    async with _state.db_pool.acquire() as conn:
+        async with conn.transaction():
+            # A denúncia só pode referenciar conteúdo que o titular pode ver.
+            post = await conn.fetchrow("""SELECT sp.user_id FROM social_posts sp
+                WHERE sp.id=$1 AND sp.is_visible=TRUE AND (
+                    sp.visibility='PUBLIC' OR sp.user_id=$2 OR EXISTS (
+                        SELECT 1 FROM family_bindings b WHERE b.status='ACTIVE' AND (
+                            (b.patient_id=sp.user_id AND b.caregiver_id=$2) OR
+                            (b.caregiver_id=sp.user_id AND b.patient_id=$2)
+                        )
+                    )
+                ) FOR SHARE OF sp""", post_id, uid)
+            if not post:
+                raise HTTPException(404, "Publicação indisponível.")
+            if post["user_id"] == uid:
+                raise HTTPException(403, "Você não pode denunciar sua própria publicação.")
+            await conn.execute("""INSERT INTO social_reports(post_id,reported_by,author_id,reason,details)
+                VALUES ($1,$2,$3,$4,$5) ON CONFLICT (post_id,reported_by) DO NOTHING""",
+                post_id, uid, post["user_id"], body.reason, (body.details or "").strip() or None)
+    return {"status": "reported"}
+
+
+@router.post("/api/social/users/{target_user_id}/block")
+async def block_social_user(target_user_id: str = Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
+                            uid: str = Depends(firebase_uid), expected_user_id: Optional[str] = None):
+    if expected_user_id is not None:
+        require_owner(uid, expected_user_id)
+    if target_user_id == uid:
+        raise HTTPException(422, "Você não pode bloquear sua própria conta.")
+    if not _state.db_pool:
+        raise HTTPException(503, "Bloqueio não enviado: banco indisponível.")
+    await _state.rate_limiter.check("social_block", uid, limit=30, window_seconds=60, pool=_state.db_pool)
+    async with _state.db_pool.acquire() as conn:
+        saved = await conn.fetchval("""INSERT INTO social_user_blocks(user_id,blocked_user_id)
+            SELECT $1,id FROM profiles WHERE id=$2
+            ON CONFLICT (user_id,blocked_user_id) DO UPDATE SET blocked_user_id=EXCLUDED.blocked_user_id
+            RETURNING blocked_user_id""", uid, target_user_id)
+    if saved is None:
+        raise HTTPException(404, "Conta não encontrada.")
+    return {"status": "blocked"}
+
+
+@router.delete("/api/social/users/{target_user_id}/block")
+async def unblock_social_user(target_user_id: str = Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
+                              uid: str = Depends(firebase_uid)):
+    if not _state.db_pool:
+        raise HTTPException(503, "Bloqueio não removido: banco indisponível.")
+    async with _state.db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM social_user_blocks WHERE user_id=$1 AND blocked_user_id=$2", uid, target_user_id)
+    return {"status": "unblocked"}
+
+
+@router.get("/api/social/blocks")
+async def get_social_blocks(uid: str = Depends(firebase_uid), expected_user_id: Optional[str] = None):
+    if expected_user_id is not None:
+        require_owner(uid, expected_user_id)
+    if not _state.db_pool:
+        raise HTTPException(503, "Bloqueios indisponíveis.")
+    async with _state.db_pool.acquire() as conn:
+        rows = await conn.fetch("""SELECT blocked_user_id AS hidden_user_id FROM social_user_blocks WHERE user_id=$1
+            UNION SELECT user_id AS hidden_user_id FROM social_user_blocks WHERE blocked_user_id=$1""", uid)
+    return {"hidden_user_ids": [row["hidden_user_id"] for row in rows]}
+
+
 @router.post("/api/sync/post-reaction")
 async def sync_post_reaction(r: PostReactionSyncDto, uid: str = Depends(firebase_uid)):
     require_owner(uid, r.userId)
@@ -909,6 +991,10 @@ async def sync_post_reaction(r: PostReactionSyncDto, uid: str = Depends(firebase
                 (b.caregiver_id = sp.user_id AND b.patient_id = $2::varchar)
             )
         )
+    ) AND NOT EXISTS (
+        SELECT 1 FROM social_user_blocks sb
+        WHERE (sb.user_id=$2 AND sb.blocked_user_id=sp.user_id)
+           OR (sb.user_id=sp.user_id AND sb.blocked_user_id=$2)
     )
     ON CONFLICT (post_id, user_id) DO UPDATE SET reaction_type = EXCLUDED.reaction_type
     RETURNING post_id;
