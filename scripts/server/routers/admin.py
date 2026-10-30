@@ -22,7 +22,8 @@ import os
 import secrets
 import struct
 import time
-from typing import Optional
+import uuid
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -1238,6 +1239,59 @@ class UserRestrictionCreate(DeleteAccountRequest):
     level: str = Field(pattern=r'^(read-only|no-sync|suspended)$')
     reason: str = Field(min_length=1, max_length=500)
     minutes: Optional[int] = Field(default=None, ge=1, le=43200)
+
+
+@router.get('/api/admin/social-reports')
+async def list_social_reports(request: Request,
+                              status: Literal['pending', 'dismissed', 'removed'] = 'pending',
+                              limit: int = Query(30, ge=1, le=100), offset: int = Query(0, ge=0),
+                              _auth=Depends(require_service_token)):
+    await _moderation_operator(request)
+    async with _require_pool().acquire() as conn:
+        rows = await conn.fetch('''SELECT r.*, sp.title, sp.description, sp.created_at AS post_created_at,
+            sp.is_visible, p.full_name AS author_name, p.community_nickname AS author_nickname
+            FROM social_reports r JOIN social_posts sp ON sp.id=r.post_id
+            JOIN profiles p ON p.id=r.author_id
+            WHERE r.status=$1 ORDER BY r.created_at DESC,r.id DESC LIMIT $2 OFFSET $3''',
+            status, limit + 1, offset)
+    return {'success': True, 'data': [dict(r) for r in rows[:limit]],
+            'has_more': len(rows) > limit, 'limit': limit, 'offset': offset}
+
+
+class SocialReportAction(BaseModel):
+    action: Literal['dismiss', 'remove_post']
+
+
+@router.post('/api/admin/social-reports/{report_id}/action')
+async def act_on_social_report(report_id: uuid.UUID, body: SocialReportAction, request: Request,
+                               _auth=Depends(require_service_token)):
+    email = await _moderation_operator(request)
+    result_status = 'removed' if body.action == 'remove_post' else 'dismissed'
+    async with _require_pool().acquire() as conn:
+        async with conn.transaction():
+            post_id = await conn.fetchval('SELECT post_id FROM social_reports WHERE id=$1', report_id)
+            if post_id is None:
+                raise HTTPException(404, 'Denúncia não encontrada.')
+            # Mesmo lock primeiro para todas as denúncias do post: decisões concorrentes
+            # não se sobrescrevem e a remoção resolve a fila inteira em uma transação.
+            await conn.fetchval('SELECT id FROM social_posts WHERE id=$1 FOR UPDATE', post_id)
+            report = await conn.fetchrow('SELECT author_id,status FROM social_reports WHERE id=$1 FOR UPDATE', report_id)
+            if not report:
+                raise HTTPException(404, 'Denúncia não encontrada.')
+            if report['status'] != 'pending':
+                if report['status'] == result_status:
+                    return {'success': True, 'status': result_status}
+                raise HTTPException(409, 'Denúncia já revisada. Atualize a lista.')
+            if body.action == 'remove_post':
+                await conn.execute('UPDATE social_posts SET is_visible=FALSE WHERE id=$1', post_id)
+                await conn.execute("""UPDATE social_reports SET status='removed',reviewed_at=NOW(),reviewed_by=$2
+                    WHERE post_id=$1 AND status='pending'""", post_id, email)
+            else:
+                await conn.execute("""UPDATE social_reports SET status='dismissed',reviewed_at=NOW(),reviewed_by=$2
+                    WHERE id=$1""", report_id, email)
+            await _moderation_audit(conn, email, request, 'social-' + body.action,
+                                    f'Denúncia {report_id}; publicação {post_id}', uid=report['author_id'])
+    return {'success': True, 'status': result_status}
 
 
 @router.get('/api/admin/security-activity')
