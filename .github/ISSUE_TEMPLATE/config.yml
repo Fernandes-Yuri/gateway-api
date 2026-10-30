@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: 🔒 Reporte de Segurança & LGPD
+    url: mailto:contato@bragasaude.online
+    about: Canal oficial principal para reportar vulnerabilidades e privacidade confidencialmente por e-mail.
+  - name: Canal de contingência por e-mail
     url: mailto:contatobragasaude@gmail.com
-    about: Vulnerabilidades e privacidade devem ser reportadas confidencialmente por e-mail.
+    about: Canal secundário em caso de falha de entrega ou indisponibilidade do domínio oficial.
