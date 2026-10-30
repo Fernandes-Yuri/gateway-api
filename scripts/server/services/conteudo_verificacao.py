@@ -1,4 +1,4 @@
-"""Verificação de integridade do conteúdo público das clínicas.
+"""Verificação de integridade do conteúdo público institucional.
 
 Coleta apenas recursos públicos (somente GET), grava snapshots hash no banco
 e compara com o hash de referência configurado por variável de ambiente.
@@ -16,9 +16,9 @@ INTERVALO_PADRAO = 900
 RETENCAO_PADRAO_DIAS = 90
 
 URLS_PADRAO = (
-    'https://clinicas.bragasaude.online/',
-    'https://clinicas.bragasaude.online/data/hospitais.json',
-    'https://clinicas.bragasaude.online/assets/faq.js',
+    'https://bragasaude.online/',
+    'https://bragasaude.online/privacidade.html',
+    'https://bragasaude.online/termos.html',
 )
 
 # Pedaços que variam por borda/CDN ou por render, sem mudar o conteúdo real.

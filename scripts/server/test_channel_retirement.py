@@ -16,9 +16,12 @@ class ChannelRetirementTests(unittest.TestCase):
                              ('POST', '/api/whatsapp/send'),
                              ('GET', '/api/whatsapp/webhook'),
                              ('POST', '/api/whatsapp/webhook'),
-                             ('GET', '/api/whatsapp/events')]:
+                             ('GET', '/api/whatsapp/events'),
+                             ('GET', '/api/editorial/articles'),
+                             ('GET', '/api/editorial/sitemap.xml'),
+                             ('POST', '/api/editorial/articles')]:
             with self.subTest(method=method, path=path):
-                self.assertEqual(client.request(method, path).status_code, 404)
+                self.assertEqual(client.request(method, path).status_code, 410)
         paths = server.app.openapi()['paths']
         self.assertIn('/api/profile/{user_id}', paths)
         self.assertIn('/api/auth/otp/send', paths)
