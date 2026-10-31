@@ -16,23 +16,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import bcrypt
 
-# Forca o pepper de teste ANTES de usar auth_crypto (o modulo le
-# AUTH_PEPPER_SECRET via os.environ.get no modulo; aqui sobrescrevemos o
-# atributo de modulo PEPPER para nao depender de env real).
-os.environ["AUTH_PEPPER_SECRET"] = (
+TEST_PEPPER = (
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 )
+os.environ["AUTH_PEPPER_SECRET"] = TEST_PEPPER
 
-import auth_crypto  # noqa: E402  (precisa do env setado acima)
+import auth_crypto  # noqa: E402
 from auth_crypto import (  # noqa: E402
     hash_password,
     verify_password,
     verify_missing_user,
-    PEPPER,
 )
 
-# Garante pepper deterministico nos testes (defensivo contra env externo).
-auth_crypto.PEPPER = PEPPER
+# Garante pepper deterministico nos testes mesmo se auth_crypto foi importado antes.
+auth_crypto.PEPPER = TEST_PEPPER.encode("utf-8")
 
 # ---- Helpers ---------------------------------------------------------------
 
@@ -120,7 +117,7 @@ class LazyMigrationEndToEndTest(unittest.TestCase):
         self._env_patcher = patch.dict(
             os.environ,
             {"SERVICE_TOKEN": "svc_test_token_super_secreto_D51",
-             "AUTH_PEPPER_SECRET": os.environ["AUTH_PEPPER_SECRET"]},
+             "AUTH_PEPPER_SECRET": TEST_PEPPER},
         )
         self._env_patcher.start()
         self.client = __import__("fastapi.testclient", fromlist=["TestClient"]).TestClient(server.app)

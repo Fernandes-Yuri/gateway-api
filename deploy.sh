@@ -76,6 +76,15 @@ if [ -f "migrate.py" ]; then
     python3 scripts/purge_legacy_exam_files.py
 fi
 
+# SPEC-10: garante que AUTH_PEPPER_SECRET exista no .env da EC2 para Argon2id + Pepper
+for ENV_FILE in "$APP_DIR/.env" "$APP_DIR/app/.env"; do
+    if [ -f "$ENV_FILE" ] && ! grep -q "^AUTH_PEPPER_SECRET=" "$ENV_FILE"; then
+        PEPPER_HEX="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+        printf '\nAUTH_PEPPER_SECRET=%s\n' "$PEPPER_HEX" >> "$ENV_FILE"
+        echo "SPEC-10: AUTH_PEPPER_SECRET provisionado em $ENV_FILE"
+    fi
+done
+
 # Não persistir dumps com memória de atendimentos. A política global também
 # desabilita processamento pelo systemd-coredump quando o core_pattern usa pipe.
 sudo install -d -m 0755 /etc/systemd/system/braga-gateway.service.d /etc/systemd/coredump.conf.d

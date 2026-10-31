@@ -42,9 +42,18 @@ hasher = PasswordHasher(
     type=Type.ID,           # Argon2id (padrao do PasswordHasher)
 )
 
-# Pepper secreto injetado via variavel de ambiente. String vazia se nao
-# configurado — todas as funcoes falham fechado (RuntimeError) quando ausente.
-PEPPER = os.environ.get("AUTH_PEPPER_SECRET", "").encode("utf-8")
+# Pepper secreto injetado via variavel de ambiente. Lido dinamicamente em
+# runtime via _get_pepper() para respeitar os.environ / patch.dict em testes
+# e recarregamentos, mantendo o atributo PEPPER para compatibilidade.
+PEPPER = os.environ.get("AUTH_PEPPER_SECRET", "").strip().encode("utf-8")
+
+
+def _get_pepper() -> bytes:
+    """Obtém o Pepper secreto atual do ambiente (ou override de módulo)."""
+    env_val = os.environ.get("AUTH_PEPPER_SECRET", "").strip().encode("utf-8")
+    if env_val:
+        return env_val
+    return PEPPER
 
 # ---------------------------------------------------------------------------
 # Hash dummy Argon2id (nao corresponde a nenhuma conta real)
@@ -62,12 +71,13 @@ def _pepper_password(password: str) -> bytes:
     Evita problemas de concatencao direta (estouro de 72 bytes do Bcrypt e
     ataques de extensao de comprimento). O pepper nunca cruza para o banco.
     """
-    if not PEPPER:
+    pepper = _get_pepper()
+    if not pepper:
         raise RuntimeError(
             "AUTH_PEPPER_SECRET nao configurada no ambiente. "
             "Defina a variavel antes de usar auth_crypto."
         )
-    return hmac.new(PEPPER, password.encode("utf-8"), hashlib.sha256).digest()
+    return hmac.new(pepper, password.encode("utf-8"), hashlib.sha256).digest()
 
 
 def hash_password(password: str) -> str:
@@ -137,7 +147,7 @@ def verify_missing_user(password: str) -> None:
     sucesso, mitigando enumeracao de e-mails por timing side-channel.
     Sempre retorna sem efeito (senha invalida por definicao).
     """
-    if not PEPPER:
+    if not _get_pepper():
         # Sem pepper nao ha caminho seguro: falha fechado silenciosamente.
         return
     dummy_peppered = _pepper_password(password)

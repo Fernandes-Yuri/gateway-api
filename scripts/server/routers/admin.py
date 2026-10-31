@@ -13,6 +13,7 @@ Metricas (Frente 2): aggregate-only. Nenhuma linha de usuario cruza;
 bucket com menos de MIN_BUCKET usuários e suprimido/fundido DENTRO do
 SQL do gateway — o portal so recebe numeros que nao isolam ninguem.
 """
+import asyncio
 import ipaddress
 import base64
 import hashlib
@@ -680,11 +681,13 @@ async def admin_login(
     if row is None:
         # Mitigacao de timing side-channel: gasta o mesmo tempo de Argon2id
         # de um login real para nao vazar existencia do e-mail.
-        verify_missing_user(req.password)
+        await asyncio.to_thread(verify_missing_user, req.password)
         raise HTTPException(401, "Credenciais inválidas.")
 
     stored_hash = row["password_hash"] or ""
-    password_ok, needs_rehash = verify_password(req.password, stored_hash)
+    password_ok, needs_rehash = await asyncio.to_thread(
+        verify_password, req.password, stored_hash
+    )
 
     if not password_ok:
         raise HTTPException(401, "Credenciais inválidas.")
@@ -693,7 +696,7 @@ async def admin_login(
     # para Argon2id + Pepper de forma transparente no primeiro login bem
     # sucedido, sem exigir redefinicao de senha do usuario.
     if needs_rehash:
-        new_hash = hash_password(req.password)
+        new_hash = await asyncio.to_thread(hash_password, req.password)
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE admin_users SET password_hash = $1 WHERE id = $2",
@@ -760,7 +763,7 @@ async def admin_register(
 
         # 4. Hash Argon2id + Pepper (SPEC-10). Novas contas nascem direto
         #    no padrao moderno, sem depender de lazy migration.
-        password_hash = hash_password(password)
+        password_hash = await asyncio.to_thread(hash_password, password)
         user_id = f"usr_{__import__('uuid').uuid4()}"
         await conn.execute(
             """INSERT INTO admin_users (id, email, password_hash, name, role, created_at, last_login_at)
@@ -894,11 +897,13 @@ async def admin_login_step2(
 
     if row is None:
         # Mitigacao de timing side-channel (mesmo do login simples).
-        verify_missing_user(password)
+        await asyncio.to_thread(verify_missing_user, password)
         raise HTTPException(401, "Credenciais inválidas.")
 
     stored_hash = row["password_hash"] or ""
-    password_ok, needs_rehash = verify_password(password, stored_hash)
+    password_ok, needs_rehash = await asyncio.to_thread(
+        verify_password, password, stored_hash
+    )
 
     if not password_ok:
         raise HTTPException(401, "Credenciais inválidas.")
@@ -906,7 +911,7 @@ async def admin_login_step2(
     # Lazy re-hashing (SPEC-10 §5): hash Bcrypt legado valido convertido
     # para Argon2id + Pepper no primeiro login bem sucedido.
     if needs_rehash:
-        new_hash = hash_password(password)
+        new_hash = await asyncio.to_thread(hash_password, password)
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE admin_users SET password_hash = $1 WHERE id = $2",
@@ -1108,7 +1113,7 @@ async def admin_password_reset(req: PasswordResetRequest, _auth=Depends(require_
     if len(req.password.encode("utf-8")) > 72:
         raise HTTPException(400, "A senha excede 72 bytes.")
     # Hash Argon2id + Pepper (SPEC-10) — redefinicao gera hash moderno.
-    hashed = hash_password(req.password)
+    hashed = await asyncio.to_thread(hash_password, req.password)
     async with pool.acquire() as conn:
         async with conn.transaction():
             await consume_master(conn, step, fingerprint)

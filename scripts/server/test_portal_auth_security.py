@@ -15,7 +15,10 @@ import portal_auth_security
 
 class PortalAuthTest(unittest.TestCase):
     def setUp(self):
-        self.env = patch.dict('os.environ', {'SERVICE_TOKEN': 'test-service-secret'})
+        self.env = patch.dict('os.environ', {
+            'SERVICE_TOKEN': 'test-service-secret',
+            'AUTH_PEPPER_SECRET': '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        })
         self.env.start()
         self.conn = AsyncMock()
         self.conn.transaction = MagicMock()
@@ -111,8 +114,9 @@ class PortalAuthTest(unittest.TestCase):
         self.assertIn('session_version = session_version + 1', sql)
         self.assertNotIn('totp_enabled', sql)
         self.assertEqual(email, 'a@example.test')
-        import bcrypt
-        self.assertTrue(bcrypt.checkpw(b'senha-segura', hashed.encode()))
+        import auth_crypto
+        self.assertTrue(hashed.startswith('$argon2id$'))
+        self.assertEqual(auth_crypto.verify_password('senha-segura', hashed), (True, False))
         self.assertNotIn('senha-segura', result.text)
         self.conn.transaction.assert_called_once()
 
