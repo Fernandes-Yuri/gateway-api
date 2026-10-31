@@ -1,5 +1,8 @@
-"""Authenticated family invitations. The row lock makes acceptance atomic."""
+"""Authenticated family invitations and Blind Relay E2EE messages (SPEC-13)."""
 import asyncio
+import base64
+import binascii
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -14,11 +17,24 @@ JOKER_CONNECTION_CODE = "TESTFAM1"
 JOKER_PATIENT_UID = "patient-demo-testfam"
 JOKER_PATIENT_NAME = "Carlos Braga (Paciente Teste)"
 
+E2EE_CURRENT_VERSION = 1
+E2EE_GCM_IV_BYTES = 12
+E2EE_GCM_TAG_BYTES = 16
+E2EE_MAX_CIPHERTEXT_BYTES = 8192
+E2EE_PUSH_BODY = "Nova mensagem protegida por criptografia ponta a ponta."
+
 
 class AcceptInvitation(BaseModel):
     code: str
     caregiverName: str
     caregiverRelation: str
+    caregiverPublicKey: Optional[str] = None
+
+
+class PublishFamilyPublicKey(BaseModel):
+    bindingId: Optional[str] = None
+    patientId: Optional[str] = None
+    publicKey: str
 
 
 class DeleteFamilyMessage(BaseModel):
@@ -45,17 +61,88 @@ class RejectConsultation(BaseModel):
     consultationId: str
 
 
+def validate_e2ee_public_key(raw_key: Optional[str]) -> Optional[str]:
+    """Valida a chave publica ECDH (SubjectPublicKeyInfo Base64) sem chaves privadas no servidor."""
+    if raw_key is None:
+        return None
+    cleaned = raw_key.strip()
+    if not cleaned:
+        return None
+    try:
+        decoded = base64.b64decode(cleaned, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(422, 'Chave pública E2EE inválida.')
+    if not (32 <= len(decoded) <= 512):
+        raise HTTPException(422, 'Tamanho de chave pública E2EE inválido.')
+    return base64.b64encode(decoded).decode('ascii')
+
+
+def parse_e2ee_envelope(raw_blob: Optional[str], strict: bool = False) -> Optional[str]:
+    """SPEC-13 §2.2: valida o envelope E2EE AES-256-GCM sem decifrar o conteúdo (Blind Relay)."""
+    if raw_blob is None:
+        if strict:
+            raise HTTPException(422, 'Payload E2EE ausente.')
+        return None
+    cleaned = raw_blob.strip()
+    if not cleaned:
+        if strict:
+            raise HTTPException(422, 'Payload E2EE vazio.')
+        return None
+    if not (cleaned.startswith('{') and cleaned.endswith('}')):
+        if strict:
+            raise HTTPException(422, 'Payload E2EE malformado.')
+        return None
+    try:
+        envelope = json.loads(cleaned)
+    except (ValueError, TypeError):
+        if strict:
+            raise HTTPException(422, 'JSON de payload E2EE inválido.')
+        return None
+    if not isinstance(envelope, dict):
+        if strict:
+            raise HTTPException(422, 'Envelope E2EE deve ser um objeto JSON.')
+        return None
+    if not strict and not {'v', 'iv', 'ciphertext'}.issubset(envelope.keys()):
+        return None
+    version = envelope.get('v')
+    if type(version) is not int or version != E2EE_CURRENT_VERSION:
+        raise HTTPException(422, 'Versão de protocolo E2EE inválida ou não suportada.')
+    iv_b64 = envelope.get('iv')
+    ct_b64 = envelope.get('ciphertext')
+    if not isinstance(iv_b64, str) or not isinstance(ct_b64, str):
+        raise HTTPException(422, 'Campos iv e ciphertext devem ser Base64.')
+    try:
+        iv_bytes = base64.b64decode(iv_b64.strip(), validate=True)
+        ct_bytes = base64.b64decode(ct_b64.strip(), validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(422, 'Codificação Base64 inválida no payload E2EE.')
+    if len(iv_bytes) != E2EE_GCM_IV_BYTES:
+        raise HTTPException(422, 'IV do AES-256-GCM deve possuir exatamente 12 bytes.')
+    if len(ct_bytes) <= E2EE_GCM_TAG_BYTES or len(ct_bytes) > E2EE_MAX_CIPHERTEXT_BYTES:
+        raise HTTPException(422, 'Ciphertext AES-256-GCM inválido ou sem tag de autenticação de 128 bits.')
+    return json.dumps(
+        {
+            'v': E2EE_CURRENT_VERSION,
+            'iv': base64.b64encode(iv_bytes).decode('ascii'),
+            'ciphertext': base64.b64encode(ct_bytes).decode('ascii'),
+        },
+        separators=(',', ':'),
+    )
+
+
 def serialize_binding(row):
     result = dict(row)
     result['id'] = str(result['id'])
     for key in ('created_at', 'expires_at'):
         if result.get(key):
             result[key] = result[key].isoformat()
+    result.setdefault('patient_public_key', None)
+    result.setdefault('caregiver_public_key', None)
     return result
 
 
 def serialize_message(row):
-    """D47: inclui expires_at/deleted_at para o app aplicar TTL e tombstones."""
+    """D47 + SPEC-13: inclui expires_at/deleted_at e o blob cifrado para o Blind Relay."""
     result = dict(row)
     result['id'] = str(result['id'])
     for key in ('sent_at', 'expires_at', 'deleted_at'):
@@ -63,8 +150,21 @@ def serialize_message(row):
             result[key] = result[key].isoformat()
     if result.get('deleted_at'):
         result['message_text'] = ''
+        result['body_encrypted'] = None
+        result['encryption_version'] = result.get('encryption_version', 0)
         result['sender_name'] = ''
         result['icon_type'] = 'LOVE'
+    else:
+        body_enc = result.get('body_encrypted')
+        enc_ver = result.get('encryption_version')
+        if body_enc:
+            result['body_encrypted'] = body_enc
+            result['encryption_version'] = enc_ver if enc_ver else E2EE_CURRENT_VERSION
+            if not result.get('message_text'):
+                result['message_text'] = body_enc
+        else:
+            result['body_encrypted'] = None
+            result['encryption_version'] = enc_ver if enc_ver is not None else 0
     return result
 
 
@@ -125,6 +225,7 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
         client_ip = get_client_ip(request)
         if rate_limiter:
             await rate_limiter.check("family_binding_ip", client_ip, limit=10, window_seconds=60, ip=client_ip, pool=pool())
+        patient_pub_key = validate_e2ee_public_key(getattr(b, 'patientPublicKey', None))
         async with pool().acquire() as conn, conn.transaction():
             if b.status == 'REVOKED':
                 row = await conn.fetchrow('SELECT * FROM family_bindings WHERE id=$1 FOR UPDATE', _parse_uuid(b.id))
@@ -151,14 +252,16 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             caregiver_relation = sanitize_zero_trust_text(b.caregiverRelation, max_length=50, field_name="caregiverRelation", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
             row = await conn.fetchrow('''INSERT INTO family_bindings
                 (id, patient_id, caregiver_name, caregiver_relation, connection_code, status, created_at, expires_at,
-                 caregiver_role, permissions)
-                VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7,$8,$9)
+                 caregiver_role, permissions, patient_public_key)
+                VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7,$8,$9,$10)
                 ON CONFLICT DO NOTHING RETURNING *''', binding_id, uid, caregiver_name,
-                caregiver_relation, code, now, now + timedelta(days=7), b.caregiverRole, b.permissions)
+                caregiver_relation, code, now, now + timedelta(days=7), b.caregiverRole, b.permissions, patient_pub_key)
             if row is None:
                 row = await conn.fetchrow('SELECT * FROM family_bindings WHERE id=$1', binding_id)
                 if not row or row['patient_id'] != uid or row['connection_code'] != code or row['status'] != 'PENDING':
                     raise HTTPException(409, 'Convite indisponível. Gere um novo código.')
+                if patient_pub_key and not row.get('patient_public_key'):
+                    await conn.execute('UPDATE family_bindings SET patient_public_key=$2 WHERE id=$1', binding_id, patient_pub_key)
             return {'status': 'success', 'id': str(row['id'])}
 
     @app.get('/api/family/find-by-code/{code}')
@@ -176,6 +279,8 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                 "caregiver_relation": "",
                 "caregiver_role": "CAREGIVER_VIEWER",
                 "permissions": ["ALL"],
+                "patient_public_key": None,
+                "caregiver_public_key": None,
                 "created_at": now.isoformat(),
                 "expires_at": (now + timedelta(days=3650)).isoformat()
             }
@@ -199,7 +304,8 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
         caregiver_relation = sanitize_zero_trust_text(p.caregiverRelation, max_length=50, field_name="caregiverRelation", ip=client_ip, rate_limiter=rate_limiter, pool=get_pool())
         if not caregiver_name.strip() or not caregiver_relation.strip():
             raise HTTPException(422, 'Informe nome e relação com o familiar.')
-        
+        caregiver_pub_key = validate_e2ee_public_key(p.caregiverPublicKey)
+
         clean_code = p.code.strip().upper()
         if clean_code == JOKER_CONNECTION_CODE:
             if uid == JOKER_PATIENT_UID:
@@ -211,10 +317,10 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                     VALUES ($1, $2, true, 'PATIENT', now(), now())
                     ON CONFLICT (id) DO UPDATE SET self_care_complete=true
                 ''', JOKER_PATIENT_UID, JOKER_PATIENT_NAME)
-                
+
                 # Garante stub do perfil do cuidador
                 await conn.execute('INSERT INTO profiles(id, full_name) VALUES($1,$2) ON CONFLICT DO NOTHING', uid, caregiver_name)
-                
+
                 # Idempotência: se já tiver vínculo ativo para esse cuidador com o paciente coringa, retorna
                 existing = await conn.fetchrow('''
                     SELECT b.*, p.full_name AS patient_name
@@ -224,18 +330,19 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                 ''', JOKER_PATIENT_UID, uid)
                 if existing:
                     return serialize_binding(existing)
-                
+
                 now = datetime.now(timezone.utc)
                 binding_id = uuid.uuid4()
                 created = await conn.fetchrow('''
                     INSERT INTO family_bindings (
                         id, patient_id, caregiver_id, caregiver_name, caregiver_relation,
-                        connection_code, status, created_at, expires_at, caregiver_role, permissions
+                        connection_code, status, created_at, expires_at, caregiver_role, permissions,
+                        caregiver_public_key
                     ) VALUES (
-                        $1, $2, $3, $4, $5, $6, 'ACTIVE', $7, $8, 'CAREGIVER_VIEWER', '["ALL"]'::jsonb
+                        $1, $2, $3, $4, $5, $6, 'ACTIVE', $7, $8, 'CAREGIVER_VIEWER', '["ALL"]'::jsonb, $9
                     ) RETURNING *
-                ''', binding_id, JOKER_PATIENT_UID, uid, caregiver_name, caregiver_relation, JOKER_CONNECTION_CODE, now, now + timedelta(days=3650))
-                
+                ''', binding_id, JOKER_PATIENT_UID, uid, caregiver_name, caregiver_relation, JOKER_CONNECTION_CODE, now, now + timedelta(days=3650), caregiver_pub_key)
+
                 res = dict(created)
                 res['patient_name'] = JOKER_PATIENT_NAME
                 return serialize_binding(res)
@@ -252,8 +359,10 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             # completing enrollment remains a separate profile operation.
             await conn.execute('INSERT INTO profiles(id, full_name) VALUES($1,$2) ON CONFLICT DO NOTHING', uid, caregiver_name)
             updated = await conn.fetchrow("""UPDATE family_bindings SET caregiver_id=$2,
-                caregiver_name=$3, caregiver_relation=$4, status='ACTIVE' WHERE id=$1 RETURNING *""",
-                row['id'], uid, caregiver_name, caregiver_relation)
+                caregiver_name=$3, caregiver_relation=$4,
+                caregiver_public_key=COALESCE($5, caregiver_public_key),
+                status='ACTIVE' WHERE id=$1 RETURNING *""",
+                row['id'], uid, caregiver_name, caregiver_relation, caregiver_pub_key)
         # doc 10 §4.3: o paciente precisa saber que alguém aceitou o convite.
         # Best-effort, fora da transação: falha de push não desfaz o vínculo.
         if dispatch_push and load_devices and updated is not None:
@@ -281,6 +390,40 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                     print(f'[FamilyBinding] Falha no push de aceite para {patient_uid}: {push_err}')
         return serialize_binding(updated)
 
+    @app.post('/api/family/e2ee/public-key')
+    async def publish_public_key(p: PublishFamilyPublicKey, uid: str = Depends(firebase_uid)):
+        """SPEC-13 §2.1: publica ou atualiza a chave pública ECDH do participante no vínculo familiar."""
+        pub_key = validate_e2ee_public_key(p.publicKey)
+        if not pub_key:
+            raise HTTPException(422, 'Chave pública E2EE obrigatória.')
+        async with pool().acquire() as conn, conn.transaction():
+            if p.bindingId:
+                binding_uuid = _parse_uuid(p.bindingId)
+                row = await conn.fetchrow('SELECT * FROM family_bindings WHERE id=$1 FOR UPDATE', binding_uuid)
+                if not row or uid not in (row['patient_id'], row.get('caregiver_id')):
+                    raise HTTPException(403, 'Vínculo indisponível.')
+                if uid == row['patient_id']:
+                    updated = await conn.fetchrow(
+                        'UPDATE family_bindings SET patient_public_key=$2 WHERE id=$1 RETURNING *',
+                        binding_uuid, pub_key)
+                else:
+                    updated = await conn.fetchrow(
+                        'UPDATE family_bindings SET caregiver_public_key=$2 WHERE id=$1 RETURNING *',
+                        binding_uuid, pub_key)
+                return serialize_binding(updated)
+            if not p.patientId:
+                raise HTTPException(422, 'Informe bindingId ou patientId.')
+            await require_family_access(conn, uid, p.patientId)
+            if uid == p.patientId:
+                await conn.execute(
+                    "UPDATE family_bindings SET patient_public_key=$2 WHERE patient_id=$1 AND status IN ('PENDING','ACTIVE')",
+                    p.patientId, pub_key)
+            else:
+                await conn.execute(
+                    "UPDATE family_bindings SET caregiver_public_key=$3 WHERE patient_id=$1 AND caregiver_id=$2 AND status='ACTIVE'",
+                    p.patientId, uid, pub_key)
+            return {'status': 'success', 'patientId': p.patientId, 'publicKey': pub_key}
+
     @app.get('/api/family/bindings/{user_id}')
     async def bindings(user_id: str, uid: str = Depends(firebase_uid)):
         require_owner(uid, user_id)
@@ -291,8 +434,7 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                 WHERE b.patient_id=$1 OR b.caregiver_id=$1''', uid)
             return [serialize_binding(row) for row in rows]
 
-    @app.post('/api/sync/family-message')
-    async def message(m: message_model, request: Request, uid: str = Depends(firebase_uid)):
+    async def _handle_send_family_message(m: message_model, request: Request, uid: str):
         require_owner(uid, m.senderId)
         client_ip = get_client_ip(request)
         if rate_limiter:
@@ -303,17 +445,44 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             raise HTTPException(422, 'Mensagem inválida.')
         sent, expires = message_lifetime(m.sentAt)
 
-        # Zero-Trust sanitization e protecao contra prompt injection
-        clean_text = sanitize_zero_trust_text(m.messageText, max_length=500, field_name="messageText", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
+        raw_body_encrypted = getattr(m, 'bodyEncrypted', None)
+        raw_enc_version = getattr(m, 'encryptionVersion', None)
+        if raw_enc_version not in (None, 0, E2EE_CURRENT_VERSION):
+            raise HTTPException(422, 'Versão de criptografia E2EE não suportada.')
+
+        if raw_body_encrypted is not None or raw_enc_version == E2EE_CURRENT_VERSION:
+            candidate = raw_body_encrypted if raw_body_encrypted is not None else m.messageText
+            encrypted_blob = parse_e2ee_envelope(candidate, strict=True)
+            encryption_version = E2EE_CURRENT_VERSION
+            db_message_text = ''
+        else:
+            auto_envelope = parse_e2ee_envelope(m.messageText, strict=False)
+            if auto_envelope is not None:
+                encrypted_blob = auto_envelope
+                encryption_version = E2EE_CURRENT_VERSION
+                db_message_text = ''
+            else:
+                clean_text = sanitize_zero_trust_text(
+                    m.messageText or '',
+                    max_length=500,
+                    field_name="messageText",
+                    ip=client_ip,
+                    rate_limiter=rate_limiter,
+                    pool=pool(),
+                )
+                encrypted_blob = None
+                encryption_version = 0
+                db_message_text = clean_text
+
         clean_sender = sanitize_zero_trust_text(m.senderName, max_length=100, field_name="senderName", ip=client_ip, rate_limiter=rate_limiter, pool=pool())
 
         async with pool().acquire() as conn:
             await require_family_access(conn, uid, m.patientId)
-            # D47: TTL de 24h por mensagem — nenhuma conversa é armazenada além disso
+            # D47 + SPEC-13: TTL de 24h por mensagem e persistencia Blind Relay em body_encrypted
             row = await conn.fetchrow('''INSERT INTO family_messages
-                (id, patient_id, sender_id, sender_name, message_text, icon_type, is_read, sent_at, expires_at)
-                VALUES($1,$2,$3,$4,$5,$6,false,$7,$8) ON CONFLICT DO NOTHING RETURNING id''',
-                message_id, m.patientId, uid, clean_sender, clean_text, m.iconType, sent, expires)
+                (id, patient_id, sender_id, sender_name, message_text, body_encrypted, encryption_version, icon_type, is_read, sent_at, expires_at)
+                VALUES($1,$2,$3,$4,$5,$6,$7,$8,false,$9,$10) ON CONFLICT DO NOTHING RETURNING id''',
+                message_id, m.patientId, uid, clean_sender, db_message_text, encrypted_blob, encryption_version, m.iconType, sent, expires)
             if row is None and not await conn.fetchval('SELECT EXISTS(SELECT 1 FROM family_messages WHERE id=$1 AND sender_id=$2 AND patient_id=$3)', message_id, uid, m.patientId):
                 raise HTTPException(409, 'Mensagem indisponível.')
 
@@ -330,6 +499,8 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                 members = [m.patientId] + [r['caregiver_id'] for r in care_rows]
                 notify_recipients = sorted({member for member in members if member and member != uid})
 
+        push_body = E2EE_PUSH_BODY if encryption_version == E2EE_CURRENT_VERSION else db_message_text[:200]
+
         # Push fora da transação: falha de FCM nunca pode quebrar o envio da mensagem.
         if row is not None and dispatch_push and load_devices and notify_recipients:
             devices = await load_devices_by_user(get_pool(), load_devices)
@@ -343,21 +514,29 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                             dispatch_push,
                             token=token,
                             title=f'Mensagem de {clean_sender}',
-                            body=clean_text[:200],
+                            body=push_body,
                             data={
                                 'type': 'FAMILY_MESSAGE',
                                 'messageId': str(message_id),
                                 'senderId': uid,
                                 'patientId': m.patientId,
+                                'encryptionVersion': str(encryption_version),
                             },
                         )
                     except Exception as push_err:
                         print(f'[FamilyMessage] Falha no push para {recipient_uid}: {push_err}')
 
-        return {'status': 'success', 'id': str(message_id)}
+        return {'status': 'success', 'id': str(message_id), 'encryptionVersion': encryption_version}
 
-    @app.get('/api/family/messages/{patient_id}')
-    async def messages(patient_id: str, limit: int = 50, offset: int = 0, uid: str = Depends(firebase_uid)):
+    @app.post('/api/sync/family-message')
+    async def message(m: message_model, request: Request, uid: str = Depends(firebase_uid)):
+        return await _handle_send_family_message(m, request, uid)
+
+    @app.post('/api/family/messages/send')
+    async def send_family_message(m: message_model, request: Request, uid: str = Depends(firebase_uid)):
+        return await _handle_send_family_message(m, request, uid)
+
+    async def _handle_get_family_messages(patient_id: str, limit: int, offset: int, uid: str):
         async with pool().acquire() as conn:
             await require_family_access(conn, uid, patient_id)
             # D47: defesa em profundidade — a API nunca devolve mensagem expirada,
@@ -367,6 +546,14 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                 WHERE patient_id=$1 AND expires_at > now()
                 ORDER BY sent_at DESC, id DESC LIMIT $2 OFFSET $3''', patient_id, max(1, min(limit, 200)), max(0, offset))
             return [serialize_message(row) for row in rows]
+
+    @app.get('/api/family/messages/{patient_id}')
+    async def messages(patient_id: str, limit: int = 50, offset: int = 0, uid: str = Depends(firebase_uid)):
+        return await _handle_get_family_messages(patient_id, limit, offset, uid)
+
+    @app.get('/api/family/messages')
+    async def messages_query(patient_id: str, limit: int = 50, offset: int = 0, uid: str = Depends(firebase_uid)):
+        return await _handle_get_family_messages(patient_id, limit, offset, uid)
 
     @app.post('/api/family/message/delete')
     async def delete_message(p: DeleteFamilyMessage, uid: str = Depends(firebase_uid)):
@@ -393,13 +580,13 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
                     raise
                 # Reserve the ID before an ambiguous/in-flight upload can recreate content.
                 await conn.execute("""INSERT INTO family_messages
-                    (id,patient_id,sender_id,sender_name,message_text,icon_type,is_read,sent_at,expires_at,deleted_at)
-                    VALUES($1,$2,$3,'','','LOVE',false,$4,$5,now()) ON CONFLICT DO NOTHING""",
+                    (id,patient_id,sender_id,sender_name,message_text,body_encrypted,encryption_version,icon_type,is_read,sent_at,expires_at,deleted_at)
+                    VALUES($1,$2,$3,'','',NULL,0,'LOVE',false,$4,$5,now()) ON CONFLICT DO NOTHING""",
                     message_id, p.patientId, uid, sent, expires)
                 row = await conn.fetchrow('SELECT id, patient_id, sender_id FROM family_messages WHERE id=$1 FOR UPDATE', message_id)
             if row['sender_id'] != uid:
                 raise HTTPException(403, 'Só quem enviou pode apagar a mensagem.')
-            await conn.execute("UPDATE family_messages SET deleted_at=COALESCE(deleted_at,now()), message_text='', sender_name='', icon_type='LOVE' WHERE id=$1", message_id)
+            await conn.execute("UPDATE family_messages SET deleted_at=COALESCE(deleted_at,now()), message_text='', body_encrypted=NULL, sender_name='', icon_type='LOVE' WHERE id=$1", message_id)
         return {'status': 'success', 'id': str(message_id)}
 
     # --- CONSULTAS MÉDICAS ---

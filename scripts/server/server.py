@@ -254,6 +254,8 @@ class FamilyBindingSyncDto(BaseModel):
     status: Optional[str] = "PENDING"
     caregiverRole: str = "CAREGIVER_VIEWER"
     permissions: List[str] = Field(default_factory=list)
+    patientPublicKey: Optional[str] = None
+    caregiverPublicKey: Optional[str] = None
     createdAt: str
     expiresAt: str
 
@@ -262,7 +264,9 @@ class FamilyMessageSyncDto(BaseModel):
     patientId: str
     senderId: str
     senderName: str
-    messageText: str
+    messageText: Optional[str] = ""
+    bodyEncrypted: Optional[str] = None
+    encryptionVersion: Optional[int] = None
     iconType: Optional[str] = "LOVE"
     isRead: Optional[bool] = False
     sentAt: str
