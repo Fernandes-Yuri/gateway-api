@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from api_identity import firebase_uid
+from column_crypto import decrypt_field, encrypt_field
 from schemas.clinical import SymptomCheckInCreate
 from schemas.emergency import EmergencyTokenGrant
 from schemas.medical_access import MedicalAccessGenerateRequest, MedicalAccessGrant
@@ -676,13 +677,14 @@ async def daily_bulletin(patient_id: str, day: date | None = None, uid: str = De
 @router.post("/api/symptoms/check-in", status_code=201)
 async def symptom_check_in(payload: SymptomCheckInCreate, uid: str = Depends(firebase_uid)):
     patient_id = payload.patient_id or uid
+    encrypted_symptoms = encrypt_field(payload.symptoms_text.strip())
     async with _pool().acquire() as conn:
         await require_patient_permission(conn, uid, patient_id, "medication:take")
         row = await conn.fetchrow(
             """INSERT INTO symptoms_diary
                (patient_id,reported_by,reported_at,symptoms_text,sleep_quality,disposition,input_method)
                VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id""",
-            patient_id, uid, payload.reported_at, payload.symptoms_text.strip(), payload.sleep_quality,
+            patient_id, uid, payload.reported_at, encrypted_symptoms, payload.sleep_quality,
             payload.disposition, payload.input_method,
         )
     return {"id": str(row["id"]), "patient_id": patient_id}
@@ -709,7 +711,7 @@ async def get_symptoms_diary(patient_id: str, limit: int = 30, uid: str = Depend
                 "patient_id": r["patient_id"],
                 "reported_by": r["reported_by"],
                 "reported_at": r["reported_at"].isoformat() if r["reported_at"] else None,
-                "symptoms_text": r["symptoms_text"],
+                "symptoms_text": decrypt_field(r["symptoms_text"]),
                 "sleep_quality": r["sleep_quality"],
                 "disposition": r["disposition"],
                 "input_method": r["input_method"],
@@ -781,7 +783,7 @@ async def clinical_correlations(patient_id: str, uid: str = Depends(firebase_uid
                     if len(vital_missed) >= 5:
                         break
 
-            evidence = [f"Sintoma relatado: {s['symptoms_text']}" for s in vital_symptoms]
+            evidence = [f"Sintoma relatado: {decrypt_field(s['symptoms_text'])}" for s in vital_symptoms]
             evidence += [f"Sem dose registrada nas 24h anteriores: {name}" for name in vital_missed]
             if not evidence:
                 continue
@@ -853,7 +855,7 @@ async def medical_dashboard(access_token: str, request: Request):
         )
         await conn.execute("UPDATE medical_access_tokens SET last_accessed_at=now() WHERE id=$1", grant["id"])
     med_html = "".join(f"<li>{html.escape(m['name'])} {m.get('dosage_mg') or ''}</li>" for m in meds) or "<li>Nenhum medicamento registrado</li>"
-    symptom_html = "".join(f"<li>{s['reported_at'].date()}: {html.escape(s['symptoms_text'])}</li>" for s in symptoms) or "<li>Nenhum check-in registrado</li>"
+    symptom_html = "".join(f"<li>{s['reported_at'].date()}: {html.escape(decrypt_field(s['symptoms_text']) or '')}</li>" for s in symptoms) or "<li>Nenhum check-in registrado</li>"
     body = f"""<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'>
     <title>Painel médico</title><style>body{{font:16px system-ui;max-width:1000px;margin:40px auto;padding:0 20px;color:#16332d}}h1{{color:#087f5b}}.notice{{background:#eefaf6;padding:12px}}.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}}.card{{border:1px solid #cde8df;border-radius:12px;padding:16px}}.value{{font-size:1.6rem;font-weight:700}}</style></head>
     <body><h1>Resumo clínico de {html.escape(patient['full_name'])}</h1><p class='notice'>Dados autodeclarados para apoio à consulta. Não substituem avaliação médica.</p>
@@ -959,7 +961,7 @@ async def doctor_report(patient_id: str, days: int = Query(30, ge=1, le=90), uid
              f"Maximos pressoricos registrados: {bp.get('peak_s') if bp else '-'}/{bp.get('peak_d') if bp else '-'}",
              f"Adesao registrada: {(str(adherence)+'%') if adherence is not None else 'sem posologia'} ({taken or 0}/{expected} doses)",
              f"Glicemia media: {bp.get('glucose_avg') if bp else 'sem dados'} mg/dL; hidratacao media: {hydration or 0} mL/dia",
-             f"Check-ins sintomaticos: {len(symptoms)}"] + [f"- {s['reported_at'].date()}: {s['symptoms_text'][:100]}" for s in symptoms] + [
+             f"Check-ins sintomaticos: {len(symptoms)}"] + [f"- {s['reported_at'].date()}: {(decrypt_field(s['symptoms_text']) or '')[:100]}" for s in symptoms] + [
              "Dados autodeclarados. Documento de apoio; nao e diagnostico."]
     return Response(_minimal_pdf(lines), media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="leva-pro-doutor-{patient_id}.pdf"', "Cache-Control": "no-store"})
@@ -996,9 +998,10 @@ async def rescue_card(emergency_token: str, request: Request):
     implants = ", ".join(p.get("implants") or []) or "Não informados"
     med_text = ", ".join(f"{m['name']} {m.get('dosage_mg') or ''}" for m in meds) or "Nenhum informado"
     last = "Sem medição" if not vital else f"PA {vital.get('systolic_pressure') or '-'} / {vital.get('diastolic_pressure') or '-'}; glicemia {vital.get('glucose_level') or '-'}"
-    contact_text = "; ".join(f"{c['full_name']}: {c['phone']}" for c in contacts)
+    contact_text = "; ".join(f"{c['full_name']}: {decrypt_field(c['phone'])}" for c in contacts)
     if not contact_text:
-        contact_text = f"{p.get('emergency_contact_name') or 'Não informado'} — {p.get('emergency_contact_phone') or 'Não informado'}"
+        decrypted_ec_phone = decrypt_field(p.get('emergency_contact_phone')) if p.get('emergency_contact_phone') else None
+        contact_text = f"{p.get('emergency_contact_name') or 'Não informado'} — {decrypted_ec_phone or 'Não informado'}"
     body = f"""<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'><title>Ficha de resgate</title>
     <style>body{{font:18px system-ui;max-width:720px;margin:auto;padding:20px}}h1{{color:#b42318}}dt{{font-weight:bold;margin-top:14px}}</style></head><body><h1>Ficha médica de resgate</h1>
     <h2>{html.escape(p['full_name'])}</h2><dl><dt>Tipo sanguíneo</dt><dd>{html.escape(p.get('blood_type') or 'Não informado')}</dd><dt>Alergias medicamentosas</dt><dd>{html.escape(allergies)}</dd>
