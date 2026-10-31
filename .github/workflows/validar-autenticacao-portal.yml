@@ -6,6 +6,8 @@ on:
     branches: [master]
     paths:
       - 'scripts/server/routers/admin.py'
+      - 'scripts/server/auth_crypto.py'
+      - 'scripts/server/test_argon2_migration.py'
       - 'scripts/server/routers/catalog.py'
       - 'scripts/server/portal_auth_security.py'
       - 'scripts/server/test_portal_auth_security.py'
