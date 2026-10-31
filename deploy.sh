@@ -40,7 +40,7 @@ if [ "$VENV_VERSAO" != "$VENV_ALVO" ]; then
     elif [ -f "app/requirements.lock" ]; then
         venv.novo/bin/python -m pip install --require-hashes -r app/requirements.lock --quiet
     fi
-    venv.novo/bin/python -c "import asyncpg, dotenv" || {
+    venv.novo/bin/python -c "import asyncpg, boto3, dotenv" || {
         echo "ERRO: venv novo nao ficou funcional — mantendo o venv antigo." >&2
         rm -rf venv.novo
         exit 1
@@ -65,6 +65,30 @@ else
     fi
 fi
 
+# SPEC-11: Carregamento e provisionamento hibrido de segredos via AWS SSM + KMS.
+# Sincroniza e injeta variaveis sensiveis em memoria (/run tmpfs) para o
+# migrate.py e para o runtime do systemd, sem gravar segredos em disco.
+export USE_AWS_SECRETS="${USE_AWS_SECRETS:-1}"
+export AWS_SSM_PREFIX="${AWS_SSM_PREFIX:-/braga-saude/production}"
+export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-2}"
+RUNTIME_ENV_DIR="/run/braga-saude"
+RUNTIME_ENV_FILE="/run/braga-saude/gateway.env"
+sudo install -d -m 0700 -o ec2-user -g ec2-user "$RUNTIME_ENV_DIR"
+for LEGACY_ENV in "$APP_DIR/.env" "$APP_DIR/app/.env"; do
+    if [ -f "$LEGACY_ENV" ]; then
+        PYTHONPATH=scripts/server python3 -m secrets_loader --sync-from-dotenv "$LEGACY_ENV" || true
+    fi
+done
+PYTHONPATH=scripts/server python3 -m secrets_loader \
+    --ensure-pepper \
+    --write-runtime-env "$RUNTIME_ENV_FILE"
+if [ -f "$RUNTIME_ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$RUNTIME_ENV_FILE"
+    set +a
+fi
+
 echo "=== [3/4] Executando Migrations do Banco de Dados (RDS) ==="
 if [ -f "migrate.py" ]; then
     # Não permitir gravações do atendimento antigo durante o expurgo.
@@ -75,15 +99,6 @@ if [ -f "migrate.py" ]; then
     python3 migrate.py
     python3 scripts/purge_legacy_exam_files.py
 fi
-
-# SPEC-10: garante que AUTH_PEPPER_SECRET exista no .env da EC2 para Argon2id + Pepper
-for ENV_FILE in "$APP_DIR/.env" "$APP_DIR/app/.env"; do
-    if [ -f "$ENV_FILE" ] && ! grep -q "^AUTH_PEPPER_SECRET=" "$ENV_FILE"; then
-        PEPPER_HEX="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-        printf '\nAUTH_PEPPER_SECRET=%s\n' "$PEPPER_HEX" >> "$ENV_FILE"
-        echo "SPEC-10: AUTH_PEPPER_SECRET provisionado em $ENV_FILE"
-    fi
-done
 
 # Não persistir dumps com memória de atendimentos. A política global também
 # desabilita processamento pelo systemd-coredump quando o core_pattern usa pipe.
