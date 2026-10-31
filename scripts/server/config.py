@@ -15,6 +15,18 @@ definir inline) e os testes vêm no passo seguinte.
 """
 import os
 
+from secrets_loader import (
+    AWS_SSM_PREFIX,
+    USE_AWS_SECRETS,
+    get_secret,
+    load_secrets,
+)
+
+# SPEC-11: Carrega segredos na inicializacao do processo (AWS SSM Parameter Store
+# + KMS em producao quando USE_AWS_SECRETS=1; fallback para .env / os.environ
+# em desenvolvimento local e CI).
+load_secrets()
+
 # ------------------------------------------------------------------
 # Diretórios do projeto (parametrizáveis; defaults relativos ao app)
 # Espelha server.py linhas 125-150.
@@ -60,6 +72,16 @@ os.makedirs(os.path.dirname(DEVICES_PATH), exist_ok=True)
 # Nada de credencial hardcoded.
 # ------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
+MIGRATIONS_DATABASE_URL = os.getenv("MIGRATIONS_DATABASE_URL") or DATABASE_URL
+
+# ------------------------------------------------------------------
+# Segredos administrativos e criptograficos (SPEC-10 / SPEC-11).
+# Em producao na EC2 vem do AWS SSM Parameter Store (/braga-saude/production/*)
+# descriptografados via KMS direto em memoria.
+# ------------------------------------------------------------------
+AUTH_PEPPER_SECRET = os.getenv("AUTH_PEPPER_SECRET")
+SERVICE_TOKEN = os.getenv("SERVICE_TOKEN")
+ADMIN_TOTP_SECRET = os.getenv("ADMIN_TOTP_SECRET")
 
 # ------------------------------------------------------------------
 # Groq (geração + transcrição whisper + speak). Modelos/chaves por
@@ -132,3 +154,66 @@ del _name, _value, _desc, _REQUIRED_ENV_HINTS
 # ------------------------------------------------------------------
 RECAPTCHA_SECRET = os.getenv("RECAPTCHA_SECRET")
 RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
+
+
+def reload_secrets(*, force_reload: bool = True, override: bool = True) -> dict[str, str]:
+    """Recarrega segredos via secrets_loader e atualiza as variaveis do modulo."""
+    global DATABASE_URL, MIGRATIONS_DATABASE_URL, AUTH_PEPPER_SECRET
+    global SERVICE_TOKEN, ADMIN_TOTP_SECRET, GROQ_API_KEY, GROQ_API_KEY_CHAT
+    global GEMINI_API_KEY, SERVICE_ACCOUNT_PATH, PUBLIC_API_BASE_URL, RECAPTCHA_SECRET
+    global USE_AWS_SECRETS, AWS_SSM_PREFIX
+
+    loaded = load_secrets(force_reload=force_reload, override=override)
+    import secrets_loader as _sl
+
+    USE_AWS_SECRETS = _sl.USE_AWS_SECRETS
+    AWS_SSM_PREFIX = _sl.AWS_SSM_PREFIX
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    MIGRATIONS_DATABASE_URL = os.getenv("MIGRATIONS_DATABASE_URL") or DATABASE_URL
+    AUTH_PEPPER_SECRET = os.getenv("AUTH_PEPPER_SECRET")
+    SERVICE_TOKEN = os.getenv("SERVICE_TOKEN")
+    ADMIN_TOTP_SECRET = os.getenv("ADMIN_TOTP_SECRET")
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN")
+    GROQ_API_KEY_CHAT = os.getenv("GROQ_API_KEY_CHAT") or GROQ_API_KEY
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    SERVICE_ACCOUNT_PATH = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
+    PUBLIC_API_BASE_URL = (os.getenv("PUBLIC_API_BASE_URL") or "").rstrip("/")
+    RECAPTCHA_SECRET = os.getenv("RECAPTCHA_SECRET")
+    return loaded
+
+
+__all__ = [
+    "ADMIN_TOTP_SECRET",
+    "APP_DIR",
+    "AUDIO_CACHE_DIR",
+    "AUTH_PEPPER_SECRET",
+    "AWS_SSM_PREFIX",
+    "DATABASE_URL",
+    "DATASET_PATH",
+    "DEVELOPMENT_MODE",
+    "DEVICES_PATH",
+    "GEMINI_API_KEY",
+    "GEMINI_API_URL",
+    "GEMINI_MODEL_VISION",
+    "GROQ_API_KEY",
+    "GROQ_API_KEY_CHAT",
+    "GROQ_API_URL",
+    "GROQ_MODEL_VISION",
+    "MIGRATIONS_DATABASE_URL",
+    "MODEL_CHAT",
+    "MODEL_ID",
+    "MODEL_REST",
+    "PROJECT_ROOT",
+    "PUBLIC_API_BASE_URL",
+    "RECAPTCHA_SECRET",
+    "RECAPTCHA_VERIFY_URL",
+    "RELEASES_DIR",
+    "SERVICE_ACCOUNT_PATH",
+    "SERVICE_TOKEN",
+    "STORAGE_DIR",
+    "USES_ORGANIZED_LAYOUT",
+    "USE_AWS_SECRETS",
+    "get_secret",
+    "load_secrets",
+    "reload_secrets",
+]
