@@ -17,6 +17,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
 
 from api_identity import firebase_uid
+from column_crypto import compute_blind_index
 from security_defense import get_client_ip
 
 router = APIRouter()
@@ -213,9 +214,12 @@ async def verify_auth_otp(request: Request, req: OtpVerifyRequest):
 
             # Se for verificacao de e-mail, atualiza data no perfil correspondente
             if purpose == "EMAIL_VERIFICATION":
+                identifier_bindex = compute_blind_index(identifier) or identifier
                 await conn.execute(
-                    "UPDATE profiles SET updated_at = NOW() WHERE phone = $1 OR emergency_contact_phone = $1 OR id = $1",
-                    identifier
+                    """UPDATE profiles SET updated_at = NOW()
+                       WHERE phone = $1 OR emergency_contact_phone = $1 OR id = $1
+                          OR phone_bindex = $2 OR emergency_contact_phone_bindex = $2""",
+                    identifier, identifier_bindex
                 )
 
             return {
@@ -363,16 +367,18 @@ async def check_account_status(request: Request, req: CheckAccountRequest):
     profile_id = None
 
     if db_pool:
+        identifier_bindex = compute_blind_index(identifier) or identifier
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT id, full_name, phone, emergency_contact_phone
                 FROM profiles
                 WHERE id = $1 OR phone = $1 OR emergency_contact_phone = $1
-                ORDER BY CASE WHEN id = $1 THEN 0 WHEN phone = $1 THEN 1 ELSE 2 END
+                   OR phone_bindex = $2 OR emergency_contact_phone_bindex = $2
+                ORDER BY CASE WHEN id = $1 THEN 0 WHEN phone = $1 OR phone_bindex = $2 THEN 1 ELSE 2 END
                 LIMIT 1
                 """,
-                identifier
+                identifier, identifier_bindex
             )
             if row:
                 profile_exists = True

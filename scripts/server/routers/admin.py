@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 from security_defense import get_client_ip, sanitize_zero_trust_text
 from portal_auth_security import auth_limit, master_step, consume_master
 from auth_crypto import hash_password, verify_password, verify_missing_user
+from column_crypto import encrypt_field
 
 router = APIRouter()
 
@@ -380,10 +381,11 @@ async def reply_feedback_admin(
             "SELECT id, user_id FROM feedbacks WHERE id=$1", fid)
         if not feedback:
             raise HTTPException(404, "Feedback não encontrado.")
+        encrypted_body = encrypt_field(body)
         row = await conn.fetchrow(
             """INSERT INTO feedback_replies (feedback_id, user_id, author, body)
                VALUES ($1, $2, $3, $4) RETURNING id, created_at""",
-            fid, feedback["user_id"], author, body)
+            fid, feedback["user_id"], author, encrypted_body)
     return {
         "success": True,
         "id": str(row["id"]),

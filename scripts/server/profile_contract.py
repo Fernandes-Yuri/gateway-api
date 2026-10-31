@@ -2,6 +2,8 @@
 from datetime import date, datetime
 import math
 
+from column_crypto import encrypt_field
+
 
 def validate_profile(p):
     role, mode = p.userRole, p.caregiverMode
@@ -62,6 +64,8 @@ def profile_upsert(p):
     keys = list(PROFILE_FIELDS)
     values[keys.index('birth_date')] = date.fromisoformat(p.birthDate) if p.birthDate else None
     values[keys.index('consent_accepted_at')] = timestamp(p.consentAcceptedAt)
+    if p.emergencyContactPhone:
+        values[keys.index('emergency_contact_phone')] = encrypt_field(p.emergencyContactPhone)
     assignments = ', '.join(f'{key} = EXCLUDED.{key}' for key in keys if key != 'id')
     placeholders = ', '.join(f'${i}' for i in range(1, len(keys) + 1))
     sql = f"INSERT INTO profiles ({', '.join(keys)}) VALUES ({placeholders}) ON CONFLICT (id) DO UPDATE SET {assignments}, updated_at = NOW()"

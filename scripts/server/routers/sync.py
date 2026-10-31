@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api_identity import firebase_uid, require_owner, require_family_access
+from column_crypto import decrypt_field
 from config import STORAGE_DIR, PUBLIC_API_BASE_URL
 from profile_contract import profile_upsert
 from community_identity import normalize_nickname
@@ -284,6 +285,10 @@ async def get_profile(user_id: str, uid: str = Depends(firebase_uid)):
         if not row:
             raise HTTPException(status_code=404, detail="Perfil não encontrado")
         d = dict(row)
+        if d.get("emergency_contact_phone"):
+            d["emergency_contact_phone"] = decrypt_field(d["emergency_contact_phone"])
+        if d.get("phone"):
+            d["phone"] = decrypt_field(d["phone"])
 
         if d.get("birth_date"):
             d["birth_date"] = d["birth_date"].isoformat()
@@ -1090,7 +1095,7 @@ async def list_feedback_replies(uid: str = Depends(firebase_uid)):
         "id": str(r["id"]),
         "feedbackId": str(r["feedback_id"]),
         "author": r["author"],
-        "body": r["body"],
+        "body": decrypt_field(r["body"]),
         "createdAt": r["created_at"].isoformat(),
     } for r in rows]
 

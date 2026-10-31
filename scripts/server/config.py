@@ -82,6 +82,8 @@ MIGRATIONS_DATABASE_URL = os.getenv("MIGRATIONS_DATABASE_URL") or DATABASE_URL
 AUTH_PEPPER_SECRET = os.getenv("AUTH_PEPPER_SECRET")
 SERVICE_TOKEN = os.getenv("SERVICE_TOKEN")
 ADMIN_TOTP_SECRET = os.getenv("ADMIN_TOTP_SECRET")
+DATA_ENCRYPTION_KEY = os.getenv("DATA_ENCRYPTION_KEY")
+BLIND_INDEX_PEPPER = os.getenv("BLIND_INDEX_PEPPER")
 
 # ------------------------------------------------------------------
 # Groq (geração + transcrição whisper + speak). Modelos/chaves por
@@ -161,7 +163,7 @@ def reload_secrets(*, force_reload: bool = True, override: bool = True) -> dict[
     global DATABASE_URL, MIGRATIONS_DATABASE_URL, AUTH_PEPPER_SECRET
     global SERVICE_TOKEN, ADMIN_TOTP_SECRET, GROQ_API_KEY, GROQ_API_KEY_CHAT
     global GEMINI_API_KEY, SERVICE_ACCOUNT_PATH, PUBLIC_API_BASE_URL, RECAPTCHA_SECRET
-    global USE_AWS_SECRETS, AWS_SSM_PREFIX
+    global USE_AWS_SECRETS, AWS_SSM_PREFIX, DATA_ENCRYPTION_KEY, BLIND_INDEX_PEPPER
 
     loaded = load_secrets(force_reload=force_reload, override=override)
     import secrets_loader as _sl
@@ -173,6 +175,8 @@ def reload_secrets(*, force_reload: bool = True, override: bool = True) -> dict[
     AUTH_PEPPER_SECRET = os.getenv("AUTH_PEPPER_SECRET")
     SERVICE_TOKEN = os.getenv("SERVICE_TOKEN")
     ADMIN_TOTP_SECRET = os.getenv("ADMIN_TOTP_SECRET")
+    DATA_ENCRYPTION_KEY = os.getenv("DATA_ENCRYPTION_KEY")
+    BLIND_INDEX_PEPPER = os.getenv("BLIND_INDEX_PEPPER")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN")
     GROQ_API_KEY_CHAT = os.getenv("GROQ_API_KEY_CHAT") or GROQ_API_KEY
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -188,8 +192,10 @@ __all__ = [
     "AUDIO_CACHE_DIR",
     "AUTH_PEPPER_SECRET",
     "AWS_SSM_PREFIX",
+    "BLIND_INDEX_PEPPER",
     "DATABASE_URL",
     "DATASET_PATH",
+    "DATA_ENCRYPTION_KEY",
     "DEVELOPMENT_MODE",
     "DEVICES_PATH",
     "GEMINI_API_KEY",
