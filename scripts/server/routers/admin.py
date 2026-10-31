@@ -13,6 +13,7 @@ Metricas (Frente 2): aggregate-only. Nenhuma linha de usuario cruza;
 bucket com menos de MIN_BUCKET usuários e suprimido/fundido DENTRO do
 SQL do gateway — o portal so recebe numeros que nao isolam ninguem.
 """
+import asyncio
 import ipaddress
 import base64
 import hashlib
@@ -30,6 +31,7 @@ from pydantic import BaseModel, Field
 
 from security_defense import get_client_ip, sanitize_zero_trust_text
 from portal_auth_security import auth_limit, master_step, consume_master
+from auth_crypto import hash_password, verify_password, verify_missing_user
 
 router = APIRouter()
 
@@ -647,15 +649,10 @@ async def check_blocked_ip(request: Request, ip: str, _auth=Depends(require_serv
 #    (fail-closed, sem vazamento de existencia)
 #  - nao devolve o hash, segredos TOTP nem codigos de recuperacao
 
-# Hash bcrypt pre-calculado (nao corresponde a nenhuma conta). Usado so
-# no caminho "usuario inexistente" para igualar o tempo de resposta ao
-# caminho de sucesso (timing side-channel na enumeracao de e-mails).
-# Precisa ser um hash VALIDO — senao checkpw estoura ValueError e vira
-# 500. Gerado com: bcrypt.hashpw(b"dummy", bcrypt.gensalt(12)).
-_DUMMY_BCRYPT_HASH = (
-    b"$2b$12$nmsnfVue9dXQxV6g3ENMt.q1Mxd5WdBYCuVg4FtA6FvUtLdXrWDve"
-)
-
+# A mitigacao de timing side-channel para "usuario inexistente" e feita
+# por auth_crypto.verify_missing_user (Argon2id dummy pre-computado),
+# que gasta o mesmo tempo criptografico de um login real.
+# (Antigo _DUMMY_BCRYPT_HASH removido na migracao SPEC-10.)
 
 class AdminLoginRequest(BaseModel):
     email: str
@@ -667,8 +664,6 @@ async def admin_login(
     req: AdminLoginRequest,
     _auth=Depends(require_service_token),
 ):
-    import bcrypt
-
     pool = _require_pool()
     email = (req.email or "").strip().lower()
     if not email or not req.password:
@@ -684,25 +679,29 @@ async def admin_login(
             email)
 
     if row is None:
-        # Roda um bcrypt dummy para o tempo de resposta ser igual ao do
-        # caminho de sucesso (mitigacao de timing side-channel na
-        # enumeracao de e-mails). O hash precisa ser valido, senao o
-        # checkpw estoura ValueError e vira 500 — fail-closed silencioso.
-        bcrypt.checkpw(b"dummy", _DUMMY_BCRYPT_HASH)
+        # Mitigacao de timing side-channel: gasta o mesmo tempo de Argon2id
+        # de um login real para nao vazar existencia do e-mail.
+        await asyncio.to_thread(verify_missing_user, req.password)
         raise HTTPException(401, "Credenciais inválidas.")
 
-    try:
-        password_ok = bcrypt.checkpw(
-            req.password.encode("utf-8"),
-            row["password_hash"].encode("utf-8"),
-        )
-    except (ValueError, TypeError):
-        # Hash malformado: trata como credencial invalida, sem estourar 500
-        # (um bug de dados nao vira um bypass nem um info-leak).
-        password_ok = False
+    stored_hash = row["password_hash"] or ""
+    password_ok, needs_rehash = await asyncio.to_thread(
+        verify_password, req.password, stored_hash
+    )
 
     if not password_ok:
         raise HTTPException(401, "Credenciais inválidas.")
+
+    # Lazy re-hashing (SPEC-10 §5): hash Bcrypt legado valido e convertido
+    # para Argon2id + Pepper de forma transparente no primeiro login bem
+    # sucedido, sem exigir redefinicao de senha do usuario.
+    if needs_rehash:
+        new_hash = await asyncio.to_thread(hash_password, req.password)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE admin_users SET password_hash = $1 WHERE id = $2",
+                new_hash, row["id"],
+            )
 
     return {
         "success": True,
@@ -732,12 +731,10 @@ async def admin_register(
 
     O codigo TOTP MASTER (ADMIN_TOTP_SECRET) e validado AQUI no gateway:
     e a prova de que quem chama tem autorizacao de criar admins. Sem isso,
-    qualquer um com o SERVICE_TOKEN criaria contas. O hash bcrypt e gerado
-    nesta ponta — o portal nunca envia texto-plano que precise ser
-    confiavel, e o hash nunca cruza de volta.
+    qualquer um com o SERVICE_TOKEN criaria contas. O hash Argon2id +
+    Pepper e gerado nesta ponta (SPEC-10) — o portal nunca envia
+    texto-plano que precise ser confiavel, e o hash nunca cruza de volta.
     """
-    import bcrypt as _bcrypt
-
     pool = _require_pool()
     email = (req.email or "").strip().lower()
     name = (req.name or "").strip()
@@ -764,9 +761,9 @@ async def admin_register(
 
         await consume_master(conn, step, fingerprint)
 
-        # 4. Hash bcrypt custo 12 (mesmo do portal) + insert
-        password_hash = _bcrypt.hashpw(
-            password.encode("utf-8"), _bcrypt.gensalt(rounds=12)).decode("utf-8")
+        # 4. Hash Argon2id + Pepper (SPEC-10). Novas contas nascem direto
+        #    no padrao moderno, sem depender de lazy migration.
+        password_hash = await asyncio.to_thread(hash_password, password)
         user_id = f"usr_{__import__('uuid').uuid4()}"
         await conn.execute(
             """INSERT INTO admin_users (id, email, password_hash, name, role, created_at, last_login_at)
@@ -880,7 +877,7 @@ async def admin_login_step2(
     este endpoint apenas valida as credenciais e devolve o usuario.
     Fail-closed: resposta identica para email inexistente e senha errada.
     """
-    import bcrypt as _bcrypt
+    import bcrypt as _bcrypt  # apenas para comparacao de recovery codes
 
     pool = _require_pool()
     email = (req.email or "").strip().lower()
@@ -899,21 +896,27 @@ async def admin_login_step2(
             email)
 
     if row is None:
-        # Dummy bcrypt para timing equal (mesmo hash do login simples)
-        _bcrypt.checkpw(b"dummy", _DUMMY_BCRYPT_HASH)
+        # Mitigacao de timing side-channel (mesmo do login simples).
+        await asyncio.to_thread(verify_missing_user, password)
         raise HTTPException(401, "Credenciais inválidas.")
 
-    try:
-        password_ok = _bcrypt.checkpw(
-            password.encode("utf-8"),
-            row["password_hash"].encode("utf-8"),
-        )
-    except (ValueError, TypeError):
-        password_ok = False
+    stored_hash = row["password_hash"] or ""
+    password_ok, needs_rehash = await asyncio.to_thread(
+        verify_password, password, stored_hash
+    )
 
     if not password_ok:
         raise HTTPException(401, "Credenciais inválidas.")
 
+    # Lazy re-hashing (SPEC-10 §5): hash Bcrypt legado valido convertido
+    # para Argon2id + Pepper no primeiro login bem sucedido.
+    if needs_rehash:
+        new_hash = await asyncio.to_thread(hash_password, password)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE admin_users SET password_hash = $1 WHERE id = $2",
+                new_hash, row["id"],
+            )
     # Segundo fator: exige TOTP ativo
     if not row["totp_enabled"] or not row["totp_secret"]:
         raise HTTPException(400, "Autenticação em dois fatores não está ativa nesta conta.")
@@ -1103,24 +1106,24 @@ class PasswordResetRequest(BaseModel):
 
 @router.post("/api/admin/password-reset")
 async def admin_password_reset(req: PasswordResetRequest, _auth=Depends(require_service_token)):
-    import asyncio
-    import bcrypt
-
     pool = _require_pool()
     # Global: trocar o e-mail ou o IP não aumenta as tentativas sobre o segredo mestre.
     await auth_limit(pool, "master", "global", 5, 60)
     step, fingerprint = master_step(req.master_totp_code)
     if len(req.password.encode("utf-8")) > 72:
         raise HTTPException(400, "A senha excede 72 bytes.")
-    hashed = await asyncio.to_thread(bcrypt.hashpw, req.password.encode(), bcrypt.gensalt(12))
+    # Hash Argon2id + Pepper (SPEC-10) — redefinicao gera hash moderno.
+    hashed = await asyncio.to_thread(hash_password, req.password)
     async with pool.acquire() as conn:
         async with conn.transaction():
             await consume_master(conn, step, fingerprint)
-            # Preserva o segundo fator da conta. A versão revoga sessões existentes.
+            # Preserva o segundo fator da conta. A versao revoga sessoes existentes.
             await conn.execute(
                 """UPDATE admin_users SET password_hash = $2, session_version = session_version + 1
-                   WHERE email = $1""", req.email.strip().lower(), hashed.decode())
+                   WHERE email = $1""", req.email.strip().lower(), hashed)
     return {"success": True, "message": "Se a conta existir, a senha foi alterada. Entre novamente."}
+
+
 
 
 class SessionCheckRequest(BaseModel):

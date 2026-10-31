@@ -7,6 +7,10 @@ Wants=network-online.target
 Type=exec
 User=ec2-user
 WorkingDirectory=/home/ec2-user/braga-gateway/app
+EnvironmentFile=-/etc/braga-saude/gateway.env
+EnvironmentFile=-/home/ec2-user/braga-gateway/.env
+EnvironmentFile=-/home/ec2-user/braga-gateway/app/.env
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/home/ec2-user/braga-gateway/venv/bin/gunicorn server:app \
     -w 2 \
     -k uvicorn.workers.UvicornWorker \

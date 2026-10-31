@@ -39,8 +39,13 @@ asyncpg>=0.29
 python-dotenv>=1.0
 
 # Hash de senha de admins (bcrypt) — proxy de login do portal (doc 12).
-# Verifica password_hash de admin_users no RDS.
+# Verifica password_hash de admin_users no RDS. Mantido apenas para
+# comparacao de recovery codes TOTP (uso unico) durante a transicao SPEC-10.
 bcrypt>=4.2,<5
+
+# Argon2id + Pepper para senhas administrativas (SPEC-10).
+# Motor hybrido em scripts/server/auth_crypto.py com lazy re-hashing.
+argon2-cffi>=23.1.0
 
 # Agendador em segundo plano (limpeza periodica) — so na EC2
 APScheduler>=3.10
