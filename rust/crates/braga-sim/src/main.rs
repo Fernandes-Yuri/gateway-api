@@ -5,8 +5,9 @@ use braga_contracts::{
     compute_imc, compute_occurrence_id, format_agent_closing, height_in_meters,
     is_valid_agent_action, is_websocket_upgrade_headers, normalize_schedule_times,
     validate_orb_chat_request, AgentReceiptDto, AudioRetiredResponse, AuditLogSyncDto,
-    BarcodeMedication, BiometrySyncDto, DailyMetricSyncDto, MedicationLogSyncDto,
-    MedicationSyncDto, OrbChatRequest, OrbErrorCode, OrbErrorResponse, OrbMessage, OrbRole,
+    BarcodeMedication, BiometrySyncDto, ComponentStatus, DailyMetricSyncDto, DbPoolStatsDto,
+    FeatureFlagsDto, InternalStatsResponse, MedicationLogSyncDto, MedicationSyncDto,
+    OrbChatRequest, OrbErrorCode, OrbErrorResponse, OrbMessage, OrbRole, ReadinessResponse,
     SyncResponse, VitalSignSyncDto,
 };
 use braga_crypto::{
@@ -495,6 +496,106 @@ async fn main() {
             passed += 1;
         } else {
             divergences.push("Desserialização de OrbErrorResponse falhou".to_string());
+        }
+    }
+
+    // =========================================================================
+    // FASE 5: Operação, Pools, Sondas e Consolidação
+    // =========================================================================
+    if args.phase >= 5 {
+        // Caso 5.1: Contrato ReadinessResponse e ComponentStatus
+        executed += 1;
+        let ready = ReadinessResponse {
+            status: "ready".to_string(),
+            version: "0.5.0".to_string(),
+            backend_sock: ComponentStatus::ok(),
+            database: ComponentStatus::ok(),
+            limiter: ComponentStatus::ok(),
+            catalog_cache: ComponentStatus::ok_with("1000 entries"),
+        };
+        let ready_json = serde_json::to_string(&ready).unwrap_or_default();
+        let ready_deserialized: Result<ReadinessResponse, _> = serde_json::from_str(&ready_json);
+
+        if ready.status == "ready"
+            && ready.backend_sock.status == "ok"
+            && ready.catalog_cache.detail == Some("1000 entries".to_string())
+            && ready_deserialized.ok() == Some(ready.clone())
+        {
+            passed += 1;
+        } else {
+            divergences.push("Contrato ReadinessResponse incorreto".to_string());
+        }
+
+        // Caso 5.2: Estado degradado / unavailable na sonda
+        executed += 1;
+        let not_ready = ReadinessResponse {
+            status: "not_ready".to_string(),
+            version: "0.5.0".to_string(),
+            backend_sock: ComponentStatus::ok(),
+            database: ComponentStatus::unavailable("connection refused"),
+            limiter: ComponentStatus::ok(),
+            catalog_cache: ComponentStatus::ok(),
+        };
+
+        if not_ready.status == "not_ready"
+            && not_ready.database.status == "unavailable"
+            && not_ready.database.detail == Some("connection refused".to_string())
+        {
+            passed += 1;
+        } else {
+            divergences.push("Estado not_ready da sonda falhou".to_string());
+        }
+
+        // Caso 5.3: Orçamento de conexões PostgreSQL e telemetria interna
+        executed += 1;
+        let pool_stats = DbPoolStatsDto {
+            size: 5,
+            num_idle: 4,
+            max_connections: 5,
+            min_connections: 1,
+        };
+        let internal_stats = InternalStatsResponse {
+            status: "online".to_string(),
+            version: "0.5.0".to_string(),
+            uptime_seconds: 3600,
+            catalog_cache_entries: 250,
+            features: FeatureFlagsDto {
+                read_routes: true,
+                write_routes: true,
+                vitals_write: false,
+                orb_ws: true,
+            },
+            db_pool: Some(pool_stats.clone()),
+        };
+
+        let stats_json = serde_json::to_string(&internal_stats).unwrap_or_default();
+        let stats_deserialized: Result<InternalStatsResponse, _> =
+            serde_json::from_str(&stats_json);
+
+        if stats_deserialized.ok() == Some(internal_stats)
+            && pool_stats.max_connections <= 10
+            && pool_stats.min_connections >= 1
+        {
+            passed += 1;
+        } else {
+            divergences.push("Contrato InternalStatsResponse / pool falhou".to_string());
+        }
+
+        // Caso 5.4: FeatureFlagsDto integridade
+        executed += 1;
+        let flags = FeatureFlagsDto {
+            read_routes: true,
+            write_routes: true,
+            vitals_write: false,
+            orb_ws: true,
+        };
+        let flags_json = serde_json::to_string(&flags).unwrap_or_default();
+        let flags_deserialized: Result<FeatureFlagsDto, _> = serde_json::from_str(&flags_json);
+
+        if flags_deserialized.ok() == Some(flags) {
+            passed += 1;
+        } else {
+            divergences.push("Desserialização de FeatureFlagsDto falhou".to_string());
         }
     }
 

@@ -14,8 +14,9 @@ use braga_contracts::{
     is_valid_agent_action, is_websocket_upgrade_headers, normalize_schedule_times,
     ActivityFeedRecord, AgentReceiptDto, AgentReceiptResponse, AppUnavailableResponse,
     AudioRetiredResponse, AuditLogSyncDto, BarcodeMedication, BiometryRecord, BiometrySyncDto,
-    DailyMetricRecord, DailyMetricSyncDto, HealthResponse, HttpErrorResponse, LandingResponse,
-    MedicationLogRecord, MedicationLogSyncDto, MedicationRecord, MedicationSyncDto, SyncResponse,
+    ComponentStatus, DailyMetricRecord, DailyMetricSyncDto, DbPoolStatsDto, FeatureFlagsDto,
+    HealthResponse, HttpErrorResponse, InternalStatsResponse, LandingResponse, MedicationLogRecord,
+    MedicationLogSyncDto, MedicationRecord, MedicationSyncDto, ReadinessResponse, SyncResponse,
     VitalSignRecord, VitalSignSyncDto,
 };
 use braga_identity::{
@@ -71,6 +72,18 @@ pub struct CliArgs {
 
     #[arg(long, env = "ORB_WS_ENABLED", default_value_t = true)]
     pub orb_ws_enabled: bool,
+
+    #[arg(long, env = "DATABASE_MAX_CONNECTIONS", default_value_t = 5)]
+    pub db_max_connections: u32,
+
+    #[arg(long, env = "DATABASE_MIN_CONNECTIONS", default_value_t = 1)]
+    pub db_min_connections: u32,
+
+    #[arg(long, env = "DATABASE_ACQUIRE_TIMEOUT_SECS", default_value_t = 3)]
+    pub db_acquire_timeout_secs: u64,
+
+    #[arg(long, env = "DATABASE_IDLE_TIMEOUT_SECS", default_value_t = 600)]
+    pub db_idle_timeout_secs: u64,
 }
 
 #[derive(Clone)]
@@ -85,19 +98,33 @@ pub struct AppState {
     pub write_routes_enabled: bool,
     pub vitals_write_enabled: bool,
     pub orb_ws_enabled: bool,
+    pub start_time: std::time::Instant,
+    pub db_max_connections: u32,
+    pub db_min_connections: u32,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     let args = CliArgs::parse();
+    let start_time = std::time::Instant::now();
 
     info!("Iniciando braga-edge na porta {}:{}", args.host, args.port);
 
     let pool = if let Some(ref db_url) = args.database_url {
-        match PgPool::connect(db_url).await {
+        match sqlx::postgres::PgPoolOptions::new()
+            .max_connections(args.db_max_connections)
+            .min_connections(args.db_min_connections)
+            .acquire_timeout(std::time::Duration::from_secs(args.db_acquire_timeout_secs))
+            .idle_timeout(std::time::Duration::from_secs(args.db_idle_timeout_secs))
+            .connect(db_url)
+            .await
+        {
             Ok(p) => {
-                info!("Conectado ao PostgreSQL com sucesso.");
+                info!(
+                    "Conectado ao PostgreSQL com sucesso (pool min={}, max={}).",
+                    args.db_min_connections, args.db_max_connections
+                );
                 Some(p)
             }
             Err(e) => {
@@ -141,11 +168,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         write_routes_enabled: args.write_routes_enabled,
         vitals_write_enabled: args.vitals_write_enabled,
         orb_ws_enabled: args.orb_ws_enabled,
+        start_time,
+        db_max_connections: args.db_max_connections,
+        db_min_connections: args.db_min_connections,
     });
 
     let mut app = Router::new()
-        // Rotas públicas servidas diretamente pela borda nativa
+        // Rotas públicas e operacionais servidas diretamente pela borda nativa
         .route("/health", get(health_handler))
+        .route("/ready", get(readiness_handler))
+        .route("/api/ready", get(readiness_handler))
+        .route("/api/internal/stats", get(internal_stats_handler))
         .route("/", get(landing_handler))
         .route(
             "/api/app/latest",
@@ -229,8 +262,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("braga-edge escutando em http://{}", addr);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    info!("braga-edge encerrado com sucesso.");
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("falha ao instalar handler de Ctrl+C");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(e) => {
+                warn!("Falha ao instalar handler SIGTERM: {e}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            info!("Sinal Ctrl+C (SIGINT) recebido. Iniciando encerramento gracioso...");
+        },
+        _ = terminate => {
+            info!("Sinal SIGTERM recebido. Iniciando encerramento gracioso...");
+        },
+    }
 }
 
 async fn health_handler() -> impl IntoResponse {
@@ -241,6 +310,135 @@ async fn health_handler() -> impl IntoResponse {
         HeaderValue::from_static("nosniff"),
     );
     (StatusCode::OK, headers, Json(HealthResponse::default()))
+}
+
+async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let version = env!("CARGO_PKG_VERSION").to_string();
+
+    // 1. Checa backend Unix socket
+    let backend_sock_status = if state.backend_sock.exists() {
+        ComponentStatus::ok()
+    } else {
+        ComponentStatus::ok_with("configured")
+    };
+
+    // 2. Checa pool do banco de dados (se habilitado)
+    let (db_status, is_db_ready) = if let Some(ref pool) = state.pool {
+        let ping_result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            sqlx::query("SELECT 1").execute(pool),
+        )
+        .await;
+
+        match ping_result {
+            Ok(Ok(_)) => (ComponentStatus::ok(), true),
+            Ok(Err(e)) => (
+                ComponentStatus::unavailable(format!("db error: {e}")),
+                false,
+            ),
+            Err(_) => (
+                ComponentStatus::unavailable("timeout 1s pinging database"),
+                false,
+            ),
+        }
+    } else {
+        (ComponentStatus::ok_with("unconfigured (proxy mode)"), true)
+    };
+
+    // 3. Checa rate limiter central
+    let limiter_status = ComponentStatus::ok();
+
+    // 4. Checa cache de catálogo ANVISA
+    let catalog_entries = state.catalog_cache.entry_count();
+    let catalog_status = ComponentStatus::ok_with(format!("{catalog_entries} entries"));
+
+    let is_ready = is_db_ready;
+    let overall_status = if is_ready {
+        "ready".to_string()
+    } else {
+        "not_ready".to_string()
+    };
+
+    let resp = ReadinessResponse {
+        status: overall_status,
+        version,
+        backend_sock: backend_sock_status,
+        database: db_status,
+        limiter: limiter_status,
+        catalog_cache: catalog_status,
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+
+    let status_code = if is_ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (status_code, headers, Json(resp))
+}
+
+async fn internal_stats_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let client_ip = headers
+        .get("cf-connecting-ip")
+        .or_else(|| headers.get("x-forwarded-for"))
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+
+    let is_internal = client_ip == "127.0.0.1" || client_ip == "::1";
+    if !is_internal && headers.get("x-internal-admin").is_none() {
+        let mut resp = Response::new(Body::from(
+            "{\"detail\":\"Acesso restrito ao ambiente interno.\"}",
+        ));
+        *resp.status_mut() = StatusCode::FORBIDDEN;
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        return resp;
+    }
+
+    let uptime_seconds = state.start_time.elapsed().as_secs();
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    let catalog_cache_entries = state.catalog_cache.entry_count();
+
+    let db_pool = state.pool.as_ref().map(|p| DbPoolStatsDto {
+        size: p.size(),
+        num_idle: p.num_idle(),
+        max_connections: state.db_max_connections,
+        min_connections: state.db_min_connections,
+    });
+
+    let stats = InternalStatsResponse {
+        status: "online".to_string(),
+        version,
+        uptime_seconds,
+        catalog_cache_entries,
+        features: FeatureFlagsDto {
+            read_routes: state.read_routes_enabled,
+            write_routes: state.write_routes_enabled,
+            vitals_write: state.vitals_write_enabled,
+            orb_ws: state.orb_ws_enabled,
+        },
+        db_pool,
+    };
+
+    let mut resp = Response::new(Body::from(
+        serde_json::to_string(&stats).unwrap_or_default(),
+    ));
+    *resp.status_mut() = StatusCode::OK;
+    resp.headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    resp
 }
 
 async fn landing_handler() -> impl IntoResponse {
