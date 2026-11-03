@@ -15,9 +15,8 @@ use braga_contracts::{
     ActivityFeedRecord, AgentReceiptDto, AgentReceiptResponse, AppUnavailableResponse,
     AudioRetiredResponse, AuditLogSyncDto, BarcodeMedication, BiometryRecord, BiometrySyncDto,
     DailyMetricRecord, DailyMetricSyncDto, HealthResponse, HttpErrorResponse, LandingResponse,
-    MedicationLogRecord, MedicationLogSyncDto, MedicationRecord, MedicationSyncDto, OrbChatRequest,
-    OrbErrorCode, OrbErrorResponse, OrbMessage, OrbRole, SyncResponse, VitalSignRecord,
-    VitalSignSyncDto,
+    MedicationLogRecord, MedicationLogSyncDto, MedicationRecord, MedicationSyncDto, SyncResponse,
+    VitalSignRecord, VitalSignSyncDto,
 };
 use braga_identity::{
     check_user_moderation, require_family_access, require_owner, require_patient_permission,

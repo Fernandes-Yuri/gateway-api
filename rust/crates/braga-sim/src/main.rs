@@ -423,7 +423,7 @@ async fn main() {
             && retired.tts_engine == "android_native_tts"
             && !retired.available
             && retired.detail.contains("TextToSpeech nativo")
-            && retired_deserialized == Ok(retired)
+            && retired_deserialized.ok() == Some(retired)
         {
             passed += 1;
         } else {
@@ -490,7 +490,7 @@ async fn main() {
 
         if err_json.contains("\"AUTH_EXPIRED\"")
             && err_json.contains("\"error\"")
-            && err_deserialized.as_ref().map(|r| r.code) == Ok(OrbErrorCode::AuthExpired)
+            && err_deserialized.as_ref().map(|r| r.code).ok() == Some(OrbErrorCode::AuthExpired)
         {
             passed += 1;
         } else {
