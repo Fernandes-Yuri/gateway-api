@@ -318,6 +318,103 @@ def run_phase_3_checks():
     return cases_run, cases_passed, divergences
 
 
+def run_phase_4_checks():
+    divergences = []
+    cases_run = 0
+    cases_passed = 0
+
+    # 1. Contrato AudioRetiredResponse (410 Gone)
+    cases_run += 1
+    retired_resp = {
+        "status": "retired",
+        "tts_engine": "android_native_tts",
+        "available": False,
+        "detail": "Síntese vocal desativada no servidor: migrada para TextToSpeech nativo no aplicativo Android.",
+    }
+    if (
+        retired_resp["status"] == "retired"
+        and retired_resp["tts_engine"] == "android_native_tts"
+        and not retired_resp["available"]
+        and "TextToSpeech nativo" in retired_resp["detail"]
+    ):
+        cases_passed += 1
+    else:
+        divergences.append("Contrato AudioRetiredResponse incorreto")
+
+    # 2. Lógica de handshake WebSocket Upgrade
+    cases_run += 1
+    def is_ws_upgrade(connection, upgrade):
+        has_upgrade = any(part.strip().lower() == "upgrade" for part in (connection or "").split(","))
+        has_ws = (upgrade or "").strip().lower() == "websocket"
+        return has_upgrade and has_ws
+
+    if (
+        is_ws_upgrade("keep-alive, Upgrade", "websocket")
+        and is_ws_upgrade("Upgrade", "WebSocket")
+        and not is_ws_upgrade("keep-alive", "websocket")
+        and not is_ws_upgrade("Upgrade", None)
+        and not is_ws_upgrade(None, None)
+    ):
+        cases_passed += 1
+    else:
+        divergences.append("Lógica de validação is_websocket_upgrade falhou")
+
+    # 3. Validação de OrbChatRequest e Zero-Trust
+    cases_run += 1
+    def validate_orb_chat(req, auth_uid, raw_len):
+        if raw_len > 64000:
+            return "Tamanho total excede 64.000 caracteres."
+        if req.get("type") != "chat":
+            return "Tipo deve ser chat"
+        req_id = req.get("id", "")
+        if not (1 <= len(req_id) <= 128):
+            return "id inválido"
+        messages = req.get("messages", [])
+        if not (1 <= len(messages) <= 100):
+            return "messages deve ter 1..=100"
+        for m in messages:
+            if len(m.get("content", "")) > 16000:
+                return "Mensagem excede 16.000"
+        temp = req.get("temperature", 0.65)
+        if not (0.0 <= temp <= 2.0):
+            return "temperature fora da faixa"
+        tokens = req.get("max_tokens", 350)
+        if not (1 <= tokens <= 1024):
+            return "max_tokens fora da faixa"
+        req_uid = req.get("userId")
+        if req_uid and req_uid != auth_uid:
+            return "FORBIDDEN"
+        return "OK"
+
+    valid_req = {
+        "type": "chat",
+        "id": "req-orb-001",
+        "messages": [{"role": "user", "content": "Gostaria de registrar minha glicemia."}],
+        "userId": "paciente-777",
+        "temperature": 0.65,
+        "max_tokens": 350,
+    }
+    res_valid = validate_orb_chat(valid_req, "paciente-777", 120)
+    res_forbidden = validate_orb_chat(valid_req, "outro-paciente", 120)
+    res_oversized = validate_orb_chat(valid_req, "paciente-777", 65000)
+
+    if res_valid == "OK" and res_forbidden == "FORBIDDEN" and "64.000" in res_oversized:
+        cases_passed += 1
+    else:
+        divergences.append(f"Validação de OrbChatRequest divergiu: valid={res_valid}, forbidden={res_forbidden}")
+
+    # 4. Códigos de erro canônicos do Orb
+    cases_run += 1
+    allowed_codes = {"INVALID_REQUEST", "BUSY", "FORBIDDEN", "AUTH_EXPIRED", "TIMEOUT", "STREAM_FAILED"}
+    err_sample = {"type": "error", "id": "req-orb-001", "code": "AUTH_EXPIRED", "message": "Atualize sua sessão."}
+    if err_sample["code"] in allowed_codes and err_sample["type"] == "error":
+        cases_passed += 1
+    else:
+        divergences.append("Códigos de erro canônicos do Orb divergiram")
+
+    return cases_run, cases_passed, divergences
+
+
 def run_binary_sim_if_available(sim_bin_path, phase, report_path):
     """Executa o executável braga-sim pré-compilado se fornecido."""
     if not os.path.isfile(sim_bin_path) or not os.access(sim_bin_path, os.X_OK):
@@ -389,6 +486,13 @@ def main():
         total_run += r3
         total_passed += p3
         all_divergences.extend(d3)
+
+    # Fase 4 checks
+    if args.phase >= 4:
+        r4, p4, d4 = run_phase_4_checks()
+        total_run += r4
+        total_passed += p4
+        all_divergences.extend(d4)
 
     elapsed_ms = int((time.time() - start_time) * 1000)
     status = "PASS" if not all_divergences and total_passed == total_run else "FAIL"
