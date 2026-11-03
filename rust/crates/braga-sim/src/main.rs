@@ -1,7 +1,12 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use braga_contracts::BarcodeMedication;
+use braga_contracts::{
+    compute_imc, compute_occurrence_id, format_agent_closing, height_in_meters,
+    is_valid_agent_action, normalize_schedule_times, AgentReceiptDto, AuditLogSyncDto,
+    BarcodeMedication, BiometrySyncDto, DailyMetricSyncDto, MedicationLogSyncDto,
+    MedicationSyncDto, SyncResponse, VitalSignSyncDto,
+};
 use braga_crypto::{
     compute_blind_index, decrypt_field, encrypt_field, hash_password, normalize_for_blind_index,
     verify_password, ColumnTamperError,
@@ -216,6 +221,139 @@ async fn main() {
             passed += 1;
         } else {
             divergences.push("require_owner autorização falhou".to_string());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Casos Fase 3: Escritas de Alta Frequência, IMC, Doses e Contratos POST
+    // -----------------------------------------------------------------------
+    if args.phase >= 3 {
+        executed += 1;
+        // Caso 3.1: Normalização de altura e cálculo de IMC
+        let h1 = height_in_meters(Some(175.0)); // cm para m
+        let h2 = height_in_meters(Some(1.75)); // já em m
+        let h_invalid = height_in_meters(Some(350.0)); // absurdo -> None
+        let imc = compute_imc(72.0, h1);
+        let imc_none = compute_imc(72.0, None);
+
+        if h1 == Some(1.75)
+            && h2 == Some(1.75)
+            && h_invalid.is_none()
+            && imc == Some(23.5)
+            && imc_none.is_none()
+        {
+            passed += 1;
+        } else {
+            divergences.push(format!(
+                "Calculo de altura/IMC divergente: h1={:?}, imc={:?}",
+                h1, imc
+            ));
+        }
+
+        executed += 1;
+        // Caso 3.2: Normalização, dedup e ordenação de scheduleTimes
+        let norm_ok = normalize_schedule_times(" 14:00 , 08:00, 14:00, 20:30 ");
+        let norm_err = normalize_schedule_times("25:00, 08:00");
+        let norm_empty = normalize_schedule_times("   ");
+
+        if let Ok((primary, joined)) = norm_ok {
+            if primary == "08:00"
+                && joined == "08:00,14:00,20:30"
+                && norm_err.is_err()
+                && norm_empty.is_err()
+            {
+                passed += 1;
+            } else {
+                divergences.push(format!(
+                    "normalize_schedule_times formato incorreto: primary={}, joined={}",
+                    primary, joined
+                ));
+            }
+        } else {
+            divergences.push("normalize_schedule_times falhou em parse valido".to_string());
+        }
+
+        executed += 1;
+        // Caso 3.3: Geração determinística de occurrence_id (UUIDv5)
+        let dt = chrono::DateTime::parse_from_rfc3339("2026-11-03T10:00:00.000000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let oid1 =
+            compute_occurrence_id("paciente-123", "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", &dt);
+        let oid2 =
+            compute_occurrence_id("paciente-123", "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", &dt);
+        let oid_diff =
+            compute_occurrence_id("paciente-456", "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", &dt);
+
+        if oid1 == oid2 && oid1 != oid_diff {
+            passed += 1;
+        } else {
+            divergences.push(format!(
+                "compute_occurrence_id determinismo falhou: oid1={}, oid2={}",
+                oid1, oid2
+            ));
+        }
+
+        executed += 1;
+        // Caso 3.4: Catálogo de ações do assistente e fala de fechamento
+        let valid_act = is_valid_agent_action("REGISTRAR_PRESSAO");
+        let invalid_act = is_valid_agent_action("FORMATAR_DISCO_RIGIDO");
+        let closing_sis_dia = format_agent_closing(
+            "REGISTRAR_PRESSAO",
+            &serde_json::json!({"sistolica": 120, "diastolica": 80}),
+        );
+        let closing_metricas = format_agent_closing("CONSULTAR_METRICAS", &serde_json::json!({}));
+
+        if valid_act
+            && !invalid_act
+            && closing_sis_dia == "Pressão 120 por 80 registrada."
+            && closing_metricas == "Relatório aberto para você conferir."
+        {
+            passed += 1;
+        } else {
+            divergences.push(format!(
+                "format_agent_closing divergente: closing_sis_dia={}",
+                closing_sis_dia
+            ));
+        }
+
+        executed += 1;
+        // Caso 3.5: Desserialização e integridade dos DTOs de escrita
+        let bio_json = serde_json::json!({
+            "id": "11111111-1111-1111-1111-111111111111",
+            "userId": "user-001",
+            "weight": 75.5,
+            "height": 180.0,
+            "measuredAt": "2026-11-03T10:00:00Z"
+        });
+        let bio_dto: Result<BiometrySyncDto, _> = serde_json::from_value(bio_json);
+
+        let med_json = serde_json::json!({
+            "userId": "user-001",
+            "name": "Losartana Potassica 50mg",
+            "scheduleTime": "08:00",
+            "scheduleTimes": "08:00, 20:00"
+        });
+        let med_dto: Result<MedicationSyncDto, _> = serde_json::from_value(med_json);
+
+        let receipt_json = serde_json::json!({
+            "userId": "user-001",
+            "action": "REGISTRAR_PRESSAO",
+            "idempotencyKey": "idem-key-12345",
+            "params": {"sistolica": 120, "diastolica": 80}
+        });
+        let receipt_dto: Result<AgentReceiptDto, _> = serde_json::from_value(receipt_json);
+
+        if bio_dto.is_ok()
+            && med_dto.is_ok()
+            && receipt_dto.is_ok()
+            && bio_dto.unwrap().weight == 75.5
+            && med_dto.unwrap().name == "Losartana Potassica 50mg"
+            && receipt_dto.unwrap().action == "REGISTRAR_PRESSAO"
+        {
+            passed += 1;
+        } else {
+            divergences.push("Desserializacao dos DTOs de escrita Fase 3 falhou".to_string());
         }
     }
 
