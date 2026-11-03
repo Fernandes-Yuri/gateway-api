@@ -93,3 +93,136 @@ impl std::str::FromStr for RestrictionLevel {
         }
     }
 }
+
+/// Contrato de medicamento retornado pelo catálogo ANVISA
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BarcodeMedication {
+    pub ean_barcode: String,
+    pub name: String,
+    pub active_principle: Option<String>,
+    pub concentration: Option<String>,
+    pub pharmaceutical_form: Option<String>,
+    pub manufacturer: Option<String>,
+    pub farmacia_popular_eligible: Option<bool>,
+    pub anvisa_registration_number: Option<String>,
+    pub source_name: String,
+    pub source_url: Option<String>,
+    pub source_checked_at: String,
+}
+
+/// Contrato de biometria (/api/biometry/{user_id})
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BiometryRecord {
+    pub id: String,
+    pub user_id: String,
+    pub weight: Option<f64>,
+    pub height: Option<f64>,
+    pub imc: Option<f64>,
+    pub measured_at: String,
+}
+
+/// Contrato de sinais vitais (/api/vitals/{user_id})
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VitalSignRecord {
+    pub id: String,
+    pub user_id: String,
+    pub measured_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub systolic_pressure: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diastolic_pressure: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pulse_bpm: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blood_glucose_mg_dl: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_temperature_c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oxygen_saturation_percent: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hydration_ml: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+/// Contrato de métricas diárias (/api/metrics/daily/{user_id})
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DailyMetricRecord {
+    pub id: String,
+    pub user_id: String,
+    pub date: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    pub steps: Option<i32>,
+    pub distance_meters: Option<f64>,
+    pub distance_gps_meters: Option<f64>,
+    pub distance_steps_meters: Option<f64>,
+    pub distance_final_meters: Option<f64>,
+    pub reliability_score: Option<f64>,
+    pub calories_burned: Option<f64>,
+    pub active_minutes: Option<i32>,
+}
+
+/// Contrato de medicamento (/api/medications/{user_id})
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MedicationRecord {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dosage_mg: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_times: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ean_barcode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_principle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pharmaceutical_form: Option<String>,
+    pub total_units: Option<i32>,
+    pub current_units: Option<i32>,
+    pub alert_threshold_days: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photo_reference_url: Option<String>,
+    pub confirmed_with_prescription: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
+/// Contrato de log de tomada de medicamento (/api/medications/{user_id}/logs)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MedicationLogRecord {
+    pub id: String,
+    pub user_id: String,
+    pub medication_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub taken_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduled_for: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub units_taken: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+}
+
+/// Contrato do feed de auditoria e atividades da família (/api/family/patients/{patient_id}/activity-feed)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActivityFeedRecord {
+    pub id: String,
+    pub patient_id: String,
+    pub actor_id: String,
+    pub actor_name: String,
+    pub action_type: String,
+    pub details: serde_json::Value,
+    pub occurred_at: String,
+}

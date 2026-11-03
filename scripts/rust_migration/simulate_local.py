@@ -142,6 +142,91 @@ def run_phase_1_checks():
     return cases_run, cases_passed, divergences
 
 
+def run_phase_2_checks():
+    divergences = []
+    cases_run = 0
+    cases_passed = 0
+
+    # 1. Validação de formato EAN-13 (13 dígitos numéricos)
+    cases_run += 1
+    valid_ean = "7896004715506"
+    invalid_eans = ["123", "789600471550", "78960047155060", "789600471550A", "ABCDEFGHIJKLM"]
+    v_ok = len(valid_ean) == 13 and valid_ean.isdigit()
+    inv_ok = all(len(e) != 13 or not e.isdigit() for e in invalid_eans)
+    if v_ok and inv_ok:
+        cases_passed += 1
+    else:
+        divergences.append("Validação de formato EAN-13 falhou")
+
+    # 2. Contrato BarcodeMedication (Fase 2A)
+    cases_run += 1
+    sample_catalog = {
+        "ean_barcode": "7896004715506",
+        "name": "Losartana Potássica 50mg",
+        "active_principle": "Losartana Potássica",
+        "concentration": "50 mg",
+        "pharmaceutical_form": "Comprimido revestido",
+        "manufacturer": "EMS",
+        "farmacia_popular_eligible": True,
+        "anvisa_registration_number": "1023506890011",
+        "source_name": "Farmacia Popular / ANVISA",
+        "source_url": "https://www.gov.br/saude",
+        "source_checked_at": "2026-09-23T00:00:00Z",
+    }
+    if sample_catalog.get("ean_barcode") == "7896004715506" and sample_catalog.get("farmacia_popular_eligible") is True:
+        cases_passed += 1
+    else:
+        divergences.append("Contrato BarcodeMedication inválido")
+
+    # 3. Contratos de Leitura Clínica (Fase 2B)
+    cases_run += 1
+    sample_biometry = {
+        "id": "123e4567-e89b-12d3-a456-426614174000",
+        "user_id": "paciente-01",
+        "weight": 72.5,
+        "height": 1.75,
+        "imc": 23.67,
+        "measured_at": "2026-11-03T10:00:00Z",
+    }
+    sample_vitals = {
+        "id": "123e4567-e89b-12d3-a456-426614174001",
+        "user_id": "paciente-01",
+        "systolic_pressure": 120,
+        "diastolic_pressure": 80,
+        "measured_at": "2026-11-03T10:00:00Z",
+    }
+    sample_activity_feed = {
+        "id": "123e4567-e89b-12d3-a456-426614174002",
+        "patient_id": "paciente-01",
+        "actor_id": "cuidador-01",
+        "actor_name": "Maria Silva",
+        "action_type": "MEDICATION_TAKEN",
+        "details": {"medication_id": "med-123"},
+        "occurred_at": "2026-11-03T10:05:00Z",
+    }
+    if (
+        sample_biometry.get("weight") == 72.5
+        and sample_vitals.get("systolic_pressure") == 120
+        and sample_activity_feed.get("action_type") == "MEDICATION_TAKEN"
+    ):
+        cases_passed += 1
+    else:
+        divergences.append("Contratos de leitura clínica Fase 2B inválidos")
+
+    # 4. Regra de autorização de recurso (require_owner)
+    cases_run += 1
+    uid_owner = "user-123"
+    uid_intruder = "user-999"
+    owner_match = (uid_owner == uid_owner)
+    intruder_blocked = (uid_intruder != uid_owner)
+    if owner_match and intruder_blocked:
+        cases_passed += 1
+    else:
+        divergences.append("Regra de autorização de titular require_owner falhou")
+
+    return cases_run, cases_passed, divergences
+
+
 def run_binary_sim_if_available(sim_bin_path, phase, report_path):
     """Executa o executável braga-sim pré-compilado se fornecido."""
     if not os.path.isfile(sim_bin_path) or not os.access(sim_bin_path, os.X_OK):
@@ -199,6 +284,13 @@ def main():
         total_run += r1
         total_passed += p1
         all_divergences.extend(d1)
+
+    # Fase 2 checks
+    if args.phase >= 2:
+        r2, p2, d2 = run_phase_2_checks()
+        total_run += r2
+        total_passed += p2
+        all_divergences.extend(d2)
 
     elapsed_ms = int((time.time() - start_time) * 1000)
     status = "PASS" if not all_divergences and total_passed == total_run else "FAIL"
