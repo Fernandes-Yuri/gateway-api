@@ -344,12 +344,61 @@ async fn main() {
         });
         let receipt_dto: Result<AgentReceiptDto, _> = serde_json::from_value(receipt_json);
 
+        let daily_json = serde_json::json!({
+            "userId": "user-001",
+            "date": "2026-11-03",
+            "steps": 8500,
+            "distanceMeters": 6200.5,
+            "caloriesBurned": 450.0,
+            "activeMinutes": 45
+        });
+        let daily_dto: Result<DailyMetricSyncDto, _> = serde_json::from_value(daily_json);
+
+        let med_log_json = serde_json::json!({
+            "userId": "user-001",
+            "medicationId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+            "takenAt": "2026-11-03T10:00:00Z",
+            "scheduledFor": "2026-11-03T10:00:00Z",
+            "unitsTaken": 2
+        });
+        let med_log_dto: Result<MedicationLogSyncDto, _> = serde_json::from_value(med_log_json);
+
+        let audit_json = serde_json::json!({
+            "userId": "user-001",
+            "eventType": "CARE_PLAN",
+            "action": "UPDATE_MEDICATION"
+        });
+        let audit_dto: Result<AuditLogSyncDto, _> = serde_json::from_value(audit_json);
+
+        let vital_json = serde_json::json!({
+            "userId": "user-001",
+            "systolicPressure": 120,
+            "diastolicPressure": 80,
+            "measuredAt": "2026-11-03T10:00:00Z"
+        });
+        let vital_dto: Result<VitalSignSyncDto, _> = serde_json::from_value(vital_json);
+
+        let sync_resp_json = serde_json::json!({
+            "status": "success",
+            "id": "11111111-1111-1111-1111-111111111111",
+            "medicationContract": 2
+        });
+        let sync_resp: Result<SyncResponse, _> = serde_json::from_value(sync_resp_json);
+
         if bio_dto.is_ok()
             && med_dto.is_ok()
             && receipt_dto.is_ok()
+            && daily_dto.is_ok()
+            && med_log_dto.is_ok()
+            && audit_dto.is_ok()
+            && vital_dto.is_ok()
+            && sync_resp.is_ok()
             && bio_dto.unwrap().weight == 75.5
             && med_dto.unwrap().name == "Losartana Potassica 50mg"
             && receipt_dto.unwrap().action == "REGISTRAR_PRESSAO"
+            && daily_dto.unwrap().steps == 8500
+            && med_log_dto.unwrap().units_taken == 2
+            && sync_resp.unwrap().medication_contract == Some(2)
         {
             passed += 1;
         } else {
