@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::header::{HeaderMap, HeaderName, HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
-use axum::http::{Method, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{any, get, post};
 use axum::Router;
