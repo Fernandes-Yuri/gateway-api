@@ -11,30 +11,28 @@
 O Gateway opera em uma **pilha híbrida balanceada**, projetada para aliar a extrema performance e segurança de memória do Rust com a flexibilidade do ecossistema Python para processamento de IA e regras clínicas:
 
 ```mermaid
-flowchart LR
-    App[App Android] --> CF[Cloudflare Tunnel]
-    CF --> Edge["Borda Nativa Rust (:8081)<br/>braga-edge"]
+flowchart TD
+    App["📱 App Android Braga Saúde"] --> CF["🛡️ Cloudflare Tunnel"]
+    CF --> Edge["⚡ Borda Nativa Rust (:8081)<br/>(braga-edge)"]
     
-    subgraph RustEdge ["Borda Rust (Alta Performance)"]
-        Edge --> RouteHealth["/health, /, /api/app/*"]
-        Edge --> CatalogCache["Catálogo ANVISA (Cache Moka)"]
-        Edge --> ReadRoutes["Leituras Clínicas (Vitais, Biometria, Logs)"]
-        Edge --> Limiter["Rate Limiting Centralizado"]
-        Edge --> JWT["Validação JWT Firebase RS256"]
+    subgraph Borda ["Borda de Alta Performance (Rust / Axum)"]
+        Edge --> B1["/health & /api/app/* (Respostas Instantâneas)"]
+        Edge --> B2["Catálogo ANVISA (Cache Moka em Memória)"]
+        Edge --> B3["Leituras Clínicas (Vitais, Biometria, Logs)"]
+        Edge --> B4["Rate Limiter Centralizado & Validação JWT"]
     end
     
-    Edge -->|Socket Unix / Proxy Reverso| PyBackend["Backend Python FastAPI (:8080)"]
+    Edge -->|Proxy Reverso / Socket Unix| Py["🐍 Core de Aplicação Python (:8080)<br/>(FastAPI / Gunicorn)"]
     
-    subgraph PythonCore ["Core Python (Inteligência & Negócio)"]
-        PyBackend --> LLM["Groq AI (Llama 3.3 / Qwen)"]
-        PyBackend --> Voice["Orb Streaming WebSocket"]
-        PyBackend --> E2EE["Blind Relay Chat Familiar"]
-        PyBackend --> Push["FCM Notificações & Emails"]
-        PyBackend --> Admin["Portal Administrativo / D-WS1"]
+    subgraph Backend ["Inteligência & Regras de Negócio (Python)"]
+        Py --> P1["Assistente Clínico & LLMs (Groq AI)"]
+        Py --> P2["Voz Streaming WebSocket (Orb)"]
+        Py --> P3["Blind Relay E2EE (Chat Familiar)"]
+        Py --> P4["Push FCM & Background Workers"]
     end
-
-    RustEdge --> DB[(PostgreSQL RDS)]
-    PythonCore --> DB
+    
+    B3 --> DB[("🗄️ PostgreSQL RDS (AWS gp3)<br/>ALE AES-256-GCM + Blind Index")]
+    Py --> DB
 ```
 
 ### 1. Borda Nativa em Rust (`rust/crates/braga-edge`)
