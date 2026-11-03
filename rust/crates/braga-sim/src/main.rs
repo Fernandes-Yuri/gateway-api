@@ -157,7 +157,7 @@ async fn main() {
         executed += 1;
         // Caso 2.1: Validação de EAN-13 numérico
         let valid_ean = "7896004715506";
-        let invalid_eans = vec!["123", "789600471550", "78960047155060", "789600471550A"];
+        let invalid_eans = ["123", "789600471550", "78960047155060", "789600471550A"];
         let valid_ok = valid_ean.len() == 13 && valid_ean.chars().all(|c| c.is_ascii_digit());
         let invalids_ok = invalid_eans
             .iter()
@@ -208,10 +208,10 @@ async fn main() {
         let uid1 = "usuario-titular-001";
         let uid2 = "usuario-intruso-002";
         let owner_ok = require_owner(uid1, uid1).is_ok();
-        let intruder_err = match require_owner(uid2, uid1) {
-            Err(IdentityError::ResourceForbidden) => true,
-            _ => false,
-        };
+        let intruder_err = matches!(
+            require_owner(uid2, uid1),
+            Err(IdentityError::ResourceForbidden)
+        );
         if owner_ok && intruder_err {
             passed += 1;
         } else {
