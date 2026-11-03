@@ -11,11 +11,13 @@ use axum::routing::{any, get, post};
 use axum::Router;
 use braga_contracts::{
     compute_imc, compute_occurrence_id, format_agent_closing, height_in_meters,
-    is_valid_agent_action, normalize_schedule_times, ActivityFeedRecord, AgentReceiptDto,
-    AgentReceiptResponse, AppUnavailableResponse, AuditLogSyncDto, BarcodeMedication,
-    BiometryRecord, BiometrySyncDto, DailyMetricRecord, DailyMetricSyncDto, HealthResponse,
-    HttpErrorResponse, LandingResponse, MedicationLogRecord, MedicationLogSyncDto,
-    MedicationRecord, MedicationSyncDto, SyncResponse, VitalSignRecord, VitalSignSyncDto,
+    is_valid_agent_action, is_websocket_upgrade_headers, normalize_schedule_times,
+    ActivityFeedRecord, AgentReceiptDto, AgentReceiptResponse, AppUnavailableResponse,
+    AudioRetiredResponse, AuditLogSyncDto, BarcodeMedication, BiometryRecord, BiometrySyncDto,
+    DailyMetricRecord, DailyMetricSyncDto, HealthResponse, HttpErrorResponse, LandingResponse,
+    MedicationLogRecord, MedicationLogSyncDto, MedicationRecord, MedicationSyncDto, OrbChatRequest,
+    OrbErrorCode, OrbErrorResponse, OrbMessage, OrbRole, SyncResponse, VitalSignRecord,
+    VitalSignSyncDto,
 };
 use braga_identity::{
     check_user_moderation, require_family_access, require_owner, require_patient_permission,
@@ -67,6 +69,9 @@ pub struct CliArgs {
 
     #[arg(long, env = "VITALS_WRITE_ENABLED", default_value_t = false)]
     pub vitals_write_enabled: bool,
+
+    #[arg(long, env = "ORB_WS_ENABLED", default_value_t = true)]
+    pub orb_ws_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -80,6 +85,7 @@ pub struct AppState {
     pub read_routes_enabled: bool,
     pub write_routes_enabled: bool,
     pub vitals_write_enabled: bool,
+    pub orb_ws_enabled: bool,
 }
 
 #[tokio::main]
@@ -135,6 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         read_routes_enabled: args.read_routes_enabled,
         write_routes_enabled: args.write_routes_enabled,
         vitals_write_enabled: args.vitals_write_enabled,
+        orb_ws_enabled: args.orb_ws_enabled,
     });
 
     let mut app = Router::new()
@@ -156,6 +163,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/app/notify-update",
             post(apk_retired_handler).options(options_cors_handler),
+        )
+        // Fase 4: Áudio Legado Aposentado (410 Gone)
+        .route(
+            "/synthesize_voice",
+            post(audio_retired_handler).options(options_cors_handler),
+        )
+        .route(
+            "/v1/audio/speech",
+            get(audio_retired_handler)
+                .post(audio_retired_handler)
+                .options(options_cors_handler),
         )
         // Fase 2A: Catálogo ANVISA e Cache Moka
         .route(
@@ -196,6 +214,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if args.vitals_write_enabled {
             app = app.route("/api/sync/vitals", post(sync_vitals_handler));
         }
+    }
+
+    // Fase 4: Orb WebSocket Transport
+    if args.orb_ws_enabled {
+        app = app.route("/ws/orb", get(ws_orb_handler));
     }
 
     let app = app
@@ -267,6 +290,163 @@ async fn options_cors_handler() -> impl IntoResponse {
         HeaderValue::from_static("*"),
     );
     (StatusCode::NO_CONTENT, headers)
+}
+
+async fn audio_retired_handler() -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("access-control-allow-origin"),
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        HeaderName::from_static("access-control-allow-methods"),
+        HeaderValue::from_static("GET, OPTIONS, POST"),
+    );
+    (
+        StatusCode::GONE,
+        headers,
+        Json(AudioRetiredResponse::default()),
+    )
+}
+
+async fn ws_orb_handler(State(state): State<Arc<AppState>>, mut req: Request) -> Response {
+    let client_ip = req
+        .headers()
+        .get("cf-connecting-ip")
+        .or_else(|| req.headers().get("x-forwarded-for"))
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+
+    let (blocked, rem) = state.limiter.is_ip_blocked(&client_ip).await;
+    if blocked {
+        let mut resp = Response::new(Body::from(format!(
+            "{{\"detail\":\"Acesso bloqueado por 24 horas para este IP.\",\"retry_after\":{rem}}}"
+        )));
+        *resp.status_mut() = StatusCode::FORBIDDEN;
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        return resp;
+    }
+
+    let connection_hdr = req
+        .headers()
+        .get("connection")
+        .and_then(|v| v.to_str().ok());
+    let upgrade_hdr = req.headers().get("upgrade").and_then(|v| v.to_str().ok());
+    if !is_websocket_upgrade_headers(connection_hdr, upgrade_hdr) {
+        let mut resp = Response::new(Body::from(
+            "{\"detail\":\"Upgrade to WebSocket required.\"}",
+        ));
+        *resp.status_mut() = StatusCode::UPGRADE_REQUIRED;
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        return resp;
+    }
+
+    let identity = match authenticate_request(req.headers(), &state, "GET", "/ws/orb").await {
+        Ok(id) => id,
+        Err(err_resp) => return err_resp,
+    };
+
+    let header_keys: Vec<HeaderName> = req
+        .headers()
+        .keys()
+        .filter(|k| k.as_str().starts_with("x-internal-"))
+        .cloned()
+        .collect();
+    for k in header_keys {
+        req.headers_mut().remove(&k);
+    }
+
+    if let Ok(val) = HeaderValue::from_str(&identity.uid) {
+        req.headers_mut()
+            .insert(HeaderName::from_static("x-internal-uid"), val);
+    }
+    if let Ok(val) = HeaderValue::from_str(&identity.auth_time.to_string()) {
+        req.headers_mut()
+            .insert(HeaderName::from_static("x-internal-auth-time"), val);
+    }
+    if let Ok(val) = HeaderValue::from_str(&client_ip) {
+        req.headers_mut()
+            .insert(HeaderName::from_static("x-internal-client-ip"), val);
+    }
+
+    let client_upgrade = hyper::upgrade::on(&mut req);
+
+    let stream = match UnixStream::connect(&state.backend_sock).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!(
+                "Falha ao conectar no socket do backend {:?}: {e}",
+                state.backend_sock
+            );
+            let mut resp = Response::new(Body::from("{\"detail\":\"Bad Gateway\"}"));
+            *resp.status_mut() = StatusCode::BAD_GATEWAY;
+            resp.headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            return resp;
+        }
+    };
+
+    let io = TokioIo::new(stream);
+    let (mut sender, conn) = match hyper::client::conn::http1::handshake(io).await {
+        Ok(res) => res,
+        Err(e) => {
+            error!("Handshake HTTP/1 com backend Unix falhou: {e}");
+            let mut resp = Response::new(Body::from("{\"detail\":\"Bad Gateway\"}"));
+            *resp.status_mut() = StatusCode::BAD_GATEWAY;
+            resp.headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            return resp;
+        }
+    };
+
+    tokio::spawn(async move {
+        if let Err(err) = conn.with_upgrades().await {
+            warn!("Conexao upgrade com backend encerrou: {err:?}");
+        }
+    });
+
+    let mut backend_resp = match sender.send_request(req).await {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Erro enviando requisição ao backend: {e}");
+            let mut resp = Response::new(Body::from("{\"detail\":\"Bad Gateway\"}"));
+            *resp.status_mut() = StatusCode::BAD_GATEWAY;
+            resp.headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            return resp;
+        }
+    };
+
+    if backend_resp.status() == StatusCode::SWITCHING_PROTOCOLS {
+        let backend_upgrade = hyper::upgrade::on(&mut backend_resp);
+        tokio::spawn(async move {
+            match tokio::try_join!(client_upgrade, backend_upgrade) {
+                Ok((client_upgraded, backend_upgraded)) => {
+                    let mut client_io = TokioIo::new(client_upgraded);
+                    let mut backend_io = TokioIo::new(backend_upgraded);
+                    if let Err(e) =
+                        tokio::io::copy_bidirectional(&mut client_io, &mut backend_io).await
+                    {
+                        warn!("WebSocket tunnel /ws/orb encerrou: {e}");
+                    }
+                }
+                Err(err) => {
+                    warn!("Falha no handshake de upgrade do WebSocket: {err}");
+                }
+            }
+        });
+    }
+
+    backend_resp.into_response()
 }
 
 async fn proxy_to_backend(
@@ -364,6 +544,8 @@ async fn proxy_to_backend(
             .insert(HeaderName::from_static("x-internal-client-ip"), val);
     }
 
+    let client_upgrade = hyper::upgrade::on(&mut req);
+
     // 5. Encaminha para o socket Unix privado
     let stream = match UnixStream::connect(&state.backend_sock).await {
         Ok(s) => s,
@@ -382,15 +564,35 @@ async fn proxy_to_backend(
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
 
     tokio::spawn(async move {
-        if let Err(err) = conn.await {
+        if let Err(err) = conn.with_upgrades().await {
             warn!("Conexao com backend encerrou com erro: {err:?}");
         }
     });
 
-    let resp = sender
+    let mut resp = sender
         .send_request(req)
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    if resp.status() == StatusCode::SWITCHING_PROTOCOLS {
+        let backend_upgrade = hyper::upgrade::on(&mut resp);
+        tokio::spawn(async move {
+            match tokio::try_join!(client_upgrade, backend_upgrade) {
+                Ok((client_upgraded, backend_upgraded)) => {
+                    let mut client_io = TokioIo::new(client_upgraded);
+                    let mut backend_io = TokioIo::new(backend_upgraded);
+                    if let Err(e) =
+                        tokio::io::copy_bidirectional(&mut client_io, &mut backend_io).await
+                    {
+                        warn!("WebSocket tunnel encerrou no fallback proxy: {e}");
+                    }
+                }
+                Err(err) => {
+                    warn!("Erro no upgrade HTTP no fallback proxy: {err}");
+                }
+            }
+        });
+    }
 
     Ok(resp.into_response())
 }

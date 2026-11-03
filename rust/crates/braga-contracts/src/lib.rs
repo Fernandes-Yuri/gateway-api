@@ -528,3 +528,146 @@ pub fn compute_occurrence_id(
     let name = format!("{}/{}/{}", patient_id, canonical_medication, utc_text);
     uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, name.as_bytes())
 }
+
+// =========================================================================
+// Contratos e DTOs da Fase 4: Orb WebSocket e Áudio Aposentado
+// =========================================================================
+
+/// Resposta 410 Gone para endpoints de áudio/TTS desativados no backend.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AudioRetiredResponse {
+    pub status: String,
+    pub tts_engine: String,
+    pub available: bool,
+    pub detail: String,
+}
+
+impl Default for AudioRetiredResponse {
+    fn default() -> Self {
+        Self {
+            status: "retired".to_string(),
+            tts_engine: "android_native_tts".to_string(),
+            available: false,
+            detail: "Síntese vocal desativada no servidor: migrada para TextToSpeech nativo no aplicativo Android.".to_string(),
+        }
+    }
+}
+
+/// Papel de mensagem no Orb WebSocket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OrbRole {
+    User,
+    Assistant,
+    System,
+}
+
+/// Mensagem individual no envelope do Orb.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrbMessage {
+    pub role: OrbRole,
+    pub content: String,
+}
+
+fn default_orb_temperature() -> f64 {
+    0.65
+}
+
+fn default_orb_max_tokens() -> u32 {
+    350
+}
+
+/// Requisição de chat recebida via WebSocket no /ws/orb.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrbChatRequest {
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    pub id: String,
+    pub messages: Vec<OrbMessage>,
+    #[serde(default)]
+    pub user_id: Option<String>,
+    #[serde(default = "default_orb_temperature")]
+    pub temperature: f64,
+    #[serde(default = "default_orb_max_tokens")]
+    pub max_tokens: u32,
+    #[serde(default)]
+    pub acting_as: Option<String>,
+    #[serde(default)]
+    pub patient_id: Option<String>,
+    #[serde(default)]
+    pub nlu_context: Option<serde_json::Value>,
+}
+
+/// Códigos canônicos de erro do Orb WebSocket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum OrbErrorCode {
+    InvalidRequest,
+    Busy,
+    Forbidden,
+    AuthExpired,
+    Timeout,
+    StreamFailed,
+}
+
+/// Mensagem de erro transmitida ao cliente WebSocket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrbErrorResponse {
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    pub id: String,
+    pub code: OrbErrorCode,
+    pub message: String,
+}
+
+/// Verifica se os headers HTTP caracterizam um handshake válido de upgrade para WebSocket.
+pub fn is_websocket_upgrade_headers(connection: Option<&str>, upgrade: Option<&str>) -> bool {
+    let has_upgrade_conn = connection
+        .map(|c| {
+            c.split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("upgrade"))
+        })
+        .unwrap_or(false);
+    let has_ws_upgrade = upgrade
+        .map(|u| u.trim().eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
+    has_upgrade_conn && has_ws_upgrade
+}
+
+/// Valida requisição de chat do Orb conforme protocolo da Fase 4.
+pub fn validate_orb_chat_request(
+    req: &OrbChatRequest,
+    authenticated_uid: &str,
+    raw_len: usize,
+) -> Result<(), &'static str> {
+    if raw_len > 64_000 {
+        return Err("Tamanho total excede 64.000 caracteres.");
+    }
+    if req.msg_type != "chat" {
+        return Err("Tipo de mensagem deve ser 'chat'.");
+    }
+    if req.id.is_empty() || req.id.len() > 128 {
+        return Err("id deve ter entre 1 e 128 caracteres.");
+    }
+    if req.messages.is_empty() || req.messages.len() > 100 {
+        return Err("messages deve conter entre 1 e 100 itens.");
+    }
+    for m in &req.messages {
+        if m.content.len() > 16_000 {
+            return Err("Mensagem excede limite de 16.000 caracteres.");
+        }
+    }
+    if !(0.0..=2.0).contains(&req.temperature) {
+        return Err("temperature deve estar entre 0.0 e 2.0.");
+    }
+    if req.max_tokens < 1 || req.max_tokens > 1024 {
+        return Err("max_tokens deve estar entre 1 e 1024.");
+    }
+    if let Some(ref uid) = req.user_id {
+        if uid != authenticated_uid {
+            return Err("FORBIDDEN: Conta não autorizada.");
+        }
+    }
+    Ok(())
+}

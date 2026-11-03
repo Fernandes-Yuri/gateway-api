@@ -3,9 +3,11 @@ use std::time::Instant;
 
 use braga_contracts::{
     compute_imc, compute_occurrence_id, format_agent_closing, height_in_meters,
-    is_valid_agent_action, normalize_schedule_times, AgentReceiptDto, AuditLogSyncDto,
+    is_valid_agent_action, is_websocket_upgrade_headers, normalize_schedule_times,
+    validate_orb_chat_request, AgentReceiptDto, AudioRetiredResponse, AuditLogSyncDto,
     BarcodeMedication, BiometrySyncDto, DailyMetricSyncDto, MedicationLogSyncDto,
-    MedicationSyncDto, SyncResponse, VitalSignSyncDto,
+    MedicationSyncDto, OrbChatRequest, OrbErrorCode, OrbErrorResponse, OrbMessage, OrbRole,
+    SyncResponse, VitalSignSyncDto,
 };
 use braga_crypto::{
     compute_blind_index, decrypt_field, encrypt_field, hash_password, normalize_for_blind_index,
@@ -403,6 +405,96 @@ async fn main() {
             passed += 1;
         } else {
             divergences.push("Desserializacao dos DTOs de escrita Fase 3 falhou".to_string());
+        }
+    }
+
+    // =========================================================================
+    // FASE 4: Orb WebSocket Transport e Áudio Aposentado
+    // =========================================================================
+    if args.phase >= 4 {
+        // Caso 4.1: Contrato AudioRetiredResponse (410 Gone)
+        executed += 1;
+        let retired = AudioRetiredResponse::default();
+        let retired_json = serde_json::to_string(&retired).unwrap_or_default();
+        let retired_deserialized: Result<AudioRetiredResponse, _> =
+            serde_json::from_str(&retired_json);
+
+        if retired.status == "retired"
+            && retired.tts_engine == "android_native_tts"
+            && !retired.available
+            && retired.detail.contains("TextToSpeech nativo")
+            && retired_deserialized == Ok(retired)
+        {
+            passed += 1;
+        } else {
+            divergences.push("Contrato AudioRetiredResponse incorreto".to_string());
+        }
+
+        // Caso 4.2: Validação de handshake WebSocket Upgrade
+        executed += 1;
+        let ws1 = is_websocket_upgrade_headers(Some("keep-alive, Upgrade"), Some("websocket"));
+        let ws2 = is_websocket_upgrade_headers(Some("Upgrade"), Some("WebSocket"));
+        let ws3 = is_websocket_upgrade_headers(Some("keep-alive"), Some("websocket"));
+        let ws4 = is_websocket_upgrade_headers(Some("Upgrade"), None);
+        let ws5 = is_websocket_upgrade_headers(None, None);
+
+        if ws1 && ws2 && !ws3 && !ws4 && !ws5 {
+            passed += 1;
+        } else {
+            divergences.push("is_websocket_upgrade_headers falhou".to_string());
+        }
+
+        // Caso 4.3: OrbChatRequest e validação Zero-Trust
+        executed += 1;
+        let chat_req = OrbChatRequest {
+            msg_type: "chat".to_string(),
+            id: "req-orb-001".to_string(),
+            messages: vec![OrbMessage {
+                role: OrbRole::User,
+                content: "Gostaria de registrar minha glicemia.".to_string(),
+            }],
+            user_id: Some("paciente-777".to_string()),
+            temperature: 0.65,
+            max_tokens: 350,
+            acting_as: None,
+            patient_id: None,
+            nlu_context: None,
+        };
+
+        let val_ok = validate_orb_chat_request(&chat_req, "paciente-777", 120);
+        let val_forbidden = validate_orb_chat_request(&chat_req, "outro-paciente", 120);
+        let val_oversized = validate_orb_chat_request(&chat_req, "paciente-777", 65_000);
+
+        if val_ok.is_ok()
+            && val_forbidden == Err("FORBIDDEN: Conta não autorizada.")
+            && val_oversized == Err("Tamanho total excede 64.000 caracteres.")
+        {
+            passed += 1;
+        } else {
+            divergences.push(format!(
+                "validate_orb_chat_request divergiu: ok={:?}, forbidden={:?}",
+                val_ok, val_forbidden
+            ));
+        }
+
+        // Caso 4.4: Códigos de erro canônicos do Orb
+        executed += 1;
+        let err_resp = OrbErrorResponse {
+            msg_type: "error".to_string(),
+            id: "req-orb-001".to_string(),
+            code: OrbErrorCode::AuthExpired,
+            message: "Atualize sua sessão.".to_string(),
+        };
+        let err_json = serde_json::to_string(&err_resp).unwrap_or_default();
+        let err_deserialized: Result<OrbErrorResponse, _> = serde_json::from_str(&err_json);
+
+        if err_json.contains("\"AUTH_EXPIRED\"")
+            && err_json.contains("\"error\"")
+            && err_deserialized.as_ref().map(|r| r.code) == Ok(OrbErrorCode::AuthExpired)
+        {
+            passed += 1;
+        } else {
+            divergences.push("Desserialização de OrbErrorResponse falhou".to_string());
         }
     }
 
