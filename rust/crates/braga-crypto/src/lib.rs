@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
-use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
-use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use aes_gcm::{Aes256Gcm, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -147,7 +147,7 @@ pub fn encrypt_field(
     let mut iv = [0u8; IV_LENGTH_BYTES];
     OsRng.fill_bytes(&mut iv);
 
-    let nonce = <Aes256Gcm as AeadCore>::Nonce::from_slice(&iv);
+    let nonce = Nonce::from_slice(&iv);
     let ciphertext_with_tag = cipher
         .encrypt(nonce, text.as_bytes())
         .map_err(|e| ColumnTamperError::CipherError(e.to_string()))?;
@@ -207,7 +207,7 @@ pub fn decrypt_field(
     let cipher = Aes256Gcm::new_from_slice(&dek)
         .map_err(|e| ColumnTamperError::CipherError(e.to_string()))?;
 
-    let nonce = <Aes256Gcm as AeadCore>::Nonce::from_slice(&iv);
+    let nonce = Nonce::from_slice(&iv);
     let plaintext_bytes = cipher
         .decrypt(nonce, ciphertext_with_tag.as_slice())
         .map_err(|_| ColumnTamperError::InvalidTag)?;
@@ -388,7 +388,7 @@ pub fn verify_password(password: &str, stored_hash: Option<&str>, pepper: &[u8])
         }
 
         let needs_rehash = if let Some(params) = parsed.version {
-            params != Version::V0x13.into()
+            params != (Version::V0x13 as u32)
         } else {
             false
         };
