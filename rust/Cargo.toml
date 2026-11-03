@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/braga-contracts",
+    "crates/braga-crypto",
+    "crates/braga-identity",
+    "crates/braga-limiter",
+    "crates/braga-edge",
+    "crates/braga-sim",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Braga Saude <tech@bragasaude.com.br>"]
+license = "Proprietary"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

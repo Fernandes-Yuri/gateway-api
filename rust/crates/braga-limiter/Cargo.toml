@@ -1,0 +1,12 @@
+[package]
+name = "braga-limiter"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { version = "1.40", features = ["sync", "time", "net", "io-util", "rt"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tracing = "0.1"

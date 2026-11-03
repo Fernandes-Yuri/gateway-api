@@ -1,0 +1,60 @@
+name: CI Rust (Gateway Edge)
+
+on:
+  push:
+    branches: ['master', 'feat/**', 'fix/**', 'ops/**']
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  rust-check-and-test:
+    name: Compilação, Testes e Verificação Rust
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Instalar Rust Toolchain estável
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache de dependências Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock', 'rust/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Checagem de formatação (rustfmt)
+        working-directory: rust
+        run: cargo fmt --all -- --check
+
+      - name: Checagem estática (clippy)
+        working-directory: rust
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Testes unitários do Workspace
+        working-directory: rust
+        run: cargo test --workspace --verbose
+
+      - name: Build dos binários em modo Release
+        working-directory: rust
+        run: cargo build --release --bin braga-edge --bin braga-sim
+
+      - name: Upload dos artefatos compilados
+        uses: actions/upload-artifact@v4
+        with:
+          name: braga-rust-binaries
+          path: |
+            rust/target/release/braga-edge
+            rust/target/release/braga-sim
+          retention-days: 7

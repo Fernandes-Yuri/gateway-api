@@ -1,0 +1,30 @@
+[Unit]
+Description=Gateway Braga Saude Edge Proxy (Rust / Axum)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=ec2-user
+WorkingDirectory=/home/ec2-user/braga-gateway
+EnvironmentFile=-/run/braga-saude/gateway.env
+EnvironmentFile=-/etc/braga-saude/gateway.env
+Environment=HOST=127.0.0.1
+Environment=PORT=8080
+Environment=BACKEND_SOCK=/run/braga-saude/backend.sock
+Environment=LIMITER_SOCK=/run/braga-saude/limiter.sock
+ExecStart=/home/ec2-user/braga-gateway/bin/braga-edge \
+    --host 127.0.0.1 \
+    --port 8080 \
+    --backend-sock /run/braga-saude/backend.sock \
+    --limiter-sock /run/braga-saude/limiter.sock
+KillSignal=SIGTERM
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=3
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
