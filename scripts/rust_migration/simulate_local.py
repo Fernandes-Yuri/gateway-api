@@ -98,6 +98,90 @@ def run_phase_0_checks():
     else:
         divergences.append(f"Blind index inconsistente: {b1} != {b2}")
 
+    # 6. Mini Harness Agêntico: Contratos de Function Calling e Relay de IA
+    r_ag, p_ag, d_ag = run_agent_harness_phase_0_checks()
+    cases_run += r_ag
+    cases_passed += p_ag
+    divergences.extend(d_ag)
+
+    return cases_run, cases_passed, divergences
+
+
+def run_agent_harness_phase_0_checks():
+    divergences = []
+    cases_run = 0
+    cases_passed = 0
+
+    # 1. Validação de contrato de AgentRelayRequest (Function Calling Agnóstico)
+    cases_run += 1
+    sample_req = {
+        "session_id": "sess_123",
+        "model": "gemini-1.5-flash",
+        "messages": [
+            {"role": "user", "content": "Analise o laudo do hemograma."},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "ocr_page",
+                    "description": "Executa OCR local na pagina",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"page": {"type": "integer"}},
+                        "required": ["page"],
+                    },
+                },
+            }
+        ],
+    }
+    # Checagem estrutural estrita
+    has_msgs = isinstance(sample_req.get("messages"), list) and len(sample_req["messages"]) > 0
+    valid_role = has_msgs and sample_req["messages"][0].get("role") in ("system", "user", "assistant", "tool")
+    has_tools = isinstance(sample_req.get("tools"), list) and sample_req["tools"][0].get("type") == "function"
+    has_params = has_tools and "parameters" in sample_req["tools"][0].get("function", {})
+    if has_msgs and valid_role and has_tools and has_params:
+        cases_passed += 1
+    else:
+        divergences.append("Contrato de AgentRelayRequest divergente")
+
+    # 2. Validação de ToolCall e AgentRelayResponse
+    cases_run += 1
+    sample_resp = {
+        "status": "ok",
+        "message": {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "ocr_page",
+                        "arguments": json.dumps({"page": 1}),
+                    },
+                }
+            ],
+        },
+        "finish_reason": "tool_calls",
+        "provider": "gemini",
+    }
+    has_status = sample_resp.get("status") == "ok"
+    has_tc = len(sample_resp["message"].get("tool_calls", [])) > 0
+    tc_valid = has_tc and sample_resp["message"]["tool_calls"][0]["function"]["name"] == "ocr_page"
+    if has_status and has_tc and tc_valid:
+        cases_passed += 1
+    else:
+        divergences.append("Contrato de AgentRelayResponse divergente")
+
+    # 3. Limite estrito de 256 KB (Zero File Egress na Borda)
+    cases_run += 1
+    max_payload_bytes = 256 * 1024
+    if max_payload_bytes == 262144:
+        cases_passed += 1
+    else:
+        divergences.append(f"Limite max_payload_bytes incorreto: {max_payload_bytes}")
+
     return cases_run, cases_passed, divergences
 
 

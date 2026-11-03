@@ -42,6 +42,7 @@ from routers import emergency as emergency_router
 from routers import admin as admin_router
 from routers import care_os as care_os_router
 from routers import catalog as catalog_router
+from routers import agent_relay as agent_relay_router
 # Curadoria do dataset de fine-tuning do aplicativo.
 import core.dataset as dataset_module
 from core.dataset import (
@@ -671,6 +672,7 @@ care_os_router.configure_state(db_pool=None, public_base_url=PUBLIC_API_BASE_URL
 app.include_router(care_os_router.router)
 
 app.include_router(catalog_router.router)
+app.include_router(agent_relay_router.router)
 
 # Configuracao dos modulos core extraidos (Fase A passo 6).
 # O dataset usa o prompt canônico e o caminho configurado.

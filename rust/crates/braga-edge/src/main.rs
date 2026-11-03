@@ -650,6 +650,26 @@ async fn proxy_to_backend(
     State(state): State<Arc<AppState>>,
     mut req: Request,
 ) -> Result<Response, StatusCode> {
+    // 0. Enforça limite estrito de payload (256 KB) para o relay agêntico (Zero File Egress)
+    if req.uri().path() == "/api/ai/agent-relay" {
+        if let Some(cl) = req
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            if cl > 256 * 1024 {
+                let mut resp = Response::new(Body::from(
+                    "{\"detail\":\"Payload excede o limite máximo permitido de 256 KB. Arquivos binários não são permitidos no relay.\"}",
+                ));
+                *resp.status_mut() = StatusCode::PAYLOAD_TOO_LARGE;
+                resp.headers_mut()
+                    .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                return Ok(resp);
+            }
+        }
+    }
+
     // 1. Extração segura do IP do cliente via CF-Connecting-IP
     let client_ip = req
         .headers()

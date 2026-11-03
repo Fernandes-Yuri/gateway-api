@@ -754,3 +754,104 @@ pub struct InternalStatsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub db_pool: Option<DbPoolStatsDto>,
 }
+
+// ============================================================================
+// Protocolo Agêntico e Function Calling (Fase 0 - Mini Harness Android)
+// ============================================================================
+
+/// Papel do autor da mensagem no diálogo agêntico.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+/// Chamada de ferramenta solicitada pelo modelo de linguagem.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolCallDto {
+    pub id: String,
+    #[serde(rename = "type", default = "default_tool_type")]
+    pub r#type: String,
+    pub function: ToolCallFunctionDto,
+}
+
+fn default_tool_type() -> String {
+    "function".to_string()
+}
+
+/// Detalhes da função na chamada de ferramenta.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolCallFunctionDto {
+    pub name: String,
+    pub arguments: String,
+}
+
+/// Mensagem individual no histórico de diálogo agêntico.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentMessageDto {
+    pub role: AgentRole,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// Definição da assinatura da função de uma ferramenta.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolFunctionDefDto {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+/// Declaração completa de ferramenta no catálogo exportado ao modelo.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolDeclarationDto {
+    #[serde(rename = "type", default = "default_tool_type")]
+    pub r#type: String,
+    pub function: ToolFunctionDefDto,
+}
+
+/// Requisição de inferência agêntica para o relay (/api/ai/agent-relay).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentRelayRequest {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    pub messages: Vec<AgentMessageDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ToolDeclarationDto>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+}
+
+/// Métricas de consumo de tokens da chamada de inferência.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AgentUsageDto {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+/// Resposta de inferência do relay agêntico para o harness Android.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentRelayResponse {
+    pub status: String,
+    pub message: AgentMessageDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AgentUsageDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+}
