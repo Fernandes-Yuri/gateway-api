@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use braga_contracts::BarcodeMedication;
 use braga_crypto::{
     compute_blind_index, decrypt_field, encrypt_field, hash_password, normalize_for_blind_index,
     verify_password, ColumnTamperError,
 };
+use braga_identity::{require_owner, IdentityError};
 use braga_limiter::StrictRateLimiter;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -145,6 +147,75 @@ async fn main() {
             divergences.push(format!(
                 "Rate limiter bloqueio de 24h falhou: blocked={blocked}, is_blocked={is_blocked}"
             ));
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Casos Fase 2: Leituras, Validação EAN-13, Cache Moka e Autorização
+    // -----------------------------------------------------------------------
+    if args.phase >= 2 {
+        executed += 1;
+        // Caso 2.1: Validação de EAN-13 numérico
+        let valid_ean = "7896004715506";
+        let invalid_eans = ["123", "789600471550", "78960047155060", "789600471550A"];
+        let valid_ok = valid_ean.len() == 13 && valid_ean.chars().all(|c| c.is_ascii_digit());
+        let invalids_ok = invalid_eans
+            .iter()
+            .all(|e| e.len() != 13 || !e.chars().all(|c| c.is_ascii_digit()));
+        if valid_ok && invalids_ok {
+            passed += 1;
+        } else {
+            divergences.push("Validação de formato EAN-13 falhou".to_string());
+        }
+
+        executed += 1;
+        // Caso 2.2: Cache em memória Moka para Catálogo ANVISA
+        let cache: moka::future::Cache<String, BarcodeMedication> = moka::future::Cache::builder()
+            .max_capacity(100)
+            .time_to_live(std::time::Duration::from_secs(300))
+            .build();
+
+        let sample_med = BarcodeMedication {
+            ean_barcode: "7896004715506".to_string(),
+            name: "Losartana Potassica 50mg".to_string(),
+            active_principle: Some("Losartana Potassica".to_string()),
+            concentration: Some("50 mg".to_string()),
+            pharmaceutical_form: Some("Comprimido".to_string()),
+            manufacturer: Some("EMS".to_string()),
+            farmacia_popular_eligible: Some(true),
+            anvisa_registration_number: None,
+            source_name: "Farmacia Popular / ANVISA".to_string(),
+            source_url: None,
+            source_checked_at: "2026-09-23T00:00:00Z".to_string(),
+        };
+
+        // Miss antes de inserir
+        let before_hit = cache.get("7896004715506").await.is_none();
+        cache
+            .insert("7896004715506".to_string(), sample_med.clone())
+            .await;
+        // Hit após inserir
+        let after_hit = cache.get("7896004715506").await == Some(sample_med);
+
+        if before_hit && after_hit {
+            passed += 1;
+        } else {
+            divergences.push("Cache Moka miss/hit falhou".to_string());
+        }
+
+        executed += 1;
+        // Caso 2.3: Autorização de recurso require_owner
+        let uid1 = "usuario-titular-001";
+        let uid2 = "usuario-intruso-002";
+        let owner_ok = require_owner(uid1, uid1).is_ok();
+        let intruder_err = matches!(
+            require_owner(uid2, uid1),
+            Err(IdentityError::ResourceForbidden)
+        );
+        if owner_ok && intruder_err {
+            passed += 1;
+        } else {
+            divergences.push("require_owner autorização falhou".to_string());
         }
     }
 

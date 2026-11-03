@@ -52,6 +52,12 @@ pub enum IdentityError {
     LoginRequiredToReactivate,
     #[error("Sessão revogada. Entre novamente.")]
     SessionRevoked,
+    #[error("Esta operação pertence a outra conta.")]
+    ResourceForbidden,
+    #[error("O acompanhamento deste familiar não está autorizado.")]
+    FamilyAccessForbidden,
+    #[error("Seu vínculo não permite esta operação.")]
+    PatientPermissionForbidden,
 }
 
 /// Gerenciador em memória do cache de certificados públicos do Firebase
@@ -252,4 +258,86 @@ pub async fn check_user_moderation(
     }
 
     Ok(())
+}
+
+/// Verifica se o usuário autenticado é o próprio titular do recurso (require_owner)
+pub fn require_owner(caller_uid: &str, target_uid: &str) -> Result<(), IdentityError> {
+    if caller_uid != target_uid {
+        return Err(IdentityError::ResourceForbidden);
+    }
+    Ok(())
+}
+
+/// Verifica se o usuário autenticado tem acesso aos dados familiares (titular ou vínculo ativo)
+pub async fn require_family_access(
+    pool: &PgPool,
+    caller_uid: &str,
+    patient_id: &str,
+) -> Result<(), IdentityError> {
+    if caller_uid == patient_id {
+        return Ok(());
+    }
+
+    let allowed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM family_bindings WHERE patient_id = $1 AND caregiver_id = $2 AND status = 'ACTIVE')"
+    )
+    .bind(patient_id)
+    .bind(caller_uid)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| IdentityError::DatabaseUnavailable)?;
+
+    if !allowed {
+        return Err(IdentityError::FamilyAccessForbidden);
+    }
+
+    Ok(())
+}
+
+/// Verifica se o usuário autenticado possui permissão clínica específica no vínculo familiar
+pub async fn require_patient_permission(
+    pool: &PgPool,
+    caller_uid: &str,
+    patient_id: &str,
+    permission: &str,
+) -> Result<(), IdentityError> {
+    if caller_uid == patient_id {
+        return Ok(());
+    }
+
+    let row = sqlx::query(
+        "SELECT caregiver_role, permissions FROM family_bindings WHERE patient_id = $1 AND caregiver_id = $2 AND status = 'ACTIVE'"
+    )
+    .bind(patient_id)
+    .bind(caller_uid)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| IdentityError::DatabaseUnavailable)?;
+
+    let row = match row {
+        Some(r) => r,
+        None => return Err(IdentityError::FamilyAccessForbidden),
+    };
+
+    let role: String = row
+        .try_get("caregiver_role")
+        .unwrap_or_else(|_| "CAREGIVER_VIEWER".to_string());
+    let explicit_perms: Vec<String> = row.try_get("permissions").unwrap_or_default();
+
+    // Regras de papel canônicas (ROLE_PERMISSIONS em services/care_os.py)
+    let role_allows = match role.as_str() {
+        "CAREGIVER_ADMIN" | "ADMIN" => true,
+        "CAREGIVER_PRIMARY" => matches!(
+            permission,
+            "care:read" | "medication:write" | "vitals:write"
+        ),
+        "CAREGIVER_VIEWER" | "VIEWER" => permission == "care:read",
+        _ => false,
+    };
+
+    if role_allows || explicit_perms.iter().any(|p| p == permission || p == "*") {
+        Ok(())
+    } else {
+        Err(IdentityError::PatientPermissionForbidden)
+    }
 }
