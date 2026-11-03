@@ -1,0 +1,100 @@
+{
+  "ale_salt": "braga-saude-spec12-ale-salt-v1",
+  "ale_info_dek": "braga-saude:column-crypto:aes-256-gcm:v1",
+  "ale_info_bindex": "braga-saude:column-crypto:blind-index-hmac:v1",
+  "auth_pepper": "test-auth-pepper-secret-spec10-v1",
+  "ale_vectors": [
+    {
+      "plaintext": "Paciente Jose da Silva",
+      "ciphertext": "enc:v1:iJOHRel1VyEAWCqu:GGV3lzFZfykBkf6mG3QRVHX1B+ygp5LztaFfo/p1o7UtyqE+/A4=",
+      "blind_index": "c3b61e7bb63e2bc752837ab3f6051df5",
+      "normalized": "paciente jose da silva"
+    },
+    {
+      "plaintext": "123.456.789-00",
+      "ciphertext": "enc:v1:yXTjuoAJhEqskImv:xZpNfF/Rpy64MDLKnT+FGbG34woURE3DpGuCBn7Z",
+      "blind_index": "7106bb6d2a807e85fd7142b931429c35",
+      "normalized": "12345678900"
+    },
+    {
+      "plaintext": "(11) 98765-4321",
+      "ciphertext": "enc:v1:dd4ImyEBCbN6Le5G:R/VpZBeAgFGcmbSQwM+4mlCkf6lbgJujkuw/FVNvQQ==",
+      "blind_index": "4024f11d08ff92bfb88ccecd073930a9",
+      "normalized": "11987654321"
+    },
+    {
+      "plaintext": "+55 11 98765-4321",
+      "ciphertext": "enc:v1:l/LCdiksUOq7/k8V:kN9a2x4KbZWK0IRR1oU7r2yIvOpx2LjV2maqSPT78kQs",
+      "blind_index": "4ba50e6dfe48c4f684fcabb55bf3067f",
+      "normalized": "5511987654321"
+    },
+    {
+      "plaintext": "11987654321",
+      "ciphertext": "enc:v1:+ZP+qSCBVIa6EOx9:qGHHPARpw0y/phpyHjZ2j782Zsf+JhmgZUap",
+      "blind_index": "4024f11d08ff92bfb88ccecd073930a9",
+      "normalized": "11987654321"
+    },
+    {
+      "plaintext": "hipertensao arterial primaria",
+      "ciphertext": "enc:v1:dtndZOmgMijozeRJ:8LJ62bE09vz/yfPQ4uaG4M/7AJanX0IdWuvZfq6dme2APKan52TnLf/yTqRm",
+      "blind_index": "4360b32872904a6797bce6cbe73889eb",
+      "normalized": "hipertensao arterial primaria"
+    },
+    {
+      "plaintext": "Acentuação: áéíóú çãõ âêîôû",
+      "ciphertext": "enc:v1:Ra3DJbFCogrc1MQ0:QJGpwLfABCssLBBcRKt1JcQy41S3vs7YlUTwUDC/NNlBibJvYhIcWfpfbldiQBsNjr7vKOwNlguWnQ==",
+      "blind_index": "f9d17c21c9074ab580c63cc76e5f0611",
+      "normalized": "acentuação: áéíóú çãõ âêîôû"
+    },
+    {
+      "plaintext": "Emoji: 💊🩺🏥",
+      "ciphertext": "enc:v1:RcTbmlZmZFSfbJnN:4zy7b6CWWpzIZtDwJeedFqcbNsDdS+N86bJddMhms+Ilx5M=",
+      "blind_index": "5049737b57ffc4a058838dc72aec6bef",
+      "normalized": "emoji: 💊🩺🏥"
+    },
+    {
+      "plaintext": "Texto com múltiplos   espaços    em   branco",
+      "ciphertext": "enc:v1:yqDmEh4mt1JG5xbL:n+U+uBieCSfW5Qz3yz65bWx2CnyUw9gT+DEDvWKFr27mD0EXjugqpCkErmmYxvNHA3Mp3jvOhL+BOcvkA0Q=",
+      "blind_index": "dc7a9d04a005ebfce7fcf54f514866d5",
+      "normalized": "texto com múltiplos espaços em branco"
+    },
+    {
+      "plaintext": "   espacos nas bordas   ",
+      "ciphertext": "enc:v1:Hg/l5AqKqDj98NRv:0bnHJEb3LQBEZtSMS+moGrgGPl8faUxgu1KMcHrqIQnfpQ8PYRoZvw==",
+      "blind_index": "1d4d6ae033baea58c38388a1f54277e8",
+      "normalized": "espacos nas bordas"
+    },
+    {
+      "plaintext": "",
+      "ciphertext": "",
+      "blind_index": "",
+      "normalized": ""
+    },
+    {
+      "plaintext": "Short",
+      "ciphertext": "enc:v1:jRSnvUhAihr7r55B:cvyJ4uTxdji/U8/VjlUmdcomoI5a",
+      "blind_index": "e073a11d550b9c035d4061afd18cd0f0",
+      "normalized": "short"
+    },
+    {
+      "plaintext": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ciphertext": "enc:v1:VXLxgOpLf55Ym5zH:9V9v+FSujoLHGYv0l5Ooz6ADecQGzG8NnY/RnCLXoRL7zRb4UBILMrZQZrM+gtn6U1crdxcpOhB3Nh1zCu0XEDbpor+Q5pm++5D67axccFB0ye2e8v8owcNWn/M6GGUQ0QSNX4Vt9tmsc9uqJjzG60LBaDvDQMfyh90GeZboIexwI0i1ZyavMHAyxRK/E32++XnYS3nnK23+3S2ZBe2vdkY1ua0QyMhIKDBxa73W04+3d0ru5BJqjXqICO54sJXN5pIx9nkbRsemnHWfvDK6S80VSEtBkLo32OyffL3d18m1J1FbyNqrXNs2AP9o0vErRjS4ClX3FwaXtwgWwUaVGBlPGly/S2ZO1her6x7uf/vMNUbkv0miPuovHho2dfQYM8QKtikP3V0TKHeh65/goLXn92wiGQgLQATHIGX7bNprILUloYo0FSr0exRf9TY53L3wrRA8WIjDKg1io8b4e0RaSWu+IUno3vqFMMuzoUQqEYlNhvRq2QakAZkEzCOOsRp3nGORMvgl1i5xIVPbNHtNIt/v7X48xM2bkaB5/kS0qdKGVrMzL9wU6u+UsKgv3nBLL7Lp5FzgLfejin6HZz7FU6T8CA5EqlSQ7rSYaHuzRTHWn00AXTFv/Au93vaElosvJYR3omfiz+Bt8x5pJHNTCZ09268JD9ksCVSHAFyLZxVn",
+      "blind_index": "e4c39dd2afb2df3e2dfb1fb7b945cffa",
+      "normalized": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "auth_vectors": [
+    {
+      "password": "senha-simples-123",
+      "hash": "$argon2id$v=19$m=65536,t=3,p=2$q3/J9D0eK2O1d8C5M5w3EA$b5sF7Uq8O+xX9Fv4Y9f2H5u8K1l4P7o0N3m6R9t2W5y",
+      "valid": true,
+      "needs_rehash": false
+    },
+    {
+      "password": "admin-legacy-bcrypt",
+      "hash": "$2b$12$e8Of4vO.aHh8QY.P7fM.mO7m8n9o0p1q2r3s4t5u6v7w8x9y0z1a",
+      "valid": true,
+      "needs_rehash": true
+    }
+  ]
+}

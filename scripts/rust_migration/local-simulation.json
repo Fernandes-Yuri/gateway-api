@@ -1,0 +1,23 @@
+{
+  "identity": {
+    "repository": "Fernandes-Yuri/gateway-api",
+    "candidate_sha": "62f838ca2ef4e9a6452c2372df1883e69469a4ef",
+    "phase": 1,
+    "timestamp_utc": "2026-11-03T13:56:02Z"
+  },
+  "results": {
+    "status": "PASS",
+    "cases_executed": 9,
+    "cases_passed": 9,
+    "divergences": []
+  },
+  "resources": {
+    "duration_ms": 7,
+    "max_cpu_limit": 1,
+    "max_rss_mb_limit": 256
+  },
+  "provenance": {
+    "operator": "jota1",
+    "environment": "linux"
+  }
+}
