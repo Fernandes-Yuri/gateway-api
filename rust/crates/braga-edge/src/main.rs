@@ -16,7 +16,7 @@ use braga_contracts::{
 };
 use braga_identity::{
     check_user_moderation, require_family_access, require_owner, require_patient_permission,
-    verify_firebase_id_token, FirebaseCertCache, IdentityError, VerifiedIdentity,
+    verify_firebase_id_token, FirebaseCertCache, VerifiedIdentity,
 };
 use braga_limiter::{run_limiter_ipc_socket, StrictRateLimiter};
 use chrono::{DateTime, Utc};
@@ -390,6 +390,7 @@ pub struct ActivityFeedQuery {
     pub limit: Option<i64>,
 }
 
+#[allow(clippy::result_large_err)]
 async fn authenticate_request(
     headers: &HeaderMap,
     state: &AppState,
@@ -580,7 +581,7 @@ async fn biometry_handler(
             Err(resp) => return resp,
         };
 
-    if let Err(_) = require_owner(&identity.uid, &user_id) {
+    if require_owner(&identity.uid, &user_id).is_err() {
         let mut resp = Response::new(Body::from(
             "{\"detail\":\"Esta operação pertence a outra conta.\"}",
         ));
@@ -674,7 +675,10 @@ async fn vitals_handler(
         }
     };
 
-    if let Err(_) = require_family_access(pool, &identity.uid, &user_id).await {
+    if require_family_access(pool, &identity.uid, &user_id)
+        .await
+        .is_err()
+    {
         let mut resp = Response::new(Body::from(
             "{\"detail\":\"O acompanhamento deste familiar não está autorizado.\"}",
         ));
@@ -782,7 +786,7 @@ async fn daily_metrics_handler(
         Err(resp) => return resp,
     };
 
-    if let Err(_) = require_owner(&identity.uid, &user_id) {
+    if require_owner(&identity.uid, &user_id).is_err() {
         let mut resp = Response::new(Body::from(
             "{\"detail\":\"Esta operação pertence a outra conta.\"}",
         ));
@@ -900,7 +904,7 @@ async fn medications_handler(
         Err(resp) => return resp,
     };
 
-    if let Err(_) = require_owner(&identity.uid, &user_id) {
+    if require_owner(&identity.uid, &user_id).is_err() {
         let mut resp = Response::new(Body::from(
             "{\"detail\":\"Esta operação pertence a outra conta.\"}",
         ));
@@ -994,7 +998,7 @@ async fn medication_logs_handler(
         Err(resp) => return resp,
     };
 
-    if let Err(_) = require_owner(&identity.uid, &user_id) {
+    if require_owner(&identity.uid, &user_id).is_err() {
         let mut resp = Response::new(Body::from(
             "{\"detail\":\"Esta operação pertence a outra conta.\"}",
         ));
@@ -1097,7 +1101,9 @@ async fn activity_feed_handler(
         }
     };
 
-    if let Err(_) = require_patient_permission(pool, &identity.uid, &patient_id, "care:read").await
+    if require_patient_permission(pool, &identity.uid, &patient_id, "care:read")
+        .await
+        .is_err()
     {
         let mut resp = Response::new(Body::from(
             "{\"detail\":\"Seu vínculo não permite esta operação.\"}",
