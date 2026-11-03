@@ -4,11 +4,12 @@ use std::time::Instant;
 use braga_contracts::{
     compute_imc, compute_occurrence_id, format_agent_closing, height_in_meters,
     is_valid_agent_action, is_websocket_upgrade_headers, normalize_schedule_times,
-    validate_orb_chat_request, AgentReceiptDto, AudioRetiredResponse, AuditLogSyncDto,
-    BarcodeMedication, BiometrySyncDto, ComponentStatus, DailyMetricSyncDto, DbPoolStatsDto,
-    FeatureFlagsDto, InternalStatsResponse, MedicationLogSyncDto, MedicationSyncDto,
-    OrbChatRequest, OrbErrorCode, OrbErrorResponse, OrbMessage, OrbRole, ReadinessResponse,
-    SyncResponse, VitalSignSyncDto,
+    validate_orb_chat_request, AgentMessageDto, AgentReceiptDto, AgentRelayRequest,
+    AgentRelayResponse, AgentRole, AudioRetiredResponse, AuditLogSyncDto, BarcodeMedication,
+    BiometrySyncDto, ComponentStatus, DailyMetricSyncDto, DbPoolStatsDto, FeatureFlagsDto,
+    InternalStatsResponse, MedicationLogSyncDto, MedicationSyncDto, OrbChatRequest, OrbErrorCode,
+    OrbErrorResponse, OrbMessage, OrbRole, ReadinessResponse, SyncResponse, ToolCallDto,
+    ToolCallFunctionDto, ToolDeclarationDto, ToolFunctionDefDto, VitalSignSyncDto,
 };
 use braga_crypto::{
     compute_blind_index, decrypt_field, encrypt_field, hash_password, normalize_for_blind_index,
@@ -596,6 +597,67 @@ async fn main() {
             passed += 1;
         } else {
             divergences.push("Desserialização de FeatureFlagsDto falhou".to_string());
+        }
+
+        // Caso 5.5: Mini Harness Agêntico - Contratos Function Calling e Relay de IA
+        executed += 1;
+        let sample_agent_req = AgentRelayRequest {
+            session_id: Some("session-123".to_string()),
+            model: Some("gemini-1.5-flash".to_string()),
+            messages: vec![AgentMessageDto {
+                role: AgentRole::User,
+                content: Some("Classifique o exame em anexo.".to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            }],
+            tools: Some(vec![ToolDeclarationDto {
+                r#type: "function".to_string(),
+                function: ToolFunctionDefDto {
+                    name: "ocr_page".to_string(),
+                    description: "Executa OCR local na página".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": { "page": { "type": "integer" } },
+                        "required": ["page"]
+                    }),
+                },
+            }]),
+            temperature: Some(0.0),
+            max_tokens: Some(1024),
+        };
+
+        let req_json = serde_json::to_string(&sample_agent_req).unwrap_or_default();
+        let req_deser: Result<AgentRelayRequest, _> = serde_json::from_str(&req_json);
+
+        let sample_agent_resp = AgentRelayResponse {
+            status: "ok".to_string(),
+            message: AgentMessageDto {
+                role: AgentRole::Assistant,
+                content: None,
+                tool_calls: Some(vec![ToolCallDto {
+                    id: "call_abc123".to_string(),
+                    r#type: "function".to_string(),
+                    function: ToolCallFunctionDto {
+                        name: "ocr_page".to_string(),
+                        arguments: "{\"page\": 1}".to_string(),
+                    },
+                }]),
+                tool_call_id: None,
+                name: None,
+            },
+            finish_reason: Some("tool_calls".to_string()),
+            usage: None,
+            provider: Some("gemini".to_string()),
+        };
+
+        let resp_json = serde_json::to_string(&sample_agent_resp).unwrap_or_default();
+        let resp_deser: Result<AgentRelayResponse, _> = serde_json::from_str(&resp_json);
+
+        if req_deser.ok() == Some(sample_agent_req) && resp_deser.ok() == Some(sample_agent_resp) {
+            passed += 1;
+        } else {
+            divergences.push("Contrato de AgentRelayRequest/Response falhou".to_string());
         }
     }
 
