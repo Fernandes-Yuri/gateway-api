@@ -112,6 +112,13 @@ async fn main() {
         Err(e) => divergences.push(format!("Erro hash password: {e}")),
     }
 
+    executed += 1;
+    // Caso 0.6: Cálculo do Blind Index
+    match compute_blind_index(Some("Teste Blind Index"), None, None) {
+        Ok(Some(bi)) if bi.len() == 32 => passed += 1,
+        other => divergences.push(format!("Blind index computation falhou: {:?}", other)),
+    }
+
     // -----------------------------------------------------------------------
     // Casos Fase 1: Rate Limiter e Bloqueio de IP
     // -----------------------------------------------------------------------
