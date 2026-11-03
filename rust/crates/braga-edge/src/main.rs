@@ -27,10 +27,18 @@ pub struct CliArgs {
     #[arg(long, env = "HOST", default_value = "127.0.0.1")]
     pub host: String,
 
-    #[arg(long, env = "BACKEND_SOCK", default_value = "/run/braga-saude/backend.sock")]
+    #[arg(
+        long,
+        env = "BACKEND_SOCK",
+        default_value = "/run/braga-saude/backend.sock"
+    )]
     pub backend_sock: PathBuf,
 
-    #[arg(long, env = "LIMITER_SOCK", default_value = "/run/braga-saude/limiter.sock")]
+    #[arg(
+        long,
+        env = "LIMITER_SOCK",
+        default_value = "/run/braga-saude/limiter.sock"
+    )]
     pub limiter_sock: PathBuf,
 
     #[arg(long, env = "DATABASE_URL")]
@@ -98,10 +106,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Rotas públicas servidas diretamente pela borda nativa
         .route("/health", get(health_handler))
         .route("/", get(landing_handler))
-        .route("/api/app/latest", get(apk_retired_handler).options(options_cors_handler))
-        .route("/api/app/download", get(apk_retired_handler).options(options_cors_handler))
-        .route("/api/app/version", get(apk_retired_handler).options(options_cors_handler))
-        .route("/api/app/notify-update", post(apk_retired_handler).options(options_cors_handler))
+        .route(
+            "/api/app/latest",
+            get(apk_retired_handler).options(options_cors_handler),
+        )
+        .route(
+            "/api/app/download",
+            get(apk_retired_handler).options(options_cors_handler),
+        )
+        .route(
+            "/api/app/version",
+            get(apk_retired_handler).options(options_cors_handler),
+        )
+        .route(
+            "/api/app/notify-update",
+            post(apk_retired_handler).options(options_cors_handler),
+        )
         // Fallback: proxy reverso transparente para o socket Unix do Python
         .fallback(any(proxy_to_backend))
         .with_state(state);
@@ -117,30 +137,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn health_handler() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(HeaderName::from_static("x-content-type-options"), HeaderValue::from_static("nosniff"));
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
     (StatusCode::OK, headers, Json(HealthResponse::default()))
 }
 
 async fn landing_handler() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
-    headers.insert(HeaderName::from_static("x-content-type-options"), HeaderValue::from_static("nosniff"));
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
     (StatusCode::OK, headers, Json(LandingResponse::default()))
 }
 
 async fn apk_retired_handler() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(HeaderName::from_static("x-content-type-options"), HeaderValue::from_static("nosniff"));
-    headers.insert(HeaderName::from_static("access-control-allow-origin"), HeaderValue::from_static("*"));
-    headers.insert(HeaderName::from_static("access-control-allow-methods"), HeaderValue::from_static("GET, OPTIONS, POST"));
-    (StatusCode::GONE, headers, Json(AppUnavailableResponse::default()))
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("access-control-allow-origin"),
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        HeaderName::from_static("access-control-allow-methods"),
+        HeaderValue::from_static("GET, OPTIONS, POST"),
+    );
+    (
+        StatusCode::GONE,
+        headers,
+        Json(AppUnavailableResponse::default()),
+    )
 }
 
 async fn options_cors_handler() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
-    headers.insert(HeaderName::from_static("access-control-allow-origin"), HeaderValue::from_static("*"));
-    headers.insert(HeaderName::from_static("access-control-allow-methods"), HeaderValue::from_static("GET, OPTIONS, POST"));
-    headers.insert(HeaderName::from_static("access-control-allow-headers"), HeaderValue::from_static("*"));
+    headers.insert(
+        HeaderName::from_static("access-control-allow-origin"),
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        HeaderName::from_static("access-control-allow-methods"),
+        HeaderValue::from_static("GET, OPTIONS, POST"),
+    );
+    headers.insert(
+        HeaderName::from_static("access-control-allow-headers"),
+        HeaderValue::from_static("*"),
+    );
     (StatusCode::NO_CONTENT, headers)
 }
 
@@ -163,7 +211,8 @@ async fn proxy_to_backend(
             "{{\"detail\":\"Acesso bloqueado por 24 horas para este IP.\",\"retry_after\":{rem}}}"
         )));
         *resp.status_mut() = StatusCode::FORBIDDEN;
-        resp.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         return Ok(resp);
     }
 
@@ -182,28 +231,46 @@ async fn proxy_to_backend(
     if let Some(auth_hdr) = req.headers().get("authorization") {
         if let Ok(auth_str) = auth_hdr.to_str() {
             if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                match verify_firebase_id_token(token.trim(), &state.firebase_project_id, &state.cert_cache).await {
+                match verify_firebase_id_token(
+                    token.trim(),
+                    &state.firebase_project_id,
+                    &state.cert_cache,
+                )
+                .await
+                {
                     Ok(identity) => {
                         // Se houver banco, aplica moderação autoritativa
                         if let Some(ref pool) = state.pool {
                             let method = req.method().as_str();
                             let path = req.uri().path();
-                            if let Err(e) = check_user_moderation(pool, &identity.uid, method, path, Some(identity.auth_time)).await {
-                                let mut resp = Response::new(Body::from(format!(
-                                    "{{\"detail\":\"{e}\"}}"
-                                )));
+                            if let Err(e) = check_user_moderation(
+                                pool,
+                                &identity.uid,
+                                method,
+                                path,
+                                Some(identity.auth_time),
+                            )
+                            .await
+                            {
+                                let mut resp =
+                                    Response::new(Body::from(format!("{{\"detail\":\"{e}\"}}")));
                                 *resp.status_mut() = StatusCode::FORBIDDEN;
-                                resp.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                                resp.headers_mut().insert(
+                                    CONTENT_TYPE,
+                                    HeaderValue::from_static("application/json"),
+                                );
                                 return Ok(resp);
                             }
                         }
 
                         // Injeta identidade confiável para o backend Unix
                         if let Ok(val) = HeaderValue::from_str(&identity.uid) {
-                            req.headers_mut().insert(HeaderName::from_static("x-internal-uid"), val);
+                            req.headers_mut()
+                                .insert(HeaderName::from_static("x-internal-uid"), val);
                         }
                         if let Ok(val) = HeaderValue::from_str(&identity.auth_time.to_string()) {
-                            req.headers_mut().insert(HeaderName::from_static("x-internal-auth-time"), val);
+                            req.headers_mut()
+                                .insert(HeaderName::from_static("x-internal-auth-time"), val);
                         }
                     }
                     Err(e) => {
@@ -216,14 +283,18 @@ async fn proxy_to_backend(
 
     // Injeta IP confiável
     if let Ok(val) = HeaderValue::from_str(&client_ip) {
-        req.headers_mut().insert(HeaderName::from_static("x-internal-client-ip"), val);
+        req.headers_mut()
+            .insert(HeaderName::from_static("x-internal-client-ip"), val);
     }
 
     // 5. Encaminha para o socket Unix privado
     let stream = match UnixStream::connect(&state.backend_sock).await {
         Ok(s) => s,
         Err(e) => {
-            error!("Falha ao conectar no socket do backend {:?}: {e}", state.backend_sock);
+            error!(
+                "Falha ao conectar no socket do backend {:?}: {e}",
+                state.backend_sock
+            );
             return Err(StatusCode::BAD_GATEWAY);
         }
     };

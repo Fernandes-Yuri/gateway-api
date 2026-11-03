@@ -88,9 +88,7 @@ impl FirebaseCertCache {
         self.refresh().await?;
 
         let map = self.certs.read().await;
-        map.get(kid)
-            .cloned()
-            .ok_or(IdentityError::UnknownKid)
+        map.get(kid).cloned().ok_or(IdentityError::UnknownKid)
     }
 
     pub async fn refresh(&self) -> Result<(), IdentityError> {
@@ -128,8 +126,8 @@ pub async fn verify_firebase_id_token(
     expected_project_id: &str,
     cert_cache: &FirebaseCertCache,
 ) -> Result<VerifiedIdentity, IdentityError> {
-    let header = decode_header(token_str)
-        .map_err(|e| IdentityError::InvalidToken(e.to_string()))?;
+    let header =
+        decode_header(token_str).map_err(|e| IdentityError::InvalidToken(e.to_string()))?;
 
     let kid = header.kid.ok_or(IdentityError::MissingToken)?;
     let cert_pem = cert_cache.get_cert(&kid).await?;
@@ -139,7 +137,9 @@ pub async fn verify_firebase_id_token(
 
     let mut validation = Validation::new(Algorithm::RS256);
     validation.set_audience(&[expected_project_id]);
-    validation.set_issuer(&[format!("https://securetoken.google.com/{expected_project_id}")]);
+    validation.set_issuer(&[format!(
+        "https://securetoken.google.com/{expected_project_id}"
+    )]);
 
     let token_data = decode::<FirebaseClaims>(token_str, &decoding_key, &validation)
         .map_err(|e| IdentityError::InvalidToken(e.to_string()))?;
@@ -215,14 +215,11 @@ pub async fn check_user_moderation(
     }
 
     // 3. Checagem de Perfil Pausado
-    let paused_at = sqlx::query_scalar!(
-        r#"SELECT paused_at FROM profiles WHERE id = $1"#,
-        uid
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|_| IdentityError::DatabaseUnavailable)?
-    .flatten();
+    let paused_at = sqlx::query_scalar!(r#"SELECT paused_at FROM profiles WHERE id = $1"#, uid)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| IdentityError::DatabaseUnavailable)?
+        .flatten();
 
     if let Some(paused) = paused_at {
         if path != format!("/api/profile/{uid}/reactivate") || method != "POST" {

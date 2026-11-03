@@ -10,7 +10,11 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "BragaSaude Local Simulation Harness (Offline)")]
+#[command(
+    author,
+    version,
+    about = "BragaSaude Local Simulation Harness (Offline)"
+)]
 struct Args {
     #[arg(short, long, default_value_t = 0)]
     phase: u8,
@@ -38,7 +42,10 @@ async fn main() {
     let mut passed = 0;
     let mut divergences = Vec::new();
 
-    println!("[SIMULADOR LOCAL] Executando simulacao offline para Fase {}", args.phase);
+    println!(
+        "[SIMULADOR LOCAL] Executando simulacao offline para Fase {}",
+        args.phase
+    );
 
     // -----------------------------------------------------------------------
     // Casos Fase 0: Criptografia, ALE, Blind Index e Senhas
@@ -83,7 +90,9 @@ async fn main() {
     if b1 == "11988887777" && b2 == "11988887777" {
         passed += 1;
     } else {
-        divergences.push(format!("Blind index normalizacao telefone falhou: {b1} != {b2}"));
+        divergences.push(format!(
+            "Blind index normalizacao telefone falhou: {b1} != {b2}"
+        ));
     }
 
     executed += 1;
@@ -91,7 +100,8 @@ async fn main() {
     let pepper = b"test-pepper-secret-spec10";
     match hash_password("senha-admin-forte-123", pepper) {
         Ok(hash) => {
-            let (valid, needs_rehash) = verify_password("senha-admin-forte-123", Some(&hash), pepper);
+            let (valid, needs_rehash) =
+                verify_password("senha-admin-forte-123", Some(&hash), pepper);
             let (invalid, _) = verify_password("senha-errada", Some(&hash), pepper);
             if valid && !needs_rehash && !invalid {
                 passed += 1;
@@ -111,15 +121,23 @@ async fn main() {
         let test_ip = "192.168.1.100";
 
         // Registra 3 infrações para disparar o bloqueio de 24h
-        limiter.record_violation(test_ip, "Infracao teste 1", 1, None).await;
-        limiter.record_violation(test_ip, "Infracao teste 2", 1, None).await;
-        let blocked = limiter.record_violation(test_ip, "Infracao teste 3", 1, None).await;
+        limiter
+            .record_violation(test_ip, "Infracao teste 1", 1, None)
+            .await;
+        limiter
+            .record_violation(test_ip, "Infracao teste 2", 1, None)
+            .await;
+        let blocked = limiter
+            .record_violation(test_ip, "Infracao teste 3", 1, None)
+            .await;
 
         let (is_blocked, rem) = limiter.is_ip_blocked(test_ip).await;
         if blocked && is_blocked && rem > 86000 {
             passed += 1;
         } else {
-            divergences.push(format!("Rate limiter bloqueio de 24h falhou: blocked={blocked}, is_blocked={is_blocked}"));
+            divergences.push(format!(
+                "Rate limiter bloqueio de 24h falhou: blocked={blocked}, is_blocked={is_blocked}"
+            ));
         }
     }
 

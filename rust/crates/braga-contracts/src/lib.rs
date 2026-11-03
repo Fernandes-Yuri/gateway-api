@@ -51,7 +51,9 @@ impl Default for AppUnavailableResponse {
             status: "coming_soon".to_string(),
             distribution_channel: "google_play".to_string(),
             available: false,
-            message: "Em breve na Google Play Store. A distribuição de APK pelo gateway foi encerrada.".to_string(),
+            message:
+                "Em breve na Google Play Store. A distribuição de APK pelo gateway foi encerrada."
+                    .to_string(),
         }
     }
 }

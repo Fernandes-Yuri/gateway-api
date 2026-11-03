@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use aes_gcm::aead::{Aead, KeyInit, OsRng, Nonce};
+use aes_gcm::aead::{Aead, KeyInit, Nonce, OsRng};
 use aes_gcm::Aes256Gcm;
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -46,7 +46,9 @@ pub enum ColumnTamperError {
     InvalidIvLength { expected: usize, received: usize },
     #[error("Payload truncado: menor que a tag GCM de {0} bytes.")]
     TruncatedPayload(usize),
-    #[error("Falha de integridade AES-256-GCM: tag de autenticacao invalida ou dados adulterados.")]
+    #[error(
+        "Falha de integridade AES-256-GCM: tag de autenticacao invalida ou dados adulterados."
+    )]
     InvalidTag,
     #[error("Bytes decifrados nao correspondem a UTF-8 valido.")]
     InvalidUtf8,
@@ -74,13 +76,23 @@ pub fn resolve_default_dek() -> Vec<u8> {
     if let Ok(key) = std::env::var("DATA_ENCRYPTION_KEY") {
         let trimmed = key.trim();
         if !trimmed.is_empty() {
-            if let Ok(derived) = derive_key_hkdf(trimmed.as_bytes(), HKDF_INFO_DEK, HKDF_SALT, KEY_LENGTH_BYTES) {
+            if let Ok(derived) = derive_key_hkdf(
+                trimmed.as_bytes(),
+                HKDF_INFO_DEK,
+                HKDF_SALT,
+                KEY_LENGTH_BYTES,
+            ) {
                 return derived;
             }
         }
     }
-    derive_key_hkdf(LOCAL_CI_FALLBACK_IKM, HKDF_INFO_DEK, HKDF_SALT, KEY_LENGTH_BYTES)
-        .unwrap_or_else(|_| vec![0u8; KEY_LENGTH_BYTES])
+    derive_key_hkdf(
+        LOCAL_CI_FALLBACK_IKM,
+        HKDF_INFO_DEK,
+        HKDF_SALT,
+        KEY_LENGTH_BYTES,
+    )
+    .unwrap_or_else(|_| vec![0u8; KEY_LENGTH_BYTES])
 }
 
 pub fn resolve_default_blind_pepper() -> Vec<u8> {
@@ -93,7 +105,12 @@ pub fn resolve_default_blind_pepper() -> Vec<u8> {
     if let Ok(key) = std::env::var("DATA_ENCRYPTION_KEY") {
         let trimmed = key.trim();
         if !trimmed.is_empty() {
-            if let Ok(derived) = derive_key_hkdf(trimmed.as_bytes(), HKDF_INFO_BINDEX, HKDF_SALT, KEY_LENGTH_BYTES) {
+            if let Ok(derived) = derive_key_hkdf(
+                trimmed.as_bytes(),
+                HKDF_INFO_BINDEX,
+                HKDF_SALT,
+                KEY_LENGTH_BYTES,
+            ) {
                 return derived;
             }
         }
@@ -196,7 +213,9 @@ pub fn decrypt_field(
         .decrypt(nonce, ciphertext_with_tag.as_slice())
         .map_err(|_| ColumnTamperError::InvalidTag)?;
 
-    String::from_utf8(plaintext_bytes).map(Some).map_err(|_| ColumnTamperError::InvalidUtf8)
+    String::from_utf8(plaintext_bytes)
+        .map(Some)
+        .map_err(|_| ColumnTamperError::InvalidUtf8)
 }
 
 pub fn normalize_for_blind_index(
@@ -217,7 +236,10 @@ pub fn normalize_for_blind_index(
 
     let phone_re = get_phone_candidate_re();
     if phone_re.is_match(&trimmed_lower) && trimmed_lower.chars().any(|c| c.is_ascii_digit()) {
-        let digits: String = trimmed_lower.chars().filter(|c| c.is_ascii_digit()).collect();
+        let digits: String = trimmed_lower
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect();
         if !digits.is_empty() {
             return Ok(digits);
         }
@@ -302,8 +324,8 @@ pub fn pepper_password(password: &str, pepper: &[u8]) -> Result<[u8; 32], AuthCr
     if pepper.is_empty() {
         return Err(AuthCryptoError::MissingPepper);
     }
-    let mut mac = Hmac::<Sha256>::new_from_slice(pepper)
-        .map_err(|_| AuthCryptoError::MissingPepper)?;
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(pepper).map_err(|_| AuthCryptoError::MissingPepper)?;
     mac.update(password.as_bytes());
     let digest = mac.finalize().into_bytes();
     let mut out = [0u8; 32];
@@ -332,18 +354,15 @@ pub fn hash_password(password: &str, pepper: &[u8]) -> Result<String, AuthCrypto
     Ok(hash.to_string())
 }
 
-pub fn verify_password(
-    password: &str,
-    stored_hash: Option<&str>,
-    pepper: &[u8],
-) -> (bool, bool) {
+pub fn verify_password(password: &str, stored_hash: Option<&str>, pepper: &[u8]) -> (bool, bool) {
     let hash_str = match stored_hash {
         Some(h) if !h.is_empty() => h,
         _ => return (false, false),
     };
 
     // Caso 1: Bcrypt legado ($2a$, $2b$, $2y$)
-    if hash_str.starts_with("$2a$") || hash_str.starts_with("$2b$") || hash_str.starts_with("$2y$") {
+    if hash_str.starts_with("$2a$") || hash_str.starts_with("$2b$") || hash_str.starts_with("$2y$")
+    {
         match bcrypt::verify(password, hash_str) {
             Ok(true) => return (true, true), // Válido e precisa de rehash!
             _ => return (false, false),

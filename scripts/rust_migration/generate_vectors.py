@@ -8,7 +8,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../s
 
 from column_crypto import (
     encrypt_field,
-    decrypt_field,
     compute_blind_index,
     normalize_for_blind_index,
 )

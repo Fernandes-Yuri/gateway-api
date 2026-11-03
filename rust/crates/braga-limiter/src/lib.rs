@@ -47,7 +47,10 @@ impl StrictRateLimiter {
     pub async fn set_manual_block(&self, ip: &str, blocked: bool, seconds: u64) {
         let mut b_lock = self.blocked_ips.lock().await;
         if blocked {
-            b_lock.insert(ip.to_string(), Instant::now() + Duration::from_secs(seconds));
+            b_lock.insert(
+                ip.to_string(),
+                Instant::now() + Duration::from_secs(seconds),
+            );
         } else {
             b_lock.remove(ip);
             let mut v_lock = self.violations.lock().await;
@@ -205,7 +208,9 @@ impl StrictRateLimiter {
 
         let now = Instant::now();
         let bucket_key = format!("{scope}:{key}");
-        let cutoff = now.checked_sub(Duration::from_secs(window_seconds)).unwrap_or(now);
+        let cutoff = now
+            .checked_sub(Duration::from_secs(window_seconds))
+            .unwrap_or(now);
 
         let mut hits_overflow = false;
         let mut retry_after = 1;
@@ -235,7 +240,8 @@ impl StrictRateLimiter {
 
         if hits_overflow {
             if let Some(tip) = target_ip {
-                let reason = format!("Rate limit excedido em {scope}: {limit} reqs em {window_seconds}s");
+                let reason =
+                    format!("Rate limit excedido em {scope}: {limit} reqs em {window_seconds}s");
                 let is_now_blocked = self.record_violation(tip, &reason, 1, pool).await;
                 if is_now_blocked {
                     return Err(LimiterError::ThresholdViolationBlocked);
