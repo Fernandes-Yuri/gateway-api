@@ -671,3 +671,86 @@ pub fn validate_orb_chat_request(
     }
     Ok(())
 }
+
+// =========================================================================
+// Contratos e DTOs da Fase 5: Operação, Pools e Prontidão (Readiness)
+// =========================================================================
+
+/// Estado individual de um componente monitorado pela sonda de prontidão.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ComponentStatus {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl ComponentStatus {
+    pub fn ok() -> Self {
+        Self {
+            status: "ok".to_string(),
+            detail: None,
+        }
+    }
+
+    pub fn ok_with(detail: impl Into<String>) -> Self {
+        Self {
+            status: "ok".to_string(),
+            detail: Some(detail.into()),
+        }
+    }
+
+    pub fn degraded(detail: impl Into<String>) -> Self {
+        Self {
+            status: "degraded".to_string(),
+            detail: Some(detail.into()),
+        }
+    }
+
+    pub fn unavailable(detail: impl Into<String>) -> Self {
+        Self {
+            status: "unavailable".to_string(),
+            detail: Some(detail.into()),
+        }
+    }
+}
+
+/// Resposta estruturada da sonda de prontidão (Readiness Probe).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadinessResponse {
+    pub status: String,
+    pub version: String,
+    pub backend_sock: ComponentStatus,
+    pub database: ComponentStatus,
+    pub limiter: ComponentStatus,
+    pub catalog_cache: ComponentStatus,
+}
+
+/// Estado das feature flags de rotas no gateway.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeatureFlagsDto {
+    pub read_routes: bool,
+    pub write_routes: bool,
+    pub vitals_write: bool,
+    pub orb_ws: bool,
+}
+
+/// Métricas de uso do pool de conexões PostgreSQL.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DbPoolStatsDto {
+    pub size: u32,
+    pub num_idle: usize,
+    pub max_connections: u32,
+    pub min_connections: u32,
+}
+
+/// Telemetria e estatísticas operacionais internas.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InternalStatsResponse {
+    pub status: String,
+    pub version: String,
+    pub uptime_seconds: u64,
+    pub catalog_cache_entries: u64,
+    pub features: FeatureFlagsDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub db_pool: Option<DbPoolStatsDto>,
+}

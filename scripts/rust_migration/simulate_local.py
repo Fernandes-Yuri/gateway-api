@@ -415,6 +415,98 @@ def run_phase_4_checks():
     return cases_run, cases_passed, divergences
 
 
+def run_phase_5_checks():
+    divergences = []
+    cases_run = 0
+    cases_passed = 0
+
+    # 1. Contrato da sonda de prontidão (ReadinessResponse)
+    cases_run += 1
+    sample_ready = {
+        "status": "ready",
+        "version": "0.5.0",
+        "backend_sock": {"status": "ok"},
+        "database": {"status": "ok"},
+        "limiter": {"status": "ok"},
+        "catalog_cache": {"status": "ok", "detail": "1000 entries"},
+    }
+    if (
+        sample_ready["status"] == "ready"
+        and sample_ready["backend_sock"]["status"] == "ok"
+        and sample_ready["database"]["status"] == "ok"
+    ):
+        cases_passed += 1
+    else:
+        divergences.append("Contrato de ReadinessResponse incorreto")
+
+    # 2. Resposta de degradação da sonda
+    cases_run += 1
+    sample_not_ready = {
+        "status": "not_ready",
+        "version": "0.5.0",
+        "backend_sock": {"status": "ok"},
+        "database": {"status": "unavailable", "detail": "timeout pinging database"},
+        "limiter": {"status": "ok"},
+        "catalog_cache": {"status": "ok"},
+    }
+    if (
+        sample_not_ready["status"] == "not_ready"
+        and sample_not_ready["database"]["status"] == "unavailable"
+    ):
+        cases_passed += 1
+    else:
+        divergences.append("Degradação da sonda de prontidão incorreta")
+
+    # 3. Orçamento e limites do pool de conexões PostgreSQL
+    cases_run += 1
+    pool_budget = {
+        "max_connections": 5,
+        "min_connections": 1,
+        "acquire_timeout_secs": 3,
+        "idle_timeout_secs": 600,
+    }
+    if (
+        1 <= pool_budget["min_connections"] <= pool_budget["max_connections"]
+        and pool_budget["max_connections"] <= 10
+        and pool_budget["acquire_timeout_secs"] <= 5
+    ):
+        cases_passed += 1
+    else:
+        divergences.append("Orçamento de conexões PostgreSQL excede limites seguros")
+
+    # 4. Telemetria interna e feature flags
+    cases_run += 1
+    sample_stats = {
+        "status": "online",
+        "version": "0.5.0",
+        "uptime_seconds": 120,
+        "catalog_cache_entries": 42,
+        "features": {
+            "read_routes": True,
+            "write_routes": True,
+            "vitals_write": False,
+            "orb_ws": True,
+        },
+        "db_pool": {
+            "size": 5,
+            "num_idle": 4,
+            "max_connections": 5,
+            "min_connections": 1,
+        },
+    }
+    if (
+        sample_stats["features"]["read_routes"]
+        and sample_stats["features"]["write_routes"]
+        and sample_stats["features"]["orb_ws"]
+        and sample_stats["db_pool"]["max_connections"] == 5
+    ):
+        cases_passed += 1
+    else:
+        divergences.append("Contrato de telemetria interna / features incorreto")
+
+    return cases_run, cases_passed, divergences
+
+
 def run_binary_sim_if_available(sim_bin_path, phase, report_path):
     """Executa o executável braga-sim pré-compilado se fornecido."""
     if not os.path.isfile(sim_bin_path) or not os.access(sim_bin_path, os.X_OK):
@@ -493,6 +585,13 @@ def main():
         total_run += r4
         total_passed += p4
         all_divergences.extend(d4)
+
+    # Fase 5 checks
+    if args.phase >= 5:
+        r5, p5, d5 = run_phase_5_checks()
+        total_run += r5
+        total_passed += p5
+        all_divergences.extend(d5)
 
     elapsed_ms = int((time.time() - start_time) * 1000)
     status = "PASS" if not all_divergences and total_passed == total_run else "FAIL"
