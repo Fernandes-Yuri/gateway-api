@@ -4,17 +4,11 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
-
 from routers.agent_relay import (
     MAX_PAYLOAD_BYTES,
     AgentMessage,
     AgentRelayRequest,
-    AgentRelayResponse,
     AgentRole,
-    ToolCall,
-    ToolCallFunction,
     ToolDeclaration,
     ToolFunctionDef,
 )

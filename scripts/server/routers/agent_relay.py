@@ -14,12 +14,11 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from api_identity import firebase_uid
 from config import (
     GEMINI_API_KEY,
-    GEMINI_API_URL,
     GROQ_API_KEY,
     GROQ_API_URL,
 )
