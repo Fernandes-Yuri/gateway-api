@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use aes_gcm::aead::{Aead, KeyInit, Nonce, OsRng};
+use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
 use aes_gcm::Aes256Gcm;
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -9,7 +9,6 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use regex::Regex;
 use sha2::Sha256;
-use subtle::ConstantTimeEq;
 use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
 
@@ -148,7 +147,7 @@ pub fn encrypt_field(
     let mut iv = [0u8; IV_LENGTH_BYTES];
     OsRng.fill_bytes(&mut iv);
 
-    let nonce = Nonce::from_slice(&iv);
+    let nonce = <Aes256Gcm as AeadCore>::Nonce::from_slice(&iv);
     let ciphertext_with_tag = cipher
         .encrypt(nonce, text.as_bytes())
         .map_err(|e| ColumnTamperError::CipherError(e.to_string()))?;
@@ -208,7 +207,7 @@ pub fn decrypt_field(
     let cipher = Aes256Gcm::new_from_slice(&dek)
         .map_err(|e| ColumnTamperError::CipherError(e.to_string()))?;
 
-    let nonce = Nonce::from_slice(&iv);
+    let nonce = <Aes256Gcm as AeadCore>::Nonce::from_slice(&iv);
     let plaintext_bytes = cipher
         .decrypt(nonce, ciphertext_with_tag.as_slice())
         .map_err(|_| ColumnTamperError::InvalidTag)?;
@@ -273,7 +272,7 @@ pub fn compute_blind_index(
         None => resolve_default_blind_pepper(),
     };
 
-    let mut mac = Hmac::<Sha256>::new_from_slice(&pepper)
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&pepper)
         .map_err(|e| ColumnTamperError::CipherError(e.to_string()))?;
     mac.update(normalized.as_bytes());
     let result = mac.finalize().into_bytes();
@@ -324,8 +323,8 @@ pub fn pepper_password(password: &str, pepper: &[u8]) -> Result<[u8; 32], AuthCr
     if pepper.is_empty() {
         return Err(AuthCryptoError::MissingPepper);
     }
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(pepper).map_err(|_| AuthCryptoError::MissingPepper)?;
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(pepper)
+        .map_err(|_| AuthCryptoError::MissingPepper)?;
     mac.update(password.as_bytes());
     let digest = mac.finalize().into_bytes();
     let mut out = [0u8; 32];
@@ -389,7 +388,7 @@ pub fn verify_password(password: &str, stored_hash: Option<&str>, pepper: &[u8])
         }
 
         let needs_rehash = if let Some(params) = parsed.version {
-            params != Version::V0x13
+            params != Version::V0x13.into()
         } else {
             false
         };

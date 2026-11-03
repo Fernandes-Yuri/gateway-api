@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
+use chrono::NaiveDateTime;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
@@ -168,21 +168,18 @@ pub async fn check_user_moderation(
     }
 
     // 1. Checagem de user_restrictions
-    let restriction = sqlx::query!(
-        r#"
-        SELECT level, reason
-        FROM user_restrictions
-        WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > NOW())
-        "#,
-        uid
+    let restriction_row = sqlx::query(
+        "SELECT level, reason FROM user_restrictions WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > NOW())",
     )
+    .bind(uid)
     .fetch_optional(pool)
     .await
     .map_err(|_| IdentityError::DatabaseUnavailable)?;
 
-    if let Some(r) = restriction {
-        let level = r.level;
-        let reason = r.reason.unwrap_or_else(|| "Acesso restrito".to_string());
+    if let Some(r) = restriction_row {
+        let level: String = r.get("level");
+        let reason: Option<String> = r.get("reason");
+        let reason_str = reason.unwrap_or_else(|| "Acesso restrito".to_string());
 
         let denied = level == "suspended"
             || (level == "read-only" && !matches!(method, "GET" | "HEAD" | "OPTIONS"))
@@ -190,64 +187,66 @@ pub async fn check_user_moderation(
 
         if denied {
             let status = if level == "suspended" { 401 } else { 403 };
-            return Err(IdentityError::RestrictedAccess { status, reason });
+            return Err(IdentityError::RestrictedAccess {
+                status,
+                reason: reason_str,
+            });
         }
     }
 
     // 2. Checagem de Tombstone (usuário excluído)
     if !(method == "DELETE" && path == format!("/api/profile/{uid}")) {
-        let is_deleted = sqlx::query_scalar!(
-            r#"
-            SELECT (
-                EXISTS(SELECT 1 FROM user_deletion_logs WHERE user_id = $1)
-                AND NOT EXISTS(SELECT 1 FROM profiles WHERE id = $1)
-            ) AS "is_deleted!"
-            "#,
-            uid
+        let is_deleted_row = sqlx::query(
+            "SELECT (EXISTS(SELECT 1 FROM user_deletion_logs WHERE user_id = $1) AND NOT EXISTS(SELECT 1 FROM profiles WHERE id = $1)) as is_deleted",
         )
+        .bind(uid)
         .fetch_one(pool)
         .await
         .map_err(|_| IdentityError::DatabaseUnavailable)?;
 
+        let is_deleted: bool = is_deleted_row.get("is_deleted");
         if is_deleted {
             return Err(IdentityError::AccountDeleted);
         }
     }
 
     // 3. Checagem de Perfil Pausado
-    let paused_at = sqlx::query_scalar!(r#"SELECT paused_at FROM profiles WHERE id = $1"#, uid)
+    let paused_row = sqlx::query("SELECT paused_at FROM profiles WHERE id = $1")
+        .bind(uid)
         .fetch_optional(pool)
         .await
-        .map_err(|_| IdentityError::DatabaseUnavailable)?
-        .flatten();
+        .map_err(|_| IdentityError::DatabaseUnavailable)?;
 
-    if let Some(paused) = paused_at {
-        if path != format!("/api/profile/{uid}/reactivate") || method != "POST" {
-            return Err(IdentityError::AccountPaused);
-        }
-        if let Some(at) = auth_time {
-            if at <= paused.timestamp() {
+    if let Some(r) = paused_row {
+        let paused_at: Option<NaiveDateTime> = r.get("paused_at");
+        if let Some(paused) = paused_at {
+            if path != format!("/api/profile/{uid}/reactivate") || method != "POST" {
+                return Err(IdentityError::AccountPaused);
+            }
+            if let Some(at) = auth_time {
+                if at <= paused.and_utc().timestamp() {
+                    return Err(IdentityError::LoginRequiredToReactivate);
+                }
+            } else {
                 return Err(IdentityError::LoginRequiredToReactivate);
             }
-        } else {
-            return Err(IdentityError::LoginRequiredToReactivate);
         }
     }
 
     // 4. Checagem de Sessão Revogada
     if let Some(at) = auth_time {
-        let session_revoked_at = sqlx::query_scalar!(
-            r#"SELECT session_revoked_at FROM profiles WHERE id = $1"#,
-            uid
-        )
-        .fetch_optional(pool)
-        .await
-        .map_err(|_| IdentityError::DatabaseUnavailable)?
-        .flatten();
+        let session_row = sqlx::query("SELECT session_revoked_at FROM profiles WHERE id = $1")
+            .bind(uid)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| IdentityError::DatabaseUnavailable)?;
 
-        if let Some(revoked) = session_revoked_at {
-            if at <= revoked.timestamp() {
-                return Err(IdentityError::SessionRevoked);
+        if let Some(r) = session_row {
+            let session_revoked_at: Option<NaiveDateTime> = r.get("session_revoked_at");
+            if let Some(revoked) = session_revoked_at {
+                if at <= revoked.and_utc().timestamp() {
+                    return Err(IdentityError::SessionRevoked);
+                }
             }
         }
     }

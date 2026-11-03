@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -59,12 +59,8 @@ impl StrictRateLimiter {
     }
 
     pub async fn load_blocked_ips_from_db(&self, pool: &PgPool) {
-        let rows = sqlx::query!(
-            r#"
-            SELECT ip, EXTRACT(EPOCH FROM (blocked_until - NOW()))::float8 as "remaining_sec"
-            FROM security_blocked_ips
-            WHERE blocked_until > NOW()
-            "#
+        let rows = sqlx::query(
+            "SELECT ip, EXTRACT(EPOCH FROM (blocked_until - NOW()))::float8 as remaining_sec FROM security_blocked_ips WHERE blocked_until > NOW()",
         )
         .fetch_all(pool)
         .await;
@@ -74,9 +70,11 @@ impl StrictRateLimiter {
                 let now = Instant::now();
                 let mut lock = self.blocked_ips.lock().await;
                 for r in list {
-                    if let Some(rem) = r.remaining_sec {
-                        if rem > 0.0 {
-                            lock.insert(r.ip, now + Duration::from_secs_f64(rem));
+                    let ip: String = r.get("ip");
+                    let rem: Option<f64> = r.get("remaining_sec");
+                    if let Some(sec) = rem {
+                        if sec > 0.0 {
+                            lock.insert(ip, now + Duration::from_secs_f64(sec));
                         }
                     }
                 }
@@ -154,7 +152,7 @@ impl StrictRateLimiter {
                 let pool_clone = p.clone();
 
                 tokio::spawn(async move {
-                    let _ = sqlx::query!(
+                    let _ = sqlx::query(
                         r#"
                         INSERT INTO security_blocked_ips (ip, reason, violations, blocked_until, updated_at)
                         VALUES ($1, $2, $3, NOW() + INTERVAL '24 hours', NOW())
@@ -164,10 +162,10 @@ impl StrictRateLimiter {
                             blocked_until = NOW() + INTERVAL '24 hours',
                             updated_at = NOW()
                         "#,
-                        ip_clone,
-                        reason_clone,
-                        count_i32
                     )
+                    .bind(ip_clone)
+                    .bind(reason_clone)
+                    .bind(count_i32)
                     .execute(&pool_clone)
                     .await;
                 });
