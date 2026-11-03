@@ -13,3 +13,5 @@ serde_json = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.40", features = ["rt", "macros", "time"] }
 moka = { version = "0.12", features = ["future"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.10", features = ["serde", "v4", "v5"] }

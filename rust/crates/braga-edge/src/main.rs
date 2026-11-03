@@ -10,9 +10,12 @@ use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{any, get, post};
 use axum::Router;
 use braga_contracts::{
-    ActivityFeedRecord, AppUnavailableResponse, BarcodeMedication, BiometryRecord,
-    DailyMetricRecord, HealthResponse, LandingResponse, MedicationLogRecord, MedicationRecord,
-    VitalSignRecord,
+    compute_imc, compute_occurrence_id, format_agent_closing, height_in_meters,
+    is_valid_agent_action, normalize_schedule_times, ActivityFeedRecord, AgentReceiptDto,
+    AgentReceiptResponse, AppUnavailableResponse, AuditLogSyncDto, BarcodeMedication,
+    BiometryRecord, BiometrySyncDto, DailyMetricRecord, DailyMetricSyncDto, HealthResponse,
+    HttpErrorResponse, LandingResponse, MedicationLogRecord, MedicationLogSyncDto,
+    MedicationRecord, MedicationSyncDto, SyncResponse, VitalSignRecord, VitalSignSyncDto,
 };
 use braga_identity::{
     check_user_moderation, require_family_access, require_owner, require_patient_permission,
@@ -58,6 +61,12 @@ pub struct CliArgs {
 
     #[arg(long, env = "READ_ROUTES_ENABLED", default_value_t = true)]
     pub read_routes_enabled: bool,
+
+    #[arg(long, env = "WRITE_ROUTES_ENABLED", default_value_t = true)]
+    pub write_routes_enabled: bool,
+
+    #[arg(long, env = "VITALS_WRITE_ENABLED", default_value_t = false)]
+    pub vitals_write_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -69,6 +78,8 @@ pub struct AppState {
     pub firebase_project_id: String,
     pub catalog_cache: moka::future::Cache<String, braga_contracts::BarcodeMedication>,
     pub read_routes_enabled: bool,
+    pub write_routes_enabled: bool,
+    pub vitals_write_enabled: bool,
 }
 
 #[tokio::main]
@@ -122,9 +133,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         firebase_project_id: args.firebase_project_id,
         catalog_cache,
         read_routes_enabled: args.read_routes_enabled,
+        write_routes_enabled: args.write_routes_enabled,
+        vitals_write_enabled: args.vitals_write_enabled,
     });
 
-    let app = Router::new()
+    let mut app = Router::new()
         // Rotas públicas servidas diretamente pela borda nativa
         .route("/health", get(health_handler))
         .route("/", get(landing_handler))
@@ -165,7 +178,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/family/patients/:patient_id/activity-feed",
             get(activity_feed_handler),
-        )
+        );
+
+    // Fase 3: Escritas de Alta Frequência e Sincronização
+    if args.write_routes_enabled {
+        app = app
+            .route("/api/sync/biometry", post(sync_biometry_handler))
+            .route("/api/sync/daily-metrics", post(sync_daily_metrics_handler))
+            .route("/api/sync/medication", post(sync_medication_handler))
+            .route(
+                "/api/sync/medication-log",
+                post(sync_medication_log_handler),
+            )
+            .route("/api/sync/audit-log", post(sync_audit_log_handler))
+            .route("/api/agent/receipt", post(agent_receipt_handler));
+
+        if args.vitals_write_enabled {
+            app = app.route("/api/sync/vitals", post(sync_vitals_handler));
+        }
+    }
+
+    let app = app
         // Fallback: proxy reverso transparente para o socket Unix do Python
         .fallback(any(proxy_to_backend))
         .with_state(state);
@@ -1163,4 +1196,1026 @@ async fn activity_feed_handler(
     resp.headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     resp
+}
+
+// =========================================================================
+// Handlers de Escrita e Sincronização (Fase 3)
+// =========================================================================
+
+async fn sync_biometry_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<BiometrySyncDto>,
+) -> Response {
+    let identity = match authenticate_request(&headers, &state, "POST", "/api/sync/biometry").await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+
+    if require_owner(&identity.uid, &payload.user_id).is_err() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(HttpErrorResponse::new(
+                "Não autorizado: o recurso pertence a outro usuário.",
+            )),
+        )
+            .into_response();
+    }
+
+    if payload.weight < 20.0 || payload.weight > 300.0 || payload.weight.is_nan() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(HttpErrorResponse::new(
+                "Peso fora da faixa aceitável (20-300 kg).",
+            )),
+        )
+            .into_response();
+    }
+
+    if let Some(h) = payload.height {
+        if h < 0.0 || h > 250.0 || h.is_nan() {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(HttpErrorResponse::new(
+                    "Altura fora da faixa aceitável (0-250 cm).",
+                )),
+            )
+                .into_response();
+        }
+    }
+
+    let measured_dt = match DateTime::parse_from_rfc3339(&payload.measured_at) {
+        Ok(dt) => dt.with_timezone(&Utc),
+        Err(_) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(HttpErrorResponse::new(
+                    "A medição precisa conter fuso horário.",
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    let bio_id = match uuid::Uuid::parse_str(&payload.id) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(HttpErrorResponse::new("Identificador de medição inválido.")),
+            )
+                .into_response();
+        }
+    };
+
+    let pool = match state.pool {
+        Some(ref p) => p,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(HttpErrorResponse::new(
+                    "Biometria não sincronizada: banco indisponível.",
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    let h_m = height_in_meters(payload.height);
+    let imc = compute_imc(payload.weight, h_m);
+
+    let row = sqlx::query(
+        r#"INSERT INTO biometrics (id, user_id, weight_kg, height_m, imc, measured_at, source)
+           VALUES ($1, $2, $3, $4, $5, $6, 'app')
+           ON CONFLICT (id) DO NOTHING
+           RETURNING id"#,
+    )
+    .bind(bio_id)
+    .bind(&identity.uid)
+    .bind(payload.weight)
+    .bind(h_m)
+    .bind(imc)
+    .bind(measured_dt)
+    .fetch_optional(pool)
+    .await;
+
+    match row {
+        Ok(Some(r)) => {
+            let id: uuid::Uuid = r.get("id");
+            (
+                StatusCode::OK,
+                Json(SyncResponse {
+                    status: "success".to_string(),
+                    id: id.to_string(),
+                    medication_contract: None,
+                    medication_batch_contract: None,
+                    dose_status: None,
+                }),
+            )
+                .into_response()
+        }
+        Ok(None) => {
+            let existing = sqlx::query("SELECT id FROM biometrics WHERE id = $1 AND user_id = $2")
+                .bind(bio_id)
+                .bind(&identity.uid)
+                .fetch_optional(pool)
+                .await;
+            match existing {
+                Ok(Some(r)) => {
+                    let id: uuid::Uuid = r.get("id");
+                    (
+                        StatusCode::OK,
+                        Json(SyncResponse {
+                            status: "success".to_string(),
+                            id: id.to_string(),
+                            medication_contract: None,
+                            medication_batch_contract: None,
+                            dose_status: None,
+                        }),
+                    )
+                        .into_response()
+                }
+                _ => (
+                    StatusCode::CONFLICT,
+                    Json(HttpErrorResponse::new(
+                        "Identificador de medição já utilizado.",
+                    )),
+                )
+                    .into_response(),
+            }
+        }
+        Err(e) => {
+            error!("Erro ao persistir biometria: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(HttpErrorResponse::new(
+                    "Erro interno ao persistir biometria.",
+                )),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn sync_daily_metrics_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<DailyMetricSyncDto>,
+) -> Response {
+    let identity =
+        match authenticate_request(&headers, &state, "POST", "/api/sync/daily-metrics").await {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+
+    if identity.uid != payload.user_id {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(HttpErrorResponse::new(
+                "Não autorizado: métricas só podem ser gravadas para a própria conta.",
+            )),
+        )
+            .into_response();
+    }
+
+    let m_date = match chrono::NaiveDate::parse_from_str(&payload.date, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(HttpErrorResponse::new(
+                    "Data inválida. Use o formato YYYY-MM-DD.",
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    let pool = match state.pool {
+        Some(ref p) => p,
+        None => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "offline_mode"})),
+            )
+                .into_response();
+        }
+    };
+
+    let query = r#"
+        INSERT INTO daily_metrics (
+            user_id, date, steps, distance_meters, distance_gps_meters,
+            distance_steps_meters, distance_final_meters, reliability_score,
+            calories_burned, active_minutes
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (user_id, date) DO UPDATE SET
+            steps = EXCLUDED.steps,
+            distance_meters = EXCLUDED.distance_meters,
+            distance_gps_meters = EXCLUDED.distance_gps_meters,
+            distance_steps_meters = EXCLUDED.distance_steps_meters,
+            distance_final_meters = EXCLUDED.distance_final_meters,
+            reliability_score = EXCLUDED.reliability_score,
+            calories_burned = EXCLUDED.calories_burned,
+            active_minutes = EXCLUDED.active_minutes
+        RETURNING id"#;
+
+    let row = sqlx::query(query)
+        .bind(&payload.user_id)
+        .bind(m_date)
+        .bind(payload.steps)
+        .bind(payload.distance_meters)
+        .bind(payload.distance_gps_meters)
+        .bind(payload.distance_steps_meters)
+        .bind(payload.distance_final_meters)
+        .bind(payload.reliability_score)
+        .bind(payload.calories_burned)
+        .bind(payload.active_minutes)
+        .fetch_one(pool)
+        .await;
+
+    match row {
+        Ok(r) => {
+            let id: uuid::Uuid = r.get("id");
+            (
+                StatusCode::OK,
+                Json(SyncResponse {
+                    status: "success".to_string(),
+                    id: id.to_string(),
+                    medication_contract: None,
+                    medication_batch_contract: None,
+                    dose_status: None,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Erro ao gravar daily_metrics: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(HttpErrorResponse::new(
+                    "Erro interno ao persistir métricas diárias.",
+                )),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn sync_medication_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(mut payload): Json<MedicationSyncDto>,
+) -> Response {
+    let identity =
+        match authenticate_request(&headers, &state, "POST", "/api/sync/medication").await {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+
+    if require_owner(&identity.uid, &payload.user_id).is_err() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(HttpErrorResponse::new(
+                "Não autorizado: o recurso pertence a outro usuário.",
+            )),
+        )
+            .into_response();
+    }
+
+    let (sched_time, sched_times) = if let Some(ref st) = payload.schedule_times {
+        match normalize_schedule_times(st) {
+            Ok((primary, joined)) => (primary, Some(joined)),
+            Err(msg) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(HttpErrorResponse::new(msg)),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        (payload.schedule_time.clone(), None)
+    };
+    payload.schedule_time = sched_time;
+    payload.schedule_times = sched_times;
+
+    let pool = match state.pool {
+        Some(ref p) => p,
+        None => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "offline_mode"})),
+            )
+                .into_response();
+        }
+    };
+
+    let med_id = match payload.id {
+        Some(ref id_str) => match uuid::Uuid::parse_str(id_str) {
+            Ok(u) => u,
+            Err(_) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(HttpErrorResponse::new(
+                        "Identificador de medicamento inválido.",
+                    )),
+                )
+                    .into_response();
+            }
+        },
+        None => uuid::Uuid::new_v4(),
+    };
+
+    let query = r#"
+        INSERT INTO medications (id, user_id, name, dosage_mg, pill_quantity, schedule_time, schedule_times, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            dosage_mg = EXCLUDED.dosage_mg,
+            pill_quantity = EXCLUDED.pill_quantity,
+            schedule_time = CASE WHEN EXCLUDED.schedule_times IS NULL AND medications.schedule_times IS NOT NULL THEN medications.schedule_time ELSE EXCLUDED.schedule_time END,
+            schedule_times = COALESCE(EXCLUDED.schedule_times, medications.schedule_times),
+            updated_at = NOW()
+        WHERE medications.user_id = EXCLUDED.user_id
+        RETURNING id"#;
+
+    let row = sqlx::query(query)
+        .bind(med_id)
+        .bind(&payload.user_id)
+        .bind(&payload.name)
+        .bind(payload.dosage_mg)
+        .bind(payload.pill_quantity)
+        .bind(&payload.schedule_time)
+        .bind(&payload.schedule_times)
+        .fetch_optional(pool)
+        .await;
+
+    match row {
+        Ok(Some(r)) => {
+            let id: uuid::Uuid = r.get("id");
+            (
+                StatusCode::OK,
+                Json(SyncResponse {
+                    status: "success".to_string(),
+                    id: id.to_string(),
+                    medication_contract: Some(2),
+                    medication_batch_contract: None,
+                    dose_status: None,
+                }),
+            )
+                .into_response()
+        }
+        Ok(None) => (
+            StatusCode::FORBIDDEN,
+            Json(HttpErrorResponse::new("Medicamento indisponível.")),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Erro ao gravar medicamento: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(HttpErrorResponse::new(
+                    "Erro interno ao persistir medicamento.",
+                )),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn sync_audit_log_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<AuditLogSyncDto>,
+) -> Response {
+    let identity = match authenticate_request(&headers, &state, "POST", "/api/sync/audit-log").await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+
+    let pool = match state.pool {
+        Some(ref p) => p,
+        None => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "offline_mode"})),
+            )
+                .into_response();
+        }
+    };
+
+    if identity.uid != payload.user_id
+        && require_family_access(pool, &identity.uid, &payload.user_id)
+            .await
+            .is_err()
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(HttpErrorResponse::new(
+                "Não autorizado: vínculo familiar inexistente ou inativo.",
+            )),
+        )
+            .into_response();
+    }
+
+    let log_id = payload
+        .id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let meta_val: Option<serde_json::Value> = payload
+        .metadata_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
+
+    let query = r#"
+        INSERT INTO audit_logs (id, user_id, event_type, action, metadata, created_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id"#;
+
+    let row = sqlx::query(query)
+        .bind(&log_id)
+        .bind(&payload.user_id)
+        .bind(&payload.event_type)
+        .bind(&payload.action)
+        .bind(meta_val)
+        .fetch_optional(pool)
+        .await;
+
+    match row {
+        Ok(opt) => {
+            let ret_id = opt.map(|r| r.get::<String, _>("id")).unwrap_or(log_id);
+            (
+                StatusCode::OK,
+                Json(SyncResponse {
+                    status: "success".to_string(),
+                    id: ret_id,
+                    medication_contract: None,
+                    medication_batch_contract: None,
+                    dose_status: None,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Erro ao gravar audit_log: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(HttpErrorResponse::new(
+                    "Erro interno ao persistir log de auditoria.",
+                )),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn agent_receipt_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentReceiptDto>,
+) -> Response {
+    let identity = match authenticate_request(&headers, &state, "POST", "/api/agent/receipt").await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+
+    if require_owner(&identity.uid, &payload.user_id).is_err() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(HttpErrorResponse::new(
+                "Não autorizado: o recurso pertence a outro usuário.",
+            )),
+        )
+            .into_response();
+    }
+
+    if !is_valid_agent_action(&payload.action) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(HttpErrorResponse::new("Ação desconhecida no contrato.")),
+        )
+            .into_response();
+    }
+
+    if payload.status != "confirmed" && payload.status != "failed" {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(HttpErrorResponse::new("Status inválido.")),
+        )
+            .into_response();
+    }
+
+    if payload.idempotency_key.is_empty() || payload.idempotency_key.len() > 64 {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(HttpErrorResponse::new("Chave de idempotência inválida.")),
+        )
+            .into_response();
+    }
+
+    let closing = format_agent_closing(&payload.action, &payload.params);
+
+    let pool = match state.pool {
+        Some(ref p) => p,
+        None => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "offline_mode",
+                    "closing": closing
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let query = r#"
+        INSERT INTO agent_actions (user_id, channel, action, params, idempotency_key, status, result)
+        VALUES ($1, 'app', $2, $3, $4, $5, $6)
+        ON CONFLICT (user_id, idempotency_key) DO NOTHING
+        RETURNING id"#;
+
+    let row = sqlx::query(query)
+        .bind(&payload.user_id)
+        .bind(&payload.action)
+        .bind(&payload.params)
+        .bind(&payload.idempotency_key)
+        .bind(&payload.status)
+        .bind(
+            payload
+                .result
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({})),
+        )
+        .fetch_optional(pool)
+        .await;
+
+    match row {
+        Ok(opt) => {
+            let status = if opt.is_some() {
+                "success"
+            } else {
+                "duplicate"
+            };
+            (
+                StatusCode::OK,
+                Json(AgentReceiptResponse {
+                    status: status.to_string(),
+                    closing,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Erro ao gravar agent_receipt: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(HttpErrorResponse::new("Erro interno ao registrar recibo.")),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn sync_medication_log_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<MedicationLogSyncDto>,
+) -> Response {
+    let identity =
+        match authenticate_request(&headers, &state, "POST", "/api/sync/medication-log").await {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+
+    if require_owner(&identity.uid, &payload.user_id).is_err() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(HttpErrorResponse::new(
+                "Não autorizado: o recurso pertence a outro usuário.",
+            )),
+        )
+            .into_response();
+    }
+
+    let pool = match state.pool {
+        Some(ref p) => p,
+        None => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "offline_mode"})),
+            )
+                .into_response();
+        }
+    };
+
+    let med_uuid = match uuid::Uuid::parse_str(&payload.medication_id) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(HttpErrorResponse::new(
+                    "Identificador de medicamento inválido.",
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    let owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM medications WHERE id = $1 AND user_id = $2)",
+    )
+    .bind(med_uuid)
+    .bind(&identity.uid)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+
+    if !owned {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(HttpErrorResponse::new("Medicamento indisponível.")),
+        )
+            .into_response();
+    }
+
+    // Ramo 1: Agendado canônico (com scheduledFor)
+    if let Some(ref sched_str) = payload.scheduled_for {
+        if payload.units_taken < 1 || payload.units_taken > 20 {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(HttpErrorResponse::new("Quantidade de unidades inválida.")),
+            )
+                .into_response();
+        }
+
+        let scheduled_utc = match DateTime::parse_from_rfc3339(sched_str) {
+            Ok(dt) => dt.with_timezone(&Utc),
+            Err(_) => {
+                if sched_str.len() == 16 && sched_str.chars().nth(10) == Some('T') {
+                    match chrono::NaiveDateTime::parse_from_str(sched_str, "%Y-%m-%dT%H:%M") {
+                        Ok(naive) => DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc),
+                        Err(_) => {
+                            return (
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                Json(HttpErrorResponse::new("Identificador de dose inválido.")),
+                            )
+                                .into_response();
+                        }
+                    }
+                } else {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(HttpErrorResponse::new("Identificador de dose inválido.")),
+                    )
+                        .into_response();
+                }
+            }
+        };
+
+        let mut tx = match pool.begin().await {
+            Ok(t) => t,
+            Err(e) => {
+                error!("Erro ao iniciar transação: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(HttpErrorResponse::new("Erro ao iniciar transação.")),
+                )
+                    .into_response();
+            }
+        };
+
+        let med_row = match sqlx::query(
+            "SELECT name, current_units FROM medications WHERE id = $1 FOR UPDATE",
+        )
+        .bind(med_uuid)
+        .fetch_optional(&mut *tx)
+        .await
+        {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(HttpErrorResponse::new("Medicamento não encontrado.")),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                error!("Erro ao bloquear medicamento: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(HttpErrorResponse::new("Erro ao bloquear medicamento.")),
+                )
+                    .into_response();
+            }
+        };
+
+        let med_name: String = med_row.get("name");
+        let current_units: i32 = med_row.try_get("current_units").unwrap_or(0);
+
+        let oid = compute_occurrence_id(&payload.user_id, &med_uuid.to_string(), &scheduled_utc);
+
+        let existing = sqlx::query(
+            r#"SELECT l.id, l.units_taken
+               FROM medication_dose_occurrences o
+               JOIN medication_logs l ON l.id = o.log_id
+               WHERE o.id = $1"#,
+        )
+        .bind(oid)
+        .fetch_optional(&mut *tx)
+        .await;
+
+        if let Ok(Some(r)) = existing {
+            let log_id: uuid::Uuid = r.get("id");
+            let _ = tx.commit().await;
+            return (
+                StatusCode::OK,
+                Json(SyncResponse {
+                    status: "success".to_string(),
+                    id: log_id.to_string(),
+                    medication_contract: Some(2),
+                    medication_batch_contract: Some(1),
+                    dose_status: Some("already_recorded".to_string()),
+                }),
+            )
+                .into_response();
+        }
+
+        if current_units < payload.units_taken {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "code": "INSUFFICIENT_STOCK",
+                    "message": "Estoque insuficiente para registrar esta dose."
+                })),
+            )
+                .into_response();
+        }
+
+        let _ = sqlx::query(
+            r#"INSERT INTO medication_dose_occurrences (id, patient_id, medication_id, scheduled_at, local_date, local_time, timezone)
+               VALUES ($1, $2, $3, $4, $4::date, to_char($4, 'HH24:MI'), 'UTC')
+               ON CONFLICT DO NOTHING"#,
+        )
+        .bind(oid)
+        .bind(&payload.user_id)
+        .bind(med_uuid)
+        .bind(scheduled_utc)
+        .execute(&mut *tx)
+        .await;
+
+        let log_uuid = payload
+            .id
+            .as_deref()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .unwrap_or_else(uuid::Uuid::new_v4);
+        let idem_key = format!("sync:{}", log_uuid);
+
+        let log_row = sqlx::query(
+            r#"INSERT INTO medication_logs (
+                   id, user_id, medication_id, taken_at, scheduled_for, actor_id,
+                   units_taken, idempotency_key, occurrence_id, channel, canonical_guard
+               )
+               VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, $8, 'app', true)
+               RETURNING id"#,
+        )
+        .bind(log_uuid)
+        .bind(&payload.user_id)
+        .bind(med_uuid)
+        .bind(sched_str)
+        .bind(&identity.uid)
+        .bind(payload.units_taken)
+        .bind(idem_key)
+        .bind(oid)
+        .fetch_one(&mut *tx)
+        .await;
+
+        let log_id: uuid::Uuid = match log_row {
+            Ok(r) => r.get("id"),
+            Err(e) => {
+                error!("Erro ao gravar canonical medication_log: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(HttpErrorResponse::new("Erro ao persistir log de dose.")),
+                )
+                    .into_response();
+            }
+        };
+
+        let _ = sqlx::query("UPDATE medication_dose_occurrences SET log_id = $2 WHERE id = $1")
+            .bind(oid)
+            .bind(log_id)
+            .execute(&mut *tx)
+            .await;
+
+        let _ = sqlx::query("UPDATE medications SET current_units = current_units - $2, updated_at = NOW() WHERE id = $1")
+            .bind(med_uuid)
+            .bind(payload.units_taken)
+            .execute(&mut *tx)
+            .await;
+
+        let actor_name: String = sqlx::query_scalar("SELECT full_name FROM profiles WHERE id = $1")
+            .bind(&identity.uid)
+            .fetch_optional(&mut *tx)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "Usuário autorizado".to_string());
+
+        let details = serde_json::json!({
+            "medication_id": med_uuid.to_string(),
+            "medication_name": med_name,
+            "scheduled_for": sched_str,
+            "units_taken": payload.units_taken
+        });
+
+        let _ = sqlx::query(
+            r#"INSERT INTO care_audit_trail (patient_id, actor_id, actor_name, action_type, details)
+               VALUES ($1, $2, $3, 'MEDICATION_TAKEN', $4)"#,
+        )
+        .bind(&payload.user_id)
+        .bind(&identity.uid)
+        .bind(actor_name)
+        .bind(details)
+        .execute(&mut *tx)
+        .await;
+
+        if let Err(e) = tx.commit().await {
+            error!("Erro ao commitar dose: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(HttpErrorResponse::new(
+                    "Erro ao finalizar registro de dose.",
+                )),
+            )
+                .into_response();
+        }
+
+        (
+            StatusCode::OK,
+            Json(SyncResponse {
+                status: "success".to_string(),
+                id: log_id.to_string(),
+                medication_contract: Some(2),
+                medication_batch_contract: Some(1),
+                dose_status: Some("recorded".to_string()),
+            }),
+        )
+            .into_response()
+    } else {
+        // Ramo 2: Legado (sem scheduledFor)
+        let log_uuid = match payload.id {
+            Some(ref id_str) => match uuid::Uuid::parse_str(id_str) {
+                Ok(u) => u,
+                Err(_) => {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(HttpErrorResponse::new("Identificador de dose inválido.")),
+                    )
+                        .into_response();
+                }
+            },
+            None => uuid::Uuid::new_v4(),
+        };
+
+        let taken_at = DateTime::parse_from_rfc3339(&payload.taken_at)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+
+        let query = r#"
+            INSERT INTO medication_logs (id, user_id, medication_id, taken_at, scheduled_for)
+            VALUES ($1, $2, $3, $4, NULL)
+            ON CONFLICT (id) DO NOTHING
+            RETURNING id"#;
+
+        let row = sqlx::query(query)
+            .bind(log_uuid)
+            .bind(&payload.user_id)
+            .bind(med_uuid)
+            .bind(taken_at)
+            .fetch_optional(pool)
+            .await;
+
+        match row {
+            Ok(opt) => {
+                let id_str = opt
+                    .map(|r| r.get::<uuid::Uuid, _>("id").to_string())
+                    .unwrap_or_else(|| log_uuid.to_string());
+                (
+                    StatusCode::OK,
+                    Json(SyncResponse {
+                        status: "success".to_string(),
+                        id: id_str,
+                        medication_contract: Some(2),
+                        medication_batch_contract: None,
+                        dose_status: None,
+                    }),
+                )
+                    .into_response()
+            }
+            Err(e) => {
+                error!("Erro ao gravar medication_log legado: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(HttpErrorResponse::new(
+                        "Erro interno ao persistir log de medicamento.",
+                    )),
+                )
+                    .into_response()
+            }
+        }
+    }
+}
+
+async fn sync_vitals_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<VitalSignSyncDto>,
+) -> Response {
+    let identity = match authenticate_request(&headers, &state, "POST", "/api/sync/vitals").await {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+
+    if require_owner(&identity.uid, &payload.user_id).is_err() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(HttpErrorResponse::new(
+                "Não autorizado: o recurso pertence a outro usuário.",
+            )),
+        )
+            .into_response();
+    }
+
+    let pool = match state.pool {
+        Some(ref p) => p,
+        None => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "offline_mode",
+                    "id": payload.id.unwrap_or_else(|| "local".to_string())
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let measured_dt = DateTime::parse_from_rfc3339(&payload.measured_at)
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now());
+
+    let query = r#"
+        INSERT INTO vital_signs (
+            user_id, systolic_pressure, diastolic_pressure, heart_rate,
+            oxygen_saturation, glucose_level, glucose_type, hydration_ml, measured_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id"#;
+
+    let row = sqlx::query(query)
+        .bind(&payload.user_id)
+        .bind(payload.systolic_pressure)
+        .bind(payload.diastolic_pressure)
+        .bind(payload.heart_rate)
+        .bind(payload.oxygen_saturation)
+        .bind(payload.glucose_level)
+        .bind(payload.glucose_type)
+        .bind(payload.hydration_ml)
+        .bind(measured_dt)
+        .fetch_one(pool)
+        .await;
+
+    match row {
+        Ok(r) => {
+            let id: uuid::Uuid = r.get("id");
+            (
+                StatusCode::OK,
+                Json(SyncResponse {
+                    status: "success".to_string(),
+                    id: id.to_string(),
+                    medication_contract: None,
+                    medication_batch_contract: None,
+                    dose_status: None,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Erro ao gravar vital_signs: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(HttpErrorResponse::new(
+                    "Erro interno ao persistir sinais vitais.",
+                )),
+            )
+                .into_response()
+        }
+    }
 }
