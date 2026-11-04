@@ -97,6 +97,9 @@ func (h *Handler) extractUserID(r *http.Request) string {
 	if xUserID := strings.TrimSpace(r.Header.Get("X-User-Id")); xUserID != "" {
 		return xUserID
 	}
+	if xInternalUID := strings.TrimSpace(r.Header.Get("x-internal-uid")); xInternalUID != "" {
+		return xInternalUID
+	}
 
 	// Query param ?token=... (padrão de WebSockets para browsers e mobile)
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
