@@ -28,3 +28,7 @@ scripts/server/storage/
 # Locks dos arquivos de diagnóstico e dados locais
 *.jsonl.lock
 *.log.lock
+
+# Binários Go compilados
+/go/braga-chat
+/braga-chat

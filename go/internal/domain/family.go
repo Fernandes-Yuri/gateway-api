@@ -28,6 +28,10 @@ var (
 	ErrMalformedE2EEPayload   = errors.New("payload E2EE malformado")
 	ErrInvalidE2EEJSON        = errors.New("JSON de payload E2EE inválido")
 	ErrUnsupportedE2EEVersion = errors.New("versão de criptografia E2EE não suportada")
+
+	ErrInvalidSentAt  = errors.New("horário de envio inválido")
+	ErrFutureSentAt   = errors.New("confira a data e a hora do aparelho")
+	ErrExpiredMessage = errors.New("mensagem expirada")
 )
 
 // FamilyMessage representa a entidade persistida no PostgreSQL (tabela family_messages)
@@ -153,10 +157,136 @@ func ParseE2EEEnvelope(rawBlob string, strict bool) (string, error) {
 		return "", nil
 	}
 
+	// Preserva ordem canônica SPEC-13 (v, iv, ciphertext) idêntica ao Python
+	vVal, hasV := parsed["v"]
+	ivVal, hasIV := parsed["iv"]
+	ctVal, hasCT := parsed["ciphertext"]
+	if hasV && hasIV && hasCT {
+		var vInt int
+		switch v := vVal.(type) {
+		case float64:
+			vInt = int(v)
+		case int:
+			vInt = v
+		}
+		ivStr, _ := ivVal.(string)
+		ctStr, _ := ctVal.(string)
+		canonicalJSON, err := json.Marshal(struct {
+			V          int    `json:"v"`
+			IV         string `json:"iv"`
+			Ciphertext string `json:"ciphertext"`
+		}{
+			V:          vInt,
+			IV:         ivStr,
+			Ciphertext: ctStr,
+		})
+		if err == nil {
+			return string(canonicalJSON), nil
+		}
+	}
+
 	// Normaliza o JSON compactado para armazenamento uniforme
 	compactJSON, err := json.Marshal(parsed)
 	if err != nil {
 		return "", ErrInvalidE2EEJSON
 	}
 	return string(compactJSON), nil
+}
+
+// ParseMessageLifetime calcula e valida sentAt e expiresAt garantindo regra D47 de 24h
+func ParseMessageLifetime(sentAtRaw string, now time.Time) (time.Time, time.Time, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	cleaned := strings.TrimSpace(sentAtRaw)
+	if cleaned == "" {
+		return time.Time{}, time.Time{}, ErrInvalidSentAt
+	}
+
+	// Suporta ISO 8601 com 'Z' ou offset
+	cleaned = strings.ReplaceAll(cleaned, "Z", "+00:00")
+	sent, err := time.Parse(time.RFC3339Nano, cleaned)
+	if err != nil {
+		sent, err = time.Parse(time.RFC3339, cleaned)
+		if err != nil {
+			return time.Time{}, time.Time{}, ErrInvalidSentAt
+		}
+	}
+	sent = sent.UTC()
+
+	if sent.After(now.Add(5 * time.Minute)) {
+		return time.Time{}, time.Time{}, ErrFutureSentAt
+	}
+
+	if sent.After(now) {
+		sent = now
+	}
+
+	expires := sent.Add(24 * time.Hour)
+	if !expires.After(now) {
+		return time.Time{}, time.Time{}, ErrExpiredMessage
+	}
+
+	return sent, expires, nil
+}
+
+// MarshalJSON implementa serialização com dual compatibility (camelCase + snake_case)
+func (m FamilyMessage) MarshalJSON() ([]byte, error) {
+	var delAtISO *string
+	if m.DeletedAt != nil {
+		s := m.DeletedAt.UTC().Format("2006-01-02T15:04:05.000Z")
+		delAtISO = &s
+	}
+	sentAtISO := m.SentAt.UTC().Format("2006-01-02T15:04:05.000Z")
+	expiresAtISO := m.ExpiresAt.UTC().Format("2006-01-02T15:04:05.000Z")
+
+	return json.Marshal(&struct {
+		ID                     string   `json:"id"`
+		PatientID              string   `json:"patientId"`
+		PatientIDSnake         string   `json:"patient_id"`
+		SenderID               string   `json:"senderId"`
+		SenderIDSnake          string   `json:"sender_id"`
+		SenderName             string   `json:"senderName"`
+		SenderNameSnake        string   `json:"sender_name"`
+		MessageText            string   `json:"messageText"`
+		MessageTextSnake       string   `json:"message_text"`
+		BodyEncrypted          *string  `json:"bodyEncrypted"`
+		BodyEncryptedSnake     *string  `json:"body_encrypted"`
+		EncryptionVersion      int16    `json:"encryptionVersion"`
+		EncryptionVersionSnake int16    `json:"encryption_version"`
+		IconType               string   `json:"iconType"`
+		IconTypeSnake          string   `json:"icon_type"`
+		IsRead                 bool     `json:"isRead"`
+		IsReadSnake            bool     `json:"is_read"`
+		SentAt                 string   `json:"sentAt"`
+		SentAtSnake            string   `json:"sent_at"`
+		ExpiresAt              string   `json:"expiresAt"`
+		ExpiresAtSnake         string   `json:"expires_at"`
+		DeletedAt              *string  `json:"deletedAt"`
+		DeletedAtSnake         *string  `json:"deleted_at"`
+	}{
+		ID:                     m.ID,
+		PatientID:              m.PatientID,
+		PatientIDSnake:         m.PatientID,
+		SenderID:               m.SenderID,
+		SenderIDSnake:          m.SenderID,
+		SenderName:             m.SenderName,
+		SenderNameSnake:        m.SenderName,
+		MessageText:            m.MessageText,
+		MessageTextSnake:       m.MessageText,
+		BodyEncrypted:          m.BodyEncrypted,
+		BodyEncryptedSnake:     m.BodyEncrypted,
+		EncryptionVersion:      m.EncryptionVersion,
+		EncryptionVersionSnake: m.EncryptionVersion,
+		IconType:               m.IconType,
+		IconTypeSnake:          m.IconType,
+		IsRead:                 m.IsRead,
+		IsReadSnake:            m.IsRead,
+		SentAt:                 sentAtISO,
+		SentAtSnake:            sentAtISO,
+		ExpiresAt:              expiresAtISO,
+		ExpiresAtSnake:         expiresAtISO,
+		DeletedAt:              delAtISO,
+		DeletedAtSnake:         delAtISO,
+	})
 }
