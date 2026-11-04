@@ -1,0 +1,151 @@
+{
+  "description": "Contratos canônicos de teste para paridade entre Python (family_api.py) e Go (braga-chat)",
+  "version": "1.0.0",
+  "fixtures": {
+    "send_e2ee_message": {
+      "request": {
+        "method": "POST",
+        "path": "/api/family/messages/send",
+        "headers": {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer <FIREBASE_JWT_PATIENT>"
+        },
+        "body": {
+          "id": "c1f7b8a2-4a15-4e78-9e61-9c6a1e3b56a1",
+          "patientId": "patient_test_uid_123",
+          "senderId": "patient_test_uid_123",
+          "senderName": "Carlos Braga",
+          "messageText": "{\"v\":1,\"iv\":\"dGVzdGVpdmJhc2U2NA==\",\"ciphertext\":\"Y2lwaGVydGV4dGRhdGE=\"}",
+          "bodyEncrypted": "{\"v\":1,\"iv\":\"dGVzdGVpdmJhc2U2NA==\",\"ciphertext\":\"Y2lwaGVydGV4dGRhdGE=\"}",
+          "encryptionVersion": 1,
+          "iconType": "HEART",
+          "sentAt": "2026-11-04T15:30:00.000Z"
+        }
+      },
+      "expected_response": {
+        "status_code": 200,
+        "body": {
+          "status": "success",
+          "id": "c1f7b8a2-4a15-4e78-9e61-9c6a1e3b56a1",
+          "encryptionVersion": 1
+        }
+      }
+    },
+    "get_messages_with_tombstone": {
+      "request": {
+        "method": "GET",
+        "path": "/api/family/messages/patient_test_uid_123?limit=50&offset=0",
+        "headers": {
+          "Authorization": "Bearer <FIREBASE_JWT_PATIENT>"
+        }
+      },
+      "expected_response": {
+        "status_code": 200,
+        "sample_item": {
+          "id": "c1f7b8a2-4a15-4e78-9e61-9c6a1e3b56a1",
+          "patientId": "patient_test_uid_123",
+          "senderId": "patient_test_uid_123",
+          "senderName": "Carlos Braga",
+          "messageText": "",
+          "bodyEncrypted": "{\"v\":1,\"iv\":\"dGVzdGVpdmJhc2U2NA==\",\"ciphertext\":\"Y2lwaGVydGV4dGRhdGE=\"}",
+          "encryptionVersion": 1,
+          "iconType": "HEART",
+          "isRead": false,
+          "sentAt": "2026-11-04T15:30:00.000Z",
+          "expiresAt": "2026-11-05T15:30:00.000Z",
+          "deletedAt": null
+        }
+      }
+    },
+    "delete_message_tombstone": {
+      "request": {
+        "method": "POST",
+        "path": "/api/family/message/delete",
+        "headers": {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer <FIREBASE_JWT_PATIENT>"
+        },
+        "body": {
+          "id": "c1f7b8a2-4a15-4e78-9e61-9c6a1e3b56a1",
+          "patientId": "patient_test_uid_123",
+          "sentAt": "2026-11-04T15:30:00.000Z"
+        }
+      },
+      "expected_response": {
+        "status_code": 200,
+        "body": {
+          "status": "success",
+          "id": "c1f7b8a2-4a15-4e78-9e61-9c6a1e3b56a1"
+        }
+      }
+    },
+    "publish_ecdh_public_key": {
+      "request": {
+        "method": "POST",
+        "path": "/api/family/e2ee/public-key",
+        "headers": {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer <FIREBASE_JWT_PATIENT>"
+        },
+        "body": {
+          "patientId": "patient_test_uid_123",
+          "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQg=="
+        }
+      },
+      "expected_response": {
+        "status_code": 200,
+        "body": {
+          "status": "success",
+          "patientId": "patient_test_uid_123",
+          "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQg=="
+        }
+      }
+    },
+    "find_by_joker_code": {
+      "request": {
+        "method": "GET",
+        "path": "/api/family/find-by-code/TESTFAM1",
+        "headers": {
+          "Authorization": "Bearer <FIREBASE_JWT_CAREGIVER>"
+        }
+      },
+      "expected_response": {
+        "status_code": 200,
+        "body": {
+          "patient_id": "patient-demo-testfam",
+          "patient_name": "Carlos Braga (Paciente Teste)",
+          "connection_code": "TESTFAM1",
+          "status": "PENDING",
+          "caregiver_role": "CAREGIVER_VIEWER"
+        }
+      }
+    },
+    "accept_invitation": {
+      "request": {
+        "method": "POST",
+        "path": "/api/family/accept",
+        "headers": {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer <FIREBASE_JWT_CAREGIVER>"
+        },
+        "body": {
+          "code": "TESTFAM1",
+          "caregiverName": "Maria Silva",
+          "caregiverRelation": "Filha",
+          "caregiverPublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQg=="
+        }
+      },
+      "expected_response": {
+        "status_code": 200,
+        "keys_present": [
+          "id",
+          "patient_id",
+          "caregiver_id",
+          "caregiver_name",
+          "status",
+          "caregiver_public_key"
+        ]
+      }
+    }
+  }
+}
