@@ -10,6 +10,7 @@ import (
 
 	"github.com/Fernandes-Yuri/gateway-api/go/internal/domain"
 	"github.com/Fernandes-Yuri/gateway-api/go/internal/repository"
+	"github.com/Fernandes-Yuri/gateway-api/go/internal/transport/ws"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -17,11 +18,16 @@ import (
 // MessageHandler gerencia os endpoints de mensagens familiares E2EE
 type MessageHandler struct {
 	repo repository.FamilyRepository
+	hub  *ws.Hub
 }
 
 // NewMessageHandler instancia o handler de mensagens
-func NewMessageHandler(repo repository.FamilyRepository) *MessageHandler {
-	return &MessageHandler{repo: repo}
+func NewMessageHandler(repo repository.FamilyRepository, hub ...*ws.Hub) *MessageHandler {
+	var h *ws.Hub
+	if len(hub) > 0 {
+		h = hub[0]
+	}
+	return &MessageHandler{repo: repo, hub: h}
 }
 
 // HandleSendMessage processa o envio de mensagens respeitando Blind Relay e TTL de 24h
@@ -145,6 +151,11 @@ func (h *MessageHandler) HandleSendMessage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Notificação WebSocket em tempo real para familiares conectados (< 2ms)
+	if h.hub != nil {
+		_ = h.hub.BroadcastFamilyMessage(msg.PatientID, &msg)
+	}
+
 	writeJSON(w, http.StatusOK, domain.SendFamilyMessageResponse{
 		Status:            "success",
 		ID:                req.ID,
@@ -255,6 +266,17 @@ func (h *MessageHandler) HandleDeleteMessage(w http.ResponseWriter, r *http.Requ
 		}
 		writeJSONError(w, http.StatusInternalServerError, "Falha ao excluir mensagem.")
 		return
+	}
+
+	// Notificação WebSocket em tempo real sobre tombstone da mensagem
+	if h.hub != nil {
+		patientID := ""
+		if req.PatientID != nil {
+			patientID = *req.PatientID
+		}
+		if patientID != "" {
+			_ = h.hub.BroadcastMessageDeleted(patientID, req.ID)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{

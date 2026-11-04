@@ -15,6 +15,7 @@ import (
 
 	"github.com/Fernandes-Yuri/gateway-api/go/internal/repository"
 	transporthttp "github.com/Fernandes-Yuri/gateway-api/go/internal/transport/http"
+	transportws "github.com/Fernandes-Yuri/gateway-api/go/internal/transport/ws"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -67,8 +68,12 @@ func main() {
 		repo = repository.NewPostgresRepository(nil)
 	}
 
+	// 2.5. Hub WebSocket em tempo real (SPEC-13 & D47)
+	hub := transportws.NewHub()
+	go hub.Run()
+
 	// 3. Montagem das rotas e servidor HTTP
-	router := transporthttp.NewRouter(repo)
+	router := transporthttp.NewRouter(repo, hub)
 	server := &http.Server{
 		Handler:      router,
 		ReadTimeout:  10 * time.Second,
@@ -121,6 +126,9 @@ func main() {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("[braga-chat] Erro ao encerrar servidor HTTP: %v", err)
+	}
+	if err := hub.Shutdown(shutdownCtx); err != nil {
+		log.Printf("[braga-chat] Erro ao encerrar conexões WebSocket: %v", err)
 	}
 	log.Println("[braga-chat] Processo encerrado com sucesso.")
 }
