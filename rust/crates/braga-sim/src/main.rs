@@ -44,7 +44,7 @@ struct SimulationReport {
     divergences: Vec<String>,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args = Args::parse();
     let start = Instant::now();
@@ -513,6 +513,7 @@ async fn main() {
             database: ComponentStatus::ok(),
             limiter: ComponentStatus::ok(),
             catalog_cache: ComponentStatus::ok_with("1000 entries"),
+            chat_sock: None,
         };
         let ready_json = serde_json::to_string(&ready).unwrap_or_default();
         let ready_deserialized: Result<ReadinessResponse, _> = serde_json::from_str(&ready_json);
@@ -536,6 +537,7 @@ async fn main() {
             database: ComponentStatus::unavailable("connection refused"),
             limiter: ComponentStatus::ok(),
             catalog_cache: ComponentStatus::ok(),
+            chat_sock: None,
         };
 
         if not_ready.status == "not_ready"
@@ -565,6 +567,7 @@ async fn main() {
                 write_routes: true,
                 vitals_write: false,
                 orb_ws: true,
+                chat_routes: None,
             },
             db_pool: Some(pool_stats.clone()),
         };
@@ -589,6 +592,7 @@ async fn main() {
             write_routes: true,
             vitals_write: false,
             orb_ws: true,
+            chat_routes: None,
         };
         let flags_json = serde_json::to_string(&flags).unwrap_or_default();
         let flags_deserialized: Result<FeatureFlagsDto, _> = serde_json::from_str(&flags_json);

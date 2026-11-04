@@ -723,6 +723,8 @@ pub struct ReadinessResponse {
     pub database: ComponentStatus,
     pub limiter: ComponentStatus,
     pub catalog_cache: ComponentStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_sock: Option<ComponentStatus>,
 }
 
 /// Estado das feature flags de rotas no gateway.
@@ -732,6 +734,8 @@ pub struct FeatureFlagsDto {
     pub write_routes: bool,
     pub vitals_write: bool,
     pub orb_ws: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_routes: Option<bool>,
 }
 
 /// Métricas de uso do pool de conexões PostgreSQL.

@@ -55,6 +55,12 @@ pub struct CliArgs {
     )]
     pub limiter_sock: PathBuf,
 
+    #[arg(long, env = "CHAT_SOCK", default_value = "/run/braga-saude/chat.sock")]
+    pub chat_sock: PathBuf,
+
+    #[arg(long, env = "CHAT_ROUTES_ENABLED", default_value_t = true)]
+    pub chat_routes_enabled: bool,
+
     #[arg(long, env = "DATABASE_URL")]
     pub database_url: Option<String>,
 
@@ -89,6 +95,8 @@ pub struct CliArgs {
 #[derive(Clone)]
 pub struct AppState {
     pub backend_sock: PathBuf,
+    pub chat_sock: PathBuf,
+    pub chat_routes_enabled: bool,
     pub cert_cache: FirebaseCertCache,
     pub limiter: StrictRateLimiter,
     pub pool: Option<PgPool>,
@@ -159,6 +167,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(AppState {
         backend_sock: args.backend_sock,
+        chat_sock: args.chat_sock,
+        chat_routes_enabled: args.chat_routes_enabled,
         cert_cache: FirebaseCertCache::new(),
         limiter,
         pool,
@@ -352,6 +362,17 @@ async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
     let catalog_entries = state.catalog_cache.entry_count();
     let catalog_status = ComponentStatus::ok_with(format!("{catalog_entries} entries"));
 
+    // 5. Checa chat Go Unix socket
+    let chat_sock_status = if state.chat_routes_enabled {
+        if state.chat_sock.exists() {
+            Some(ComponentStatus::ok())
+        } else {
+            Some(ComponentStatus::ok_with("fallback_python"))
+        }
+    } else {
+        None
+    };
+
     let is_ready = is_db_ready;
     let overall_status = if is_ready {
         "ready".to_string()
@@ -366,6 +387,7 @@ async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
         database: db_status,
         limiter: limiter_status,
         catalog_cache: catalog_status,
+        chat_sock: chat_sock_status,
     };
 
     let mut headers = HeaderMap::new();
@@ -428,6 +450,7 @@ async fn internal_stats_handler(
             write_routes: state.write_routes_enabled,
             vitals_write: state.vitals_write_enabled,
             orb_ws: state.orb_ws_enabled,
+            chat_routes: Some(state.chat_routes_enabled),
         },
         db_pool,
     };
@@ -737,10 +760,12 @@ async fn proxy_to_backend(
                             }
                         }
 
-                        // Injeta identidade confiável para o backend Unix
+                        // Injeta identidade confiável para o backend Unix (Python e Go)
                         if let Ok(val) = HeaderValue::from_str(&identity.uid) {
                             req.headers_mut()
-                                .insert(HeaderName::from_static("x-internal-uid"), val);
+                                .insert(HeaderName::from_static("x-internal-uid"), val.clone());
+                            req.headers_mut()
+                                .insert(HeaderName::from_static("x-user-id"), val);
                         }
                         if let Ok(val) = HeaderValue::from_str(&identity.auth_time.to_string()) {
                             req.headers_mut()
@@ -763,15 +788,44 @@ async fn proxy_to_backend(
 
     let client_upgrade = hyper::upgrade::on(&mut req);
 
-    // 5. Encaminha para o socket Unix privado
-    let stream = match UnixStream::connect(&state.backend_sock).await {
-        Ok(s) => s,
-        Err(e) => {
-            error!(
-                "Falha ao conectar no socket do backend {:?}: {e}",
-                state.backend_sock
-            );
-            return Err(StatusCode::BAD_GATEWAY);
+    // 5. Encaminha para o socket Unix apropriado (Go com fallback para Python)
+    let path = req.uri().path().to_string();
+    let is_chat_route = state.chat_routes_enabled
+        && (path.starts_with("/api/family")
+            || path == "/ws/family"
+            || path == "/api/sync/family-message"
+            || path == "/api/sync/family-binding");
+
+    let stream = if is_chat_route && state.chat_sock.exists() {
+        match UnixStream::connect(&state.chat_sock).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    "Falha ao conectar no socket Go do chat {:?}: {e}. Acionando fallback para backend Python {:?}",
+                    state.chat_sock, state.backend_sock
+                );
+                match UnixStream::connect(&state.backend_sock).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!(
+                            "Fallback para backend Python {:?} também falhou: {e}",
+                            state.backend_sock
+                        );
+                        return Err(StatusCode::BAD_GATEWAY);
+                    }
+                }
+            }
+        }
+    } else {
+        match UnixStream::connect(&state.backend_sock).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!(
+                    "Falha ao conectar no socket do backend {:?}: {e}",
+                    state.backend_sock
+                );
+                return Err(StatusCode::BAD_GATEWAY);
+            }
         }
     };
 

@@ -22,6 +22,11 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
+		if xInternalUID := strings.TrimSpace(r.Header.Get("x-internal-uid")); xInternalUID != "" {
+			ctx := context.WithValue(r.Context(), UserIDContextKey, xInternalUID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 
 		// 2. Fallback para Authorization: Bearer
 		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))

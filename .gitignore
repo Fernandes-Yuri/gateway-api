@@ -32,3 +32,7 @@ scripts/server/storage/
 # Binários Go compilados
 /go/braga-chat
 /braga-chat
+
+# Rust
+target/
+/rust/target/
