@@ -18,7 +18,8 @@ Environment=AWS_DEFAULT_REGION=us-east-2
 ExecStart=/home/ec2-user/braga-gateway/venv/bin/gunicorn server:app \
     -w 2 \
     -k uvicorn.workers.UvicornWorker \
-    --bind 0.0.0.0:8080 \
+    --bind 127.0.0.1:8083 \
+    --bind unix:/run/braga-saude/backend.sock \
     --timeout 30
 # Graceful shutdown: segue o padrao do systemd de servicos web.
 KillSignal=SIGTERM
