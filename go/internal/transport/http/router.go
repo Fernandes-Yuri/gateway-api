@@ -58,6 +58,7 @@ func NewRouter(repo repository.FamilyRepository, hub ...*ws.Hub) http.Handler {
 			protected.Post("/api/sync/family-message", msgHandler.HandleSendMessage)
 			protected.Get("/api/family/messages/{patientId}", msgHandler.HandleGetMessages)
 			protected.Get("/api/family/messages", msgHandler.HandleGetMessages)
+			protected.Post("/api/family/messages/read", msgHandler.HandleMarkMessagesRead)
 			protected.Post("/api/family/message/delete", msgHandler.HandleDeleteMessage)
 
 			// Vínculos Familiares & ECDH

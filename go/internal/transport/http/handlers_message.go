@@ -284,3 +284,53 @@ func (h *MessageHandler) HandleDeleteMessage(w http.ResponseWriter, r *http.Requ
 		"id":     req.ID,
 	})
 }
+
+// HandleMarkMessagesRead marca mensagens de uma conversa familiar como lidas
+func (h *MessageHandler) HandleMarkMessagesRead(w http.ResponseWriter, r *http.Request) {
+	uid, ok := GetUserID(r.Context())
+	if !ok || uid == "" {
+		writeJSONError(w, http.StatusUnauthorized, "Entre na sua conta para continuar.")
+		return
+	}
+
+	var req domain.MarkMessagesReadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusUnprocessableEntity, "Payload JSON inválido.")
+		return
+	}
+
+	patientID := strings.TrimSpace(req.PatientID)
+	if patientID == "" {
+		writeJSONError(w, http.StatusUnprocessableEntity, "patientId obrigatório.")
+		return
+	}
+
+	allowed, err := h.repo.CheckFamilyAccess(r.Context(), uid, patientID)
+	if err != nil {
+		if errors.Is(err, repository.ErrDatabaseUnavailable) {
+			writeJSONError(w, http.StatusServiceUnavailable, "Banco indisponível. Tente novamente.")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "Erro interno.")
+		return
+	}
+	if !allowed {
+		writeJSONError(w, http.StatusForbidden, "Acesso não autorizado.")
+		return
+	}
+
+	if err := h.repo.MarkMessagesAsRead(r.Context(), patientID, uid); err != nil {
+		if errors.Is(err, repository.ErrDatabaseUnavailable) {
+			writeJSONError(w, http.StatusServiceUnavailable, "Banco indisponível. Tente novamente.")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "Falha ao marcar como lidas.")
+		return
+	}
+
+	if h.hub != nil {
+		_ = h.hub.BroadcastMessagesRead(patientID, uid)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "success"})
+}

@@ -212,6 +212,23 @@ func (r *PostgresRepository) DeleteMessage(ctx context.Context, messageID string
 	return tx.Commit(ctx)
 }
 
+// MarkMessagesAsRead marca como lidas as mensagens do patientID que foram enviadas por outro usuário
+func (r *PostgresRepository) MarkMessagesAsRead(ctx context.Context, patientID string, readerID string) error {
+	if r.pool == nil {
+		return ErrDatabaseUnavailable
+	}
+
+	query := `
+		UPDATE family_messages
+		SET is_read = true
+		WHERE patient_id = $1 AND sender_id != $2 AND is_read = false AND deleted_at IS NULL;
+	`
+	if _, err := r.pool.Exec(ctx, query, patientID, readerID); err != nil {
+		return fmt.Errorf("falha ao marcar mensagens como lidas: %w", err)
+	}
+	return nil
+}
+
 // CheckFamilyAccess verifica se o usuário é o próprio titular ou cuidador com vínculo ativo
 func (r *PostgresRepository) CheckFamilyAccess(ctx context.Context, uid string, patientID string) (bool, error) {
 	if uid == patientID {
