@@ -374,7 +374,12 @@ func TestCanonicalFixturesParity(t *testing.T) {
 
 	t.Run("Send E2EE Message Canonical Parity", func(t *testing.T) {
 		fx := fixtures.Fixtures.SendE2EEMessage
-		bodyBytes, _ := json.Marshal(fx.Request.Body)
+		bodyMap := make(map[string]interface{})
+		for k, v := range fx.Request.Body {
+			bodyMap[k] = v
+		}
+		bodyMap["sentAt"] = time.Now().UTC().Format(time.RFC3339)
+		bodyBytes, _ := json.Marshal(bodyMap)
 		req := httptest.NewRequest(fx.Request.Method, fx.Request.Path, bytes.NewReader(bodyBytes))
 		for k, v := range fx.Request.Headers {
 			req.Header.Set(k, v)
