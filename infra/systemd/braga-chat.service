@@ -1,0 +1,21 @@
+[Unit]
+Description=BragaSaude Family Chat Service (Go)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/braga-gateway
+EnvironmentFile=-/run/braga-saude/gateway.env
+EnvironmentFile=-/etc/braga-saude/gateway.env
+Environment=SOCKET_PATH=/run/braga-saude/chat.sock
+Environment=LISTEN_ADDR=127.0.0.1:8082
+ExecStart=/usr/local/bin/braga-chat
+Restart=always
+RestartSec=3
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target
