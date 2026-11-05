@@ -623,7 +623,7 @@ func TestSecurityAndEdgeCases(t *testing.T) {
 	})
 
 	t.Run("HandleMarkMessagesRead marks unread messages and broadcasts", func(t *testing.T) {
-		repo.AllowAccess("caregiver-reader", "patient-owner")
+		mockRepo.AllowAccess("caregiver-reader", "patient-owner")
 		msg := domain.FamilyMessage{
 			ID:          "msg-read-test-1",
 			PatientID:   "patient-owner",
@@ -635,7 +635,7 @@ func TestSecurityAndEdgeCases(t *testing.T) {
 			SentAt:      time.Now().UTC(),
 			ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
 		}
-		_ = repo.SaveMessage(context.Background(), &msg)
+		_ = mockRepo.SaveMessage(context.Background(), &msg)
 
 		payload := map[string]interface{}{
 			"patientId": "patient-owner",
@@ -650,7 +650,7 @@ func TestSecurityAndEdgeCases(t *testing.T) {
 			t.Fatalf("Esperava 200, obteve %d: %s", w.Code, w.Body.String())
 		}
 
-		msgs, _ := repo.GetMessages(context.Background(), "patient-owner", 10, 0)
+		msgs, _ := mockRepo.GetMessages(context.Background(), "patient-owner", 10, 0)
 		if len(msgs) == 0 || !msgs[0].IsRead {
 			t.Errorf("Mensagem deveria estar marcada como is_read = true")
 		}
