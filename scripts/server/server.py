@@ -687,26 +687,8 @@ dataset_module.configure_state(
 # permanecem aqui (compartilhados com ws_orb) e sao passados ao
 # router via configure_state.
 
-# Módulos descontinuados (SPEC-08): Editorial (Clínicas) e Triagem WhatsApp.
-# Respondem 410 Gone imediatamente sem consultar banco de dados.
-@app.api_route(
-    "/api/editorial",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
-    include_in_schema=False,
-)
-@app.api_route(
-    "/api/editorial/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
-    include_in_schema=False,
-)
-async def editorial_gone(path: str = ""):
-    return JSONResponse(
-        status_code=410,
-        content={"detail": "Módulo editorial descontinuado (SPEC-08)"},
-        headers={"Access-Control-Allow-Origin": "*"},
-    )
-
-
+# Canal descontinuado (SPEC-08): Triagem WhatsApp.
+# Responde 410 Gone imediatamente sem consultar banco de dados.
 @app.api_route(
     "/api/whatsapp",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],

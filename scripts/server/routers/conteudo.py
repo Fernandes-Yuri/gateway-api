@@ -1,7 +1,7 @@
 """Consulta autenticada dos snapshots de conteúdo público das clínicas.
 
 Sem rota pública: estratégia, hashes e corpos ficam atrás do painel
-administrativo, no mesmo modelo de autorização do editorial.
+administrativo, no modelo de autorização do portal administrativo.
 """
 import json
 

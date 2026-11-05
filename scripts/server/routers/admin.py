@@ -771,10 +771,6 @@ async def admin_register(
             """INSERT INTO admin_users (id, email, password_hash, name, role, created_at, last_login_at)
                VALUES ($1, $2, $3, $4, 'admin', NOW(), NOW())""",
             user_id, email, password_hash, name)
-        # O TOTP mestre autoriza também a frente editorial, sem allowlist de e-mail.
-        await conn.execute(
-            "INSERT INTO editorial_members(email,role) VALUES($1,'publisher') ON CONFLICT(email) DO NOTHING",
-            email)
 
     return {
         "success": True,
