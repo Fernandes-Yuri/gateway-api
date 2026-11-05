@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -276,7 +275,7 @@ func (r *PostgresRepository) FindByConnectionCode(ctx context.Context, code stri
 	query := `
 		SELECT b.id, b.patient_id, COALESCE(p.full_name, '') AS patient_name,
 		       b.caregiver_id, b.caregiver_name, b.caregiver_relation,
-		       b.connection_code, b.status, b.caregiver_role, b.permissions,
+		       b.connection_code, COALESCE(b.status, 'PENDING') AS status, b.caregiver_role, b.permissions,
 		       b.patient_public_key, b.caregiver_public_key, b.created_at, b.expires_at
 		FROM family_bindings b
 		LEFT JOIN profiles p ON p.id = b.patient_id
@@ -284,11 +283,10 @@ func (r *PostgresRepository) FindByConnectionCode(ctx context.Context, code stri
 	`
 
 	var b domain.FamilyBinding
-	var permsData []byte
 	err := r.pool.QueryRow(ctx, query, cleanCode).Scan(
 		&b.ID, &b.PatientID, &b.PatientName,
 		&b.CaregiverID, &b.CaregiverName, &b.CaregiverRelation,
-		&b.ConnectionCode, &b.Status, &b.CaregiverRole, &permsData,
+		&b.ConnectionCode, &b.Status, &b.CaregiverRole, &b.Permissions,
 		&b.PatientPublicKey, &b.CaregiverPublicKey, &b.CreatedAt, &b.ExpiresAt,
 	)
 	if err != nil {
@@ -298,7 +296,7 @@ func (r *PostgresRepository) FindByConnectionCode(ctx context.Context, code stri
 		return nil, fmt.Errorf("falha ao buscar convite por código: %w", err)
 	}
 
-	b.Permissions = parsePermissions(permsData)
+	b.Permissions = sanitizePermissions(b.Permissions)
 	return &b, nil
 }
 
@@ -349,22 +347,21 @@ func (r *PostgresRepository) AcceptInvitation(
 		queryExisting := `
 			SELECT b.id, b.patient_id, COALESCE(p.full_name, '') AS patient_name,
 			       b.caregiver_id, b.caregiver_name, b.caregiver_relation,
-			       b.connection_code, b.status, b.caregiver_role, b.permissions,
+			       b.connection_code, COALESCE(b.status, 'PENDING') AS status, b.caregiver_role, b.permissions,
 			       b.patient_public_key, b.caregiver_public_key, b.created_at, b.expires_at
 			FROM family_bindings b
 			LEFT JOIN profiles p ON p.id = b.patient_id
 			WHERE b.patient_id = $1 AND b.caregiver_id = $2 AND b.status = 'ACTIVE';
 		`
 		var existing domain.FamilyBinding
-		var existingPerms []byte
 		err = tx.QueryRow(ctx, queryExisting, domain.JokerPatientUID, caregiverID).Scan(
 			&existing.ID, &existing.PatientID, &existing.PatientName,
 			&existing.CaregiverID, &existing.CaregiverName, &existing.CaregiverRelation,
-			&existing.ConnectionCode, &existing.Status, &existing.CaregiverRole, &existingPerms,
+			&existing.ConnectionCode, &existing.Status, &existing.CaregiverRole, &existing.Permissions,
 			&existing.PatientPublicKey, &existing.CaregiverPublicKey, &existing.CreatedAt, &existing.ExpiresAt,
 		)
 		if err == nil {
-			existing.Permissions = parsePermissions(existingPerms)
+			existing.Permissions = sanitizePermissions(existing.Permissions)
 			if existing.PatientName == "" {
 				existing.PatientName = domain.JokerPatientName
 			}
@@ -380,13 +377,12 @@ func (r *PostgresRepository) AcceptInvitation(
 				connection_code, status, created_at, expires_at, caregiver_role, permissions,
 				caregiver_public_key
 			) VALUES (
-				$1, $2, $3, $4, $5, $6, 'ACTIVE', $7, $8, 'CAREGIVER_VIEWER', '["ALL"]'::jsonb, $9
+				$1, $2, $3, $4, $5, $6, 'ACTIVE', $7, $8, 'CAREGIVER_VIEWER', ARRAY['ALL']::text[], $9
 			) RETURNING id, patient_id, caregiver_id, caregiver_name, caregiver_relation,
 			            connection_code, status, created_at, expires_at, caregiver_role,
 			            permissions, caregiver_public_key, patient_public_key;
 		`
 		var created domain.FamilyBinding
-		var createdPerms []byte
 		err = tx.QueryRow(
 			ctx, insertJoker,
 			bindingID, domain.JokerPatientUID, caregiverID, caregiverName, caregiverRelation,
@@ -394,14 +390,14 @@ func (r *PostgresRepository) AcceptInvitation(
 		).Scan(
 			&created.ID, &created.PatientID, &created.CaregiverID, &created.CaregiverName,
 			&created.CaregiverRelation, &created.ConnectionCode, &created.Status, &created.CreatedAt,
-			&created.ExpiresAt, &created.CaregiverRole, &createdPerms, &created.CaregiverPublicKey,
+			&created.ExpiresAt, &created.CaregiverRole, &created.Permissions, &created.CaregiverPublicKey,
 			&created.PatientPublicKey,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("falha ao criar vínculo coringa: %w", err)
 		}
 
-		created.Permissions = parsePermissions(createdPerms)
+		created.Permissions = sanitizePermissions(created.Permissions)
 		created.PatientName = domain.JokerPatientName
 		return &created, tx.Commit(ctx)
 	}
@@ -414,17 +410,16 @@ func (r *PostgresRepository) AcceptInvitation(
 
 	selectQuery := `
 		SELECT id, patient_id, caregiver_id, caregiver_name, caregiver_relation,
-		       connection_code, status, created_at, expires_at, caregiver_role,
+		       connection_code, COALESCE(status, 'PENDING') AS status, created_at, expires_at, caregiver_role,
 		       permissions, caregiver_public_key, patient_public_key
 		FROM family_bindings
 		WHERE connection_code = $1 FOR UPDATE;
 	`
 	var row domain.FamilyBinding
-	var permsData []byte
 	err = tx.QueryRow(ctx, selectQuery, cleanCode).Scan(
 		&row.ID, &row.PatientID, &row.CaregiverID, &row.CaregiverName,
 		&row.CaregiverRelation, &row.ConnectionCode, &row.Status, &row.CreatedAt,
-		&row.ExpiresAt, &row.CaregiverRole, &permsData, &row.CaregiverPublicKey,
+		&row.ExpiresAt, &row.CaregiverRole, &row.Permissions, &row.CaregiverPublicKey,
 		&row.PatientPublicKey,
 	)
 	if err != nil {
@@ -433,13 +428,13 @@ func (r *PostgresRepository) AcceptInvitation(
 		}
 		return nil, fmt.Errorf("falha ao buscar vínculo para aceite: %w", err)
 	}
+	row.Permissions = sanitizePermissions(row.Permissions)
 
 	// Regras de validação de aceite (family_contract)
 	if row.PatientID == caregiverID {
 		return nil, ErrConflict
 	}
 	if row.Status == "ACTIVE" && row.CaregiverID != nil && *row.CaregiverID == caregiverID {
-		row.Permissions = parsePermissions(permsData)
 		return &row, nil
 	}
 	if row.Status != "PENDING" || row.CaregiverID != nil || row.ExpiresAt.Before(time.Now().UTC()) {
@@ -465,18 +460,17 @@ func (r *PostgresRepository) AcceptInvitation(
 		          permissions, caregiver_public_key, patient_public_key;
 	`
 	var updated domain.FamilyBinding
-	var updatedPerms []byte
 	err = tx.QueryRow(ctx, updateQuery, row.ID, caregiverID, caregiverName, caregiverRelation, caregiverPublicKey).Scan(
 		&updated.ID, &updated.PatientID, &updated.CaregiverID, &updated.CaregiverName,
 		&updated.CaregiverRelation, &updated.ConnectionCode, &updated.Status, &updated.CreatedAt,
-		&updated.ExpiresAt, &updated.CaregiverRole, &updatedPerms, &updated.CaregiverPublicKey,
+		&updated.ExpiresAt, &updated.CaregiverRole, &updated.Permissions, &updated.CaregiverPublicKey,
 		&updated.PatientPublicKey,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao atualizar vínculo familiar: %w", err)
 	}
 
-	updated.Permissions = parsePermissions(updatedPerms)
+	updated.Permissions = sanitizePermissions(updated.Permissions)
 	return &updated, tx.Commit(ctx)
 }
 
@@ -586,7 +580,7 @@ func (r *PostgresRepository) ListBindings(ctx context.Context, userID string) ([
 	query := `
 		SELECT b.id, b.patient_id, COALESCE(p.full_name, '') AS patient_name,
 		       b.caregiver_id, b.caregiver_name, b.caregiver_relation,
-		       b.connection_code, b.status, b.caregiver_role, b.permissions,
+		       b.connection_code, COALESCE(b.status, 'PENDING') AS status, b.caregiver_role, b.permissions,
 		       b.patient_public_key, b.caregiver_public_key, b.created_at, b.expires_at
 		FROM family_bindings b
 		LEFT JOIN profiles p ON p.id=b.patient_id
@@ -603,30 +597,29 @@ func (r *PostgresRepository) ListBindings(ctx context.Context, userID string) ([
 	list := make([]domain.FamilyBinding, 0)
 	for rows.Next() {
 		var b domain.FamilyBinding
-		var permsData []byte
 		err := rows.Scan(
 			&b.ID, &b.PatientID, &b.PatientName,
 			&b.CaregiverID, &b.CaregiverName, &b.CaregiverRelation,
-			&b.ConnectionCode, &b.Status, &b.CaregiverRole, &permsData,
+			&b.ConnectionCode, &b.Status, &b.CaregiverRole, &b.Permissions,
 			&b.PatientPublicKey, &b.CaregiverPublicKey, &b.CreatedAt, &b.ExpiresAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("falha ao escanear vínculo: %w", err)
 		}
-		b.Permissions = parsePermissions(permsData)
+		b.Permissions = sanitizePermissions(b.Permissions)
 		list = append(list, b)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("erro durante iteração de vínculos: %w", err)
 	}
 
 	return list, nil
 }
 
-func parsePermissions(data []byte) []string {
-	if len(data) == 0 {
+func sanitizePermissions(perms []string) []string {
+	if len(perms) == 0 {
 		return []string{}
 	}
-	var res []string
-	if err := json.Unmarshal(data, &res); err == nil {
-		return res
-	}
-	return []string{}
+	return perms
 }

@@ -2,6 +2,8 @@ package domain
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -82,6 +84,52 @@ func TestParseE2EEEnvelope(t *testing.T) {
 		_, err := ParseE2EEEnvelope("", true)
 		if err != ErrEmptyE2EEPayload {
 			t.Errorf("Esperava ErrEmptyE2EEPayload, obteve: %v", err)
+		}
+	})
+}
+
+func TestFamilyBindingJSONSerialization(t *testing.T) {
+	t.Run("Serializes permissions as JSON array", func(t *testing.T) {
+		b := FamilyBinding{
+			ID:                "uuid-1234",
+			PatientID:         "patient-1",
+			CaregiverName:     "Welisa",
+			CaregiverRelation: "Esposa",
+			ConnectionCode:    "EKJM5K0A",
+			Status:            "ACTIVE",
+			CaregiverRole:     "CAREGIVER_VIEWER",
+			Permissions:       []string{},
+		}
+
+		data, err := json.Marshal(b)
+		if err != nil {
+			t.Fatalf("Falha ao serializar FamilyBinding: %v", err)
+		}
+
+		str := string(data)
+		if !strings.Contains(str, `"permissions":[]`) {
+			t.Errorf("Esperava '\"permissions\":[]' no JSON, obteve: %s", str)
+		}
+		if !strings.Contains(str, `"id":"uuid-1234"`) {
+			t.Errorf("Esperava id no JSON, obteve: %s", str)
+		}
+	})
+
+	t.Run("Serializes permissions with elements", func(t *testing.T) {
+		b := FamilyBinding{
+			ID:          "uuid-5678",
+			PatientID:   "patient-2",
+			Permissions: []string{"ALL"},
+		}
+
+		data, err := json.Marshal(b)
+		if err != nil {
+			t.Fatalf("Falha ao serializar FamilyBinding: %v", err)
+		}
+
+		str := string(data)
+		if !strings.Contains(str, `"permissions":["ALL"]`) {
+			t.Errorf("Esperava '\"permissions\":[\"ALL\"]' no JSON, obteve: %s", str)
 		}
 	})
 }
