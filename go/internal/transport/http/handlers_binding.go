@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -31,6 +32,7 @@ func (h *BindingHandler) HandleFindByCode(w http.ResponseWriter, r *http.Request
 
 	binding, err := h.repo.FindByConnectionCode(r.Context(), code)
 	if err != nil {
+		log.Printf("[HandleFindByCode] Falha ao buscar convite por código %q: %v", code, err)
 		if errors.Is(err, repository.ErrNotFound) {
 			writeJSONError(w, http.StatusNotFound, "Código indisponível ou expirado.")
 			return
@@ -86,6 +88,7 @@ func (h *BindingHandler) HandleAcceptInvitation(w http.ResponseWriter, r *http.R
 		pubKeyPtr,
 	)
 	if err != nil {
+		log.Printf("[HandleAcceptInvitation] Falha ao aceitar convite %q para uid %s: %v", req.Code, uid, err)
 		if errors.Is(err, repository.ErrNotFound) {
 			writeJSONError(w, http.StatusNotFound, "Código indisponível ou expirado.")
 			return
@@ -133,6 +136,7 @@ func (h *BindingHandler) HandlePublishPublicKey(w http.ResponseWriter, r *http.R
 
 	resp, err := h.repo.PublishPublicKey(r.Context(), req.BindingID, req.PatientID, uid, pubKey)
 	if err != nil {
+		log.Printf("[HandlePublishPublicKey] Falha ao publicar chave pública para uid %s: %v", uid, err)
 		if errors.Is(err, repository.ErrForbidden) {
 			writeJSONError(w, http.StatusForbidden, "Vínculo indisponível.")
 			return
@@ -170,6 +174,7 @@ func (h *BindingHandler) HandleListBindings(w http.ResponseWriter, r *http.Reque
 
 	bindings, err := h.repo.ListBindings(r.Context(), targetUserID)
 	if err != nil {
+		log.Printf("[HandleListBindings] Falha ao listar vínculos para %s: %v", targetUserID, err)
 		if errors.Is(err, repository.ErrDatabaseUnavailable) {
 			writeJSONError(w, http.StatusServiceUnavailable, "Banco indisponível. Tente novamente.")
 			return
