@@ -133,6 +133,19 @@ func (m *MockFamilyRepository) DeleteMessage(ctx context.Context, messageID stri
 	return nil
 }
 
+func (m *MockFamilyRepository) MarkMessagesAsRead(ctx context.Context, patientID string, readerID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id, msg := range m.messages {
+		if msg.PatientID == patientID && msg.SenderID != readerID && !msg.IsRead && msg.DeletedAt == nil {
+			msg.IsRead = true
+			m.messages[id] = msg
+		}
+	}
+	return nil
+}
+
 func (m *MockFamilyRepository) CheckFamilyAccess(ctx context.Context, uid string, patientID string) (bool, error) {
 	if uid == patientID {
 		return true, nil
@@ -361,7 +374,12 @@ func TestCanonicalFixturesParity(t *testing.T) {
 
 	t.Run("Send E2EE Message Canonical Parity", func(t *testing.T) {
 		fx := fixtures.Fixtures.SendE2EEMessage
-		bodyBytes, _ := json.Marshal(fx.Request.Body)
+		bodyMap := make(map[string]interface{})
+		for k, v := range fx.Request.Body {
+			bodyMap[k] = v
+		}
+		bodyMap["sentAt"] = time.Now().UTC().Format(time.RFC3339)
+		bodyBytes, _ := json.Marshal(bodyMap)
 		req := httptest.NewRequest(fx.Request.Method, fx.Request.Path, bytes.NewReader(bodyBytes))
 		for k, v := range fx.Request.Headers {
 			req.Header.Set(k, v)
@@ -606,6 +624,40 @@ func TestSecurityAndEdgeCases(t *testing.T) {
 		router.ServeHTTP(w, req)
 		if w.Code != http.StatusForbidden {
 			t.Errorf("Esperava 403, obteve %d", w.Code)
+		}
+	})
+
+	t.Run("HandleMarkMessagesRead marks unread messages and broadcasts", func(t *testing.T) {
+		mockRepo.AllowAccess("caregiver-reader", "patient-owner")
+		msg := domain.FamilyMessage{
+			ID:          "msg-read-test-1",
+			PatientID:   "patient-owner",
+			SenderID:    "patient-owner",
+			SenderName:  "Paciente",
+			MessageText: "Olá",
+			IconType:    "LOVE",
+			IsRead:      false,
+			SentAt:      time.Now().UTC(),
+			ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
+		}
+		_ = mockRepo.SaveMessage(context.Background(), &msg)
+
+		payload := map[string]interface{}{
+			"patientId": "patient-owner",
+		}
+		b, _ := json.Marshal(payload)
+		req := httptest.NewRequest("POST", "/api/family/messages/read", bytes.NewReader(b))
+		req.Header.Set("X-User-Id", "caregiver-reader")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("Esperava 200, obteve %d: %s", w.Code, w.Body.String())
+		}
+
+		msgs, _ := mockRepo.GetMessages(context.Background(), "patient-owner", 10, 0)
+		if len(msgs) == 0 || !msgs[0].IsRead {
+			t.Errorf("Mensagem deveria estar marcada como is_read = true")
 		}
 	})
 }
