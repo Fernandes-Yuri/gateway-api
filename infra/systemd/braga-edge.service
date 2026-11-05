@@ -9,17 +9,21 @@ User=ec2-user
 WorkingDirectory=/home/ec2-user/braga-gateway
 EnvironmentFile=-/run/braga-saude/gateway.env
 EnvironmentFile=-/etc/braga-saude/gateway.env
-Environment=HOST=127.0.0.1
+Environment=HOST=0.0.0.0
 Environment=PORT=8080
 Environment=BACKEND_SOCK=/run/braga-saude/backend.sock
+Environment=BACKEND_TCP_ADDR=127.0.0.1:8083
 Environment=CHAT_SOCK=/run/braga-saude/chat.sock
 Environment=LIMITER_SOCK=/run/braga-saude/limiter.sock
+Environment=FIREBASE_PROJECT_ID=braga-saude
 ExecStart=/usr/local/bin/braga-edge \
-    --host 127.0.0.1 \
+    --host 0.0.0.0 \
     --port 8080 \
     --backend-sock /run/braga-saude/backend.sock \
+    --backend-tcp-addr 127.0.0.1:8083 \
     --chat-sock /run/braga-saude/chat.sock \
-    --limiter-sock /run/braga-saude/limiter.sock
+    --limiter-sock /run/braga-saude/limiter.sock \
+    --firebase-project-id braga-saude
 KillSignal=SIGTERM
 TimeoutStopSec=10
 Restart=on-failure

@@ -48,6 +48,9 @@ pub struct CliArgs {
     )]
     pub backend_sock: PathBuf,
 
+    #[arg(long, env = "BACKEND_TCP_ADDR", default_value = "127.0.0.1:8083")]
+    pub backend_tcp_addr: String,
+
     #[arg(
         long,
         env = "LIMITER_SOCK",
@@ -64,7 +67,7 @@ pub struct CliArgs {
     #[arg(long, env = "DATABASE_URL")]
     pub database_url: Option<String>,
 
-    #[arg(long, env = "FIREBASE_PROJECT_ID", default_value = "bragasaude-app")]
+    #[arg(long, env = "FIREBASE_PROJECT_ID", default_value = "braga-saude")]
     pub firebase_project_id: String,
 
     #[arg(long, env = "READ_ROUTES_ENABLED", default_value_t = true)]
@@ -95,6 +98,7 @@ pub struct CliArgs {
 #[derive(Clone)]
 pub struct AppState {
     pub backend_sock: PathBuf,
+    pub backend_tcp_addr: String,
     pub chat_sock: PathBuf,
     pub chat_routes_enabled: bool,
     pub cert_cache: FirebaseCertCache,
@@ -167,6 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(AppState {
         backend_sock: args.backend_sock,
+        backend_tcp_addr: args.backend_tcp_addr,
         chat_sock: args.chat_sock,
         chat_routes_enabled: args.chat_routes_enabled,
         cert_cache: FirebaseCertCache::new(),
@@ -788,53 +793,34 @@ async fn proxy_to_backend(
 
     let client_upgrade = hyper::upgrade::on(&mut req);
 
-    // 5. Encaminha para o socket Unix apropriado (Go com fallback para Python)
+    // 5. Encaminha para o serviço apropriado (Go para chat, com fallback resiliente para Python)
     let path = req.uri().path();
     let is_chat_route = state.chat_routes_enabled && is_go_chat_route(path);
 
-    let stream = if is_chat_route && state.chat_sock.exists() {
+    let (mut sender, _conn_task) = if is_chat_route && state.chat_sock.exists() {
         match UnixStream::connect(&state.chat_sock).await {
-            Ok(s) => s,
+            Ok(s) => {
+                let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(s))
+                    .await
+                    .map_err(|_| StatusCode::BAD_GATEWAY)?;
+                let h = tokio::spawn(async move {
+                    if let Err(err) = conn.with_upgrades().await {
+                        warn!("Conexao com chat Go encerrou com erro: {err:?}");
+                    }
+                });
+                (sender, h)
+            }
             Err(e) => {
                 warn!(
-                    "Falha ao conectar no socket Go do chat {:?}: {e}. Acionando fallback para backend Python {:?}",
-                    state.chat_sock, state.backend_sock
+                    "Falha ao conectar no socket Go do chat {:?}: {e}. Acionando fallback para backend Python",
+                    state.chat_sock
                 );
-                match UnixStream::connect(&state.backend_sock).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!(
-                            "Fallback para backend Python {:?} também falhou: {e}",
-                            state.backend_sock
-                        );
-                        return Err(StatusCode::BAD_GATEWAY);
-                    }
-                }
+                connect_backend_stream(&state).await?
             }
         }
     } else {
-        match UnixStream::connect(&state.backend_sock).await {
-            Ok(s) => s,
-            Err(e) => {
-                error!(
-                    "Falha ao conectar no socket do backend {:?}: {e}",
-                    state.backend_sock
-                );
-                return Err(StatusCode::BAD_GATEWAY);
-            }
-        }
+        connect_backend_stream(&state).await?
     };
-
-    let io = TokioIo::new(stream);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-
-    tokio::spawn(async move {
-        if let Err(err) = conn.with_upgrades().await {
-            warn!("Conexao com backend encerrou com erro: {err:?}");
-        }
-    });
 
     let mut resp = sender
         .send_request(req)
@@ -862,6 +848,53 @@ async fn proxy_to_backend(
     }
 
     Ok(resp.into_response())
+}
+
+async fn connect_backend_stream(
+    state: &AppState,
+) -> Result<
+    (
+        hyper::client::conn::http1::SendRequest<Body>,
+        tokio::task::JoinHandle<()>,
+    ),
+    StatusCode,
+> {
+    if let Ok(s) = UnixStream::connect(&state.backend_sock).await {
+        let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(s))
+            .await
+            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        let h = tokio::spawn(async move {
+            if let Err(err) = conn.with_upgrades().await {
+                warn!("Conexao com backend (unix) encerrou com erro: {err:?}");
+            }
+        });
+        return Ok((sender, h));
+    }
+
+    warn!(
+        "Socket Unix do backend {:?} indisponível. Acionando fallback TCP para {}",
+        state.backend_sock, state.backend_tcp_addr
+    );
+    match tokio::net::TcpStream::connect(&state.backend_tcp_addr).await {
+        Ok(s) => {
+            let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(s))
+                .await
+                .map_err(|_| StatusCode::BAD_GATEWAY)?;
+            let h = tokio::spawn(async move {
+                if let Err(err) = conn.with_upgrades().await {
+                    warn!("Conexao com backend (tcp) encerrou com erro: {err:?}");
+                }
+            });
+            Ok((sender, h))
+        }
+        Err(e) => {
+            error!(
+                "Fallback TCP para backend ({}) também falhou: {e}",
+                state.backend_tcp_addr
+            );
+            Err(StatusCode::BAD_GATEWAY)
+        }
+    }
 }
 
 // ============================================================================
@@ -2744,5 +2777,19 @@ mod tests {
         assert!(!is_go_chat_route("/api/sync/family-binding"));
         assert!(!is_go_chat_route("/api/consultation/create"));
         assert!(!is_go_chat_route("/api/catalog/search"));
+    }
+
+    #[test]
+    fn test_cli_args_defaults() {
+        use clap::Parser;
+        let args = CliArgs::parse_from(["braga-edge"]);
+        assert_eq!(args.firebase_project_id, "braga-saude");
+        assert_eq!(args.backend_tcp_addr, "127.0.0.1:8083");
+        assert_eq!(
+            args.backend_sock,
+            std::path::PathBuf::from("/run/braga-saude/backend.sock")
+        );
+        assert_eq!(args.port, 8080);
+        assert_eq!(args.host, "127.0.0.1");
     }
 }
