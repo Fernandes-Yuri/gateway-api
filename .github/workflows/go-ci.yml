@@ -1,0 +1,39 @@
+name: CI Go (Family Chat Service)
+
+on:
+  push:
+    branches: ['master', 'feat/**', 'fix/**', 'ops/**']
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  go-test-and-build:
+    name: Testes e Compilação Go
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: go/go.sum
+
+      - name: Executar testes unitários
+        working-directory: go
+        run: go test -v -race ./...
+
+      - name: Compilar binário Linux amd64
+        working-directory: go
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../bin/braga-chat ./cmd/braga-chat
+
+      - name: Upload do artefato compilado
+        uses: actions/upload-artifact@v4
+        with:
+          name: braga-chat-binary
+          path: bin/braga-chat
+          retention-days: 7
