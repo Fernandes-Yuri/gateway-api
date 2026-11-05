@@ -789,12 +789,8 @@ async fn proxy_to_backend(
     let client_upgrade = hyper::upgrade::on(&mut req);
 
     // 5. Encaminha para o socket Unix apropriado (Go com fallback para Python)
-    let path = req.uri().path().to_string();
-    let is_chat_route = state.chat_routes_enabled
-        && (path.starts_with("/api/family")
-            || path == "/ws/family"
-            || path == "/api/sync/family-message"
-            || path == "/api/sync/family-binding");
+    let path = req.uri().path();
+    let is_chat_route = state.chat_routes_enabled && is_go_chat_route(path);
 
     let stream = if is_chat_route && state.chat_sock.exists() {
         match UnixStream::connect(&state.chat_sock).await {
@@ -2690,5 +2686,63 @@ async fn sync_vitals_handler(
             )
                 .into_response()
         }
+    }
+}
+
+/// Avalia se o caminho HTTP/WS pertence estritamente ao subsistema de chat familiar em Go
+/// (braga-chat), preservando rotas clínicas do Care OS (/api/family/patients/*)
+/// e rotas de outros domínios (/api/sync/family-binding) no backend Python.
+pub fn is_go_chat_route(path: &str) -> bool {
+    path == "/ws/family"
+        || path == "/api/sync/family-message"
+        || path == "/api/family/messages"
+        || path.starts_with("/api/family/messages/")
+        || path == "/api/family/message/delete"
+        || path.starts_with("/api/family/find-by-code/")
+        || path == "/api/family/accept"
+        || path == "/api/family/e2ee/public-key"
+        || path.starts_with("/api/family/bindings/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_go_chat_route() {
+        // Rotas direcionadas para o microserviço Go
+        assert!(is_go_chat_route("/ws/family"));
+        assert!(is_go_chat_route("/api/sync/family-message"));
+        assert!(is_go_chat_route("/api/family/messages"));
+        assert!(is_go_chat_route("/api/family/messages/send"));
+        assert!(is_go_chat_route("/api/family/messages/patient-123"));
+        assert!(is_go_chat_route("/api/family/message/delete"));
+        assert!(is_go_chat_route("/api/family/find-by-code/TESTFAM1"));
+        assert!(is_go_chat_route("/api/family/accept"));
+        assert!(is_go_chat_route("/api/family/e2ee/public-key"));
+        assert!(is_go_chat_route("/api/family/bindings/user-abc"));
+
+        // Rotas clínicas do Care OS que DEVEM continuar indo para o Python
+        assert!(!is_go_chat_route(
+            "/api/family/patients/patient-1/daily-bulletin"
+        ));
+        assert!(!is_go_chat_route(
+            "/api/family/patients/patient-1/doctor-report/pdf"
+        ));
+        assert!(!is_go_chat_route(
+            "/api/family/patients/patient-1/medications"
+        ));
+        assert!(!is_go_chat_route(
+            "/api/family/patients/patient-1/medication-dose-groups"
+        ));
+        assert!(!is_go_chat_route(
+            "/api/family/patients/patient-1/prescriptions/analyze"
+        ));
+        assert!(!is_go_chat_route("/api/family/health-alert"));
+
+        // Rotas de sincronização de outros domínios ou consultas médicas
+        assert!(!is_go_chat_route("/api/sync/family-binding"));
+        assert!(!is_go_chat_route("/api/consultation/create"));
+        assert!(!is_go_chat_route("/api/catalog/search"));
     }
 }
