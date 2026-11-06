@@ -25,7 +25,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Pa
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from api_identity import firebase_uid, require_owner, require_family_access
+from api_identity import firebase_uid, require_owner, require_family_access, require_owner_or_caregiver
 from column_crypto import decrypt_field
 from config import STORAGE_DIR, PUBLIC_API_BASE_URL
 from profile_contract import profile_upsert
@@ -711,7 +711,8 @@ async def get_daily_metrics(
     before_date: Optional[str] = Query(None, description="Cursor de data (YYYY-MM-DD) para carregar histórico anterior"),
     uid: str = Depends(firebase_uid),
 ):
-    require_owner(uid, user_id)
+    # AUD-ETAPA1: titular OU cuidador com vínculo ACTIVE (antes: só o titular).
+    await require_owner_or_caregiver(_state.db_pool, uid, user_id)
     db_pool = _state.db_pool
     if not db_pool:
         return []

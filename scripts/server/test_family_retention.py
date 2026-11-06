@@ -60,19 +60,22 @@ class RetentionRoutes(unittest.TestCase):
 
     def test_delete_is_idempotent_when_row_already_gone(self):
         self.conn.fetchrow.return_value = None
-        self.assertEqual(200, self.client.post('/api/family/message/delete', json={'id':self.id}).status_code)
+        # ETAPA 1: rota legada desativada (chat assumido pelo Go braga-chat): 410 Gone.
+        self.assertEqual(410, self.client.post('/api/family/message/delete', json={'id':self.id}).status_code)
 
     def test_cannot_delete_another_senders_message(self):
         self.conn.fetchrow.return_value = dict(sender_id='other', id=uuid.UUID(self.id),patient_id='patient')
-        self.assertEqual(403, self.client.post('/api/family/message/delete', json={'id':self.id}).status_code)
+        # ETAPA 1: rota legada desativada (chat assumido pelo Go braga-chat): 410 Gone.
+        self.assertEqual(410, self.client.post('/api/family/message/delete', json={'id':self.id}).status_code)
         self.conn.execute.assert_not_awaited()
 
     def test_delete_scrubs_content_and_retains_expiry(self):
         self.conn.fetchrow.return_value = dict(sender_id='patient', id=uuid.UUID(self.id),patient_id='patient')
-        self.assertEqual(200, self.client.post('/api/family/message/delete', json={'id':self.id}).status_code)
-        sql = self.conn.execute.call_args.args[0]
-        self.assertIn("message_text=''", sql)
-        self.assertNotIn('expires_at=', sql)
+        # ETAPA 1: rota legada desativada (chat assumido pelo Go braga-chat): 410 Gone.
+        self.assertEqual(410, self.client.post('/api/family/message/delete', json={'id':self.id}).status_code)
+        # A exclusao de conteudo e retenção de expiração agora sao responsabilidade
+        # do Go braga-chat; o roteador Python nao executa mais DELETE local.
+        self.conn.execute.assert_not_awaited()
 
     def test_expired_message_is_rejected_before_insert(self):
         result = self.client.post('/api/sync/family-message', json=dict(id=self.id, patientId='patient', senderId='patient',

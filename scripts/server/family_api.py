@@ -243,8 +243,10 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
             code = b.connectionCode.strip().upper()
             if len(code) != 8 or any(c not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' for c in code):
                 raise HTTPException(422, 'Código inválido.')
-            if not await conn.fetchval('SELECT self_care_complete FROM profiles WHERE id=$1', uid):
-                raise HTTPException(409, 'Conclua e sincronize seu perfil antes de criar um convite.')
+            # AUD-ETAPA1: trava de self_care_complete removida. O convite familiar
+            # depende apenas do perfil básico já garantido pelo onboarding; exigir
+            # dados completos de autocuidado antes do registro bloqueava ilegitimamente
+            # idosos com mobilidade reduzida de conectar um cuidador.
             binding_id = _parse_uuid(b.id) if b.id else uuid.uuid4()
             now = datetime.now(timezone.utc)
             # Sanitização Zero-Trust
@@ -534,7 +536,7 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
 
     @app.post('/api/family/messages/send')
     async def send_family_message(m: message_model, request: Request, uid: str = Depends(firebase_uid)):
-        return await _handle_send_family_message(m, request, uid)
+        raise HTTPException(410, 'Rota legada desativada. Envie por /api/sync/family-message.')
 
     async def _handle_get_family_messages(patient_id: str, limit: int, offset: int, uid: str):
         async with pool().acquire() as conn:
@@ -553,15 +555,11 @@ def install_family_routes(app, get_pool, binding_model, message_model, rate_limi
 
     @app.get('/api/family/messages')
     async def messages_query(patient_id: str, limit: int = 50, offset: int = 0, uid: str = Depends(firebase_uid)):
-        return await _handle_get_family_messages(patient_id, limit, offset, uid)
+        raise HTTPException(410, 'Rota legada desativada. Envie por /api/family/messages/{patient_id}.')
 
     @app.post('/api/family/message/delete')
     async def delete_message(p: DeleteFamilyMessage, uid: str = Depends(firebase_uid)):
-        """D47 (LGPD Art. 18, VI): o remetente apaga a própria mensagem.
-
-        Tombstone imediato (`deleted_at`): o outro aparelho aplica a exclusão no
-        próximo sync, e a purga remove o resíduo junto com a expiração natural.
-        """
+        raise HTTPException(410, 'Rota legada desativada. Exclusões via /api/sync/family-message (tombstone).')
         try:
             message_id = uuid.UUID(p.id)
         except (ValueError, AttributeError):

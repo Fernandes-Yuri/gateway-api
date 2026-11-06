@@ -294,6 +294,18 @@ pub async fn require_family_access(
     Ok(())
 }
 
+/// Etapa 1: titular do recurso OU cuidador com vínculo ACTIVE na mesma conta.
+/// Usado em rotas de sinais de saúde (métricas diárias, passos, hidratação) para
+/// liberar o acompanhamento legítimo do cuidador autorizado sem abrir mão do
+/// Zero-Trust: quem não é o titular precisa estar em family_bindings.
+pub async fn require_owner_or_caregiver(
+    pool: &PgPool,
+    caller_uid: &str,
+    target_uid: &str,
+) -> Result<(), IdentityError> {
+    require_family_access(pool, caller_uid, target_uid).await
+}
+
 /// Verifica se o usuário autenticado possui permissão clínica específica no vínculo familiar
 pub async fn require_patient_permission(
     pool: &PgPool,

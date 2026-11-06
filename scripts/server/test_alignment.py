@@ -111,12 +111,11 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(503, self.client.post('/api/family/accept', json=dict(code='ABCD1234', caregiverName='Ana', caregiverRelation='Filha')).status_code)
 
     def test_message_delete_fail_closed_and_validates_id(self):
-        """D47: exclusão nunca finge sucesso sem banco e rejeita id malformado antes do pool."""
+        """D47: rota legada desativada na ETAPA 1 (chat assumido pelo Go braga-chat): 410 Gone."""
         self.app.dependency_overrides[firebase_uid] = lambda: 'sender'
-        # Banco indisponível: 503 (fail-closed, nunca 200 falso)
-        self.assertEqual(503, self.client.post('/api/family/message/delete', json=dict(id=str(uuid.uuid4()))).status_code)
-        # id malformado: 422 sem tocar no banco
-        self.assertEqual(422, self.client.post('/api/family/message/delete', json=dict(id='nao-e-uuid')).status_code)
+        # Rota desativada: 410 precede qualquer validacao de id ou acesso ao banco.
+        self.assertEqual(410, self.client.post('/api/family/message/delete', json=dict(id=str(uuid.uuid4()))).status_code)
+        self.assertEqual(410, self.client.post('/api/family/message/delete', json=dict(id='nao-e-uuid')).status_code)
 
     def test_joker_connection_code_preview_and_self_accept_rejection(self):
         self.app.dependency_overrides[firebase_uid] = lambda: 'test-caregiver-uid'
