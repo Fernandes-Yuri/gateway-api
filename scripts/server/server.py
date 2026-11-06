@@ -1,14 +1,12 @@
 import os
 import asyncio
 from datetime import datetime, timezone
-from typing import List, Optional, Any
+from typing import Optional, Any
 from fastapi import BackgroundTasks, FastAPI, HTTPException as HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
 
 from assistant_preferences import install_preference_routes, process_preferences
-from family_api import install_family_routes, purge_expired_family_messages
 from caregiver_alerts import install_caregiver_alert_routes
 from security_defense import (
     StrictRateLimiter,
@@ -26,9 +24,9 @@ from core.devices import (
 )
 # Routers extraidos (Fase A passo 2): health, dataset, devices, notify, emergency.
 from routers import health as health_router
-# Routers extraidos (Fase A passo 3): app/OTA/landing + audio/TTS.
-from routers import app as app_router
-from routers import audio as audio_router
+# Fase #6: consultas medicas (Care OS + agendamento por voz) preservadas em
+# Python; chat familiar e E2EE vivem exclusivamente no Go braga-chat.
+from routers import consultations as consultations_router
 # Routers extraidos (Fase A passo 4): chat conversacional.
 from routers import chat as chat_router
 # Routers extraidos (Fase A passo 4b): autenticacao (OTP, reset, conta).
@@ -41,7 +39,6 @@ from routers import emergency as emergency_router
 # Render consome estes endpoints e deixa de acessar o RDS diretamente.
 from routers import admin as admin_router
 from routers import care_os as care_os_router
-from routers import catalog as catalog_router
 from routers import agent_relay as agent_relay_router
 # Curadoria do dataset de fine-tuning do aplicativo.
 import core.dataset as dataset_module
@@ -118,7 +115,7 @@ SEM_REST = asyncio.Semaphore(2)
 # — recon zero custo. Em produção ficam desligados; localmente, DEVELOPMENT_MODE=1
 # os reabilita para depuração. Não afeta os testes (não dependem do OpenAPI público).
 app = FastAPI(
-    title="Braga Saúde Gateway, TTS, Sync & Notification Hub",
+    title="Braga Saúde Gateway, Sync & Notification Hub",
     version="5.0",
     docs_url="/docs" if DEVELOPMENT_MODE else None,
     redoc_url="/redoc" if DEVELOPMENT_MODE else None,
@@ -135,14 +132,6 @@ health_router.configure_state(
     messaging=messaging if HAS_FCM else None,
 )
 app.include_router(health_router.router)
-app_router.configure_state(
-    db_pool=None,  # preenchido no startup (init_db)
-    messaging=messaging if HAS_FCM else None,
-    has_fcm=HAS_FCM,
-)
-app.include_router(app_router.router)
-audio_router.configure_state()
-app.include_router(audio_router.router)
 
 # Origens permitidas via env (separadas por vírgula). "CORS *" com credenciais
 # é inseguro e inválido perante a spec; a lista precisa ser explícita.
@@ -160,32 +149,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Clientes legados também conseguem ler o aviso de aposentadoria (410).
-# Nenhum desses caminhos serve mais metadados ou bytes de APK.
-PUBLIC_APP_PATHS = ('/api/app/latest', '/api/app/download', '/api/app/version')
-
-
-@app.middleware("http")
-async def public_app_release_cors(request: Request, call_next):
-    """CORS apenas para os avisos públicos das rotas aposentadas."""
-    path = request.url.path.rstrip('/') or '/'
-    if path not in PUBLIC_APP_PATHS:
-        return await call_next(request)
-    if request.method == 'OPTIONS':
-        return Response(status_code=204, headers={
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, OPTIONS',
-            'Access-Control-Allow-Headers': request.headers.get(
-                'access-control-request-headers', 'content-type, cache-control, pragma'),
-            'Access-Control-Max-Age': '86400',
-        })
-    response = await call_next(request)
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    # "*" e credenciais são incompatíveis; esses endpoints nunca usam cookie.
-    if 'access-control-allow-credentials' in response.headers:
-        del response.headers['access-control-allow-credentials']
-    return response
 
 db_pool: Optional[Any] = None
 from user_moderation import configure_pool as configure_moderation_pool
@@ -239,38 +202,11 @@ async def user_moderation_middleware(request: Request, call_next):
 # MODELOS PYDANTIC
 # =============================================================
 # Message e ChatCompletionRequest: movidos para routers/chat.py (Fase A passo 4).
-
-# VoiceRequest: movido para routers/audio.py (Fase A passo 3).
-
 # DeviceRegistrationRequest, AlertNotificationRequest, EmergencyTriggerRequest:
 # movidos para routers/health.py (Fase A passo 2).
-
-class FamilyBindingSyncDto(BaseModel):
-    id: Optional[str] = None
-    patientId: str
-    caregiverId: Optional[str] = None
-    caregiverName: str
-    caregiverRelation: str
-    connectionCode: str
-    status: Optional[str] = "PENDING"
-    caregiverRole: str = "CAREGIVER_VIEWER"
-    permissions: List[str] = Field(default_factory=list)
-    patientPublicKey: Optional[str] = None
-    caregiverPublicKey: Optional[str] = None
-    createdAt: str
-    expiresAt: str
-
-class FamilyMessageSyncDto(BaseModel):
-    id: Optional[str] = None
-    patientId: str
-    senderId: str
-    senderName: str
-    messageText: Optional[str] = ""
-    bodyEncrypted: Optional[str] = None
-    encryptionVersion: Optional[int] = None
-    iconType: Optional[str] = "LOVE"
-    isRead: Optional[bool] = False
-    sentAt: str
+# FamilyBindingSyncDto: movido para routers/sync.py (Fase #6).
+# DTOs de chat familiar/E2EE foram removidos com o Python legado: o chat vive
+# exclusivamente no microserviço Go braga-chat.
 
 # =============================================================
 # INICIALIZAÇÃO DE POOL E SCHEDULER
@@ -283,7 +219,7 @@ class FamilyMessageSyncDto(BaseModel):
 # MESMO com DATABASE_URL configurado, e toda rota de banco devolveria
 # 503/offline_mode em producao. (Detectado na revisao pre-push: os testes
 # locais passavam justamente por esperarem pool None offline.)
-_POOL_ROUTERS = (health_router, app_router, chat_router, auth_router,
+_POOL_ROUTERS = (health_router, consultations_router, chat_router, auth_router,
                  sync_router, admin_router, care_os_router)
 
 
@@ -329,14 +265,8 @@ async def startup():
 
         # Pass the coroutine directly: a sync lambda runs in an executor without an event loop.
         if db_pool and HAS_SCHEDULER:
-            await purge_expired_family_messages(db_pool)
             global retention_scheduler
             retention_scheduler = AsyncIOScheduler()
-            retention_scheduler.add_job(
-                purge_expired_family_messages, 'interval', seconds=30,
-                args=[db_pool], id="purge_family_messages_24h",
-                replace_existing=True, max_instances=1, coalesce=True,
-            )
             async def cleanup_deleted_accounts():
                 from services.account_deletion import cleanup_account_files
                 async with db_pool.acquire() as conn:
@@ -524,8 +454,16 @@ async def dispatch_clinical_alert(
 
     return True
 
-install_family_routes(app, lambda: db_pool, FamilyBindingSyncDto, FamilyMessageSyncDto,
-                      rate_limiter=rate_limiter, load_devices=load_devices, dispatch_push=dispatch_push)
+# Fase #6: consultas medicas (Care OS + agendamento por voz) seguem no Python.
+# O chat familiar/E2EE e os vinculos ja vivem no Go braga-chat; a unica rota de
+# vinculo ainda sem equivalente Go (POST /api/sync/family-binding) foi preservada
+# em routers/sync.py.
+consultations_router.configure_state(
+    db_pool=None,  # preenchido no startup por _propagate_db_pool()
+    load_devices=load_devices,
+    dispatch_push=dispatch_push,
+)
+app.include_router(consultations_router.router)
 install_caregiver_alert_routes(app, lambda: db_pool, load_devices, dispatch_push)
 
 # =============================================================
@@ -671,7 +609,6 @@ app.include_router(admin_router.router)
 care_os_router.configure_state(db_pool=None, public_base_url=PUBLIC_API_BASE_URL)
 app.include_router(care_os_router.router)
 
-app.include_router(catalog_router.router)
 app.include_router(agent_relay_router.router)
 
 # Configuracao dos modulos core extraidos (Fase A passo 6).
@@ -687,25 +624,8 @@ dataset_module.configure_state(
 # permanecem aqui (compartilhados com ws_orb) e sao passados ao
 # router via configure_state.
 
-# Canal descontinuado (SPEC-08): Triagem WhatsApp.
-# Responde 410 Gone imediatamente sem consultar banco de dados.
-@app.api_route(
-    "/api/whatsapp",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
-    include_in_schema=False,
-)
-@app.api_route(
-    "/api/whatsapp/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
-    include_in_schema=False,
-)
-async def whatsapp_gone(path: str = ""):
-    return JSONResponse(
-        status_code=410,
-        content={"detail": "Canal WhatsApp descontinuado (SPEC-08)"},
-        headers={"Access-Control-Allow-Origin": "*"},
-    )
-
+# Fase #6: o canal WhatsApp (SPEC-08) foi aposentado em definitivo — a borda
+# Rust responde 410 Gone na entrada, sem alcançar o Python.
 
 # Verificação de integridade do conteúdo público: consulta autenticada
 # apenas para o painel; a coleta em si não expõe rota nenhuma.

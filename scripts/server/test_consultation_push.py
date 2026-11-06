@@ -6,8 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from api_identity import firebase_uid
-from family_api import install_family_routes
-from test_alignment import namespace
+from routers import consultations
 
 
 class ConsultationPushTest(unittest.TestCase):
@@ -34,12 +33,20 @@ class ConsultationPushTest(unittest.TestCase):
         self.dispatch = MagicMock(return_value=True)
         self.devices = {'patient': {'token': 'patient-token'}, 'caregiver': {'token': 'caregiver-token'}}
         self.app = FastAPI()
-        install_family_routes(self.app, lambda: self.pool, namespace['FamilyBindingSyncDto'],
-                              namespace['FamilyMessageSyncDto'],
-                              load_devices=lambda: self.devices, dispatch_push=self.dispatch)
+        consultations.configure_state(
+            db_pool=self.pool,
+            load_devices=lambda: self.devices,
+            dispatch_push=self.dispatch,
+        )
+        self.app.include_router(consultations.router)
         self.app.dependency_overrides[firebase_uid] = lambda: 'caregiver'
         self.client = TestClient(self.app)
         self.cid = str(uuid.UUID(int=1))
+
+    def tearDown(self):
+        # O estado do router e global ao modulo: devolve ao server real para
+        # nao contaminar os demais testes do discovery.
+        consultations.configure_state(db_pool=None, load_devices=None, dispatch_push=None)
 
     def _select_then_update(self, new_status):
         # 1a chamada: SELECT ... FOR UPDATE. 2a: UPDATE ... RETURNING *.

@@ -1,7 +1,7 @@
 """Testes do validador de aceite/recusa de consulta (doc 10 §2.1)."""
 import unittest
 from datetime import datetime, timedelta, timezone
-from family_contract import validate_consultation_acceptance
+from routers.consultations import validate_consultation_acceptance
 
 
 def consultation(**kw):

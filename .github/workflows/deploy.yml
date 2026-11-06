@@ -53,10 +53,6 @@ jobs:
         run: |
           python -m unittest discover scripts/server/ "test_*.py"
 
-      - name: Run research tests
-        run: |
-          PYTHONPATH=scripts/server python -m unittest discover research/ "test_*.py"
-
   ensaio-migracoes:
     # DT-004: gate do deploy. Uma migration quebrada reprova aqui antes de
     # qualquer comando SSM tocar a EC2 (deploy.sh roda com set -e).

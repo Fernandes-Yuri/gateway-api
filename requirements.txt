@@ -1,4 +1,4 @@
-# Dependencias de RUNTIME do Braga Saude Gateway (FastAPI + TTS + WhatsApp + RDS).
+# Dependencias de RUNTIME do Braga Saude Gateway (FastAPI + Sync + RDS).
 #
 # Este ficheiro e o INPUT humano (intervalos). O que instala de facto em
 # CI e na EC2 e o FICHEIRO GERADO requirements.lock, com hashes:
@@ -6,11 +6,15 @@
 #   pip install --require-hashes -r requirements.lock
 #
 # Para atualizar: editar as linhas abaixo e regenerar com scripts/gera_lock.sh.
-# Nao fixar transitivas aqui — elas entram pelo lock.
+# Nao fixar transitivas aqui — elas entram pelo lock (ver fastapi/starlette).
 #
 # deploy.sh:21-23 instala o lock a cada deploy na EC2. Antes ele nao
 # existia, o pip install era pulado e as dependencias ficavam so no venv
 # -- sem versionamento (divida registrada no doc 11 §3.2).
+#
+# Fase #6: mencoes e dependencias do TTS (Piper) e do canal WhatsApp foram
+# removidas — ambos foram aposentados e a borda Rust responde 410 antes do
+# Python. O nucleo abaixo cobre apenas o Core Python em producao.
 
 # Web framework (versao verificada localmente + CI verde)
 fastapi==0.141.1
@@ -18,15 +22,13 @@ uvicorn[standard]>=0.30.0
 # SPEC-04: parte de pecas com 2 workers Uvicorn (via gunicorn), aproveitando
 # os 2 vCPUs da EC2 t3.small apos o upgrade de escala pre-lancamento.
 gunicorn>=23.0
-starlette==1.6.0
 pydantic>=2.9,<3
 # Form data (multipart): exigido por rotas com UploadFile/File/Form
 # (receitas de medicamentos e suporte).
 python-multipart>=0.0.9
 
-# HTTP clients (Groq, Meta WhatsApp, reCAPTCHA)
+# HTTP client (Groq, reCAPTCHA server-side e chamadas internas)
 httpx==0.28.1
-requests>=2.31
 
 # Leitura e OCR de PDF de receitas medicas
 pymupdf>=1.24.0
@@ -55,6 +57,3 @@ APScheduler>=3.10
 
 # Firebase Admin (FCM push + auth) — so na EC2
 firebase-admin>=6.5
-
-# Google reCAPTCHA server-side: validado via POST para a API do Google com
-# httpx; nao exige SDK adicional.

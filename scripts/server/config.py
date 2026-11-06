@@ -1,7 +1,7 @@
 """Configuração central do gateway Braga Saúde — Fase B, passo 1 (doc 36).
 
 Centraliza todas as variáveis de ambiente, defaults e paths que estavam
-espalhados no topo do `server.py` (linhas 82-150 + RELEASES_DIR). O
+espalhados no topo do `server.py` (linhas 82-150). O
 objetivo é eliminar os caminhos hardcoded do homelab para que o gateway
 rode em qualquer host (homelab ou EC2) SOMENTE via variáveis de ambiente.
 
@@ -40,27 +40,21 @@ USES_ORGANIZED_LAYOUT = os.path.basename(APP_DIR) == "app"
 
 if USES_ORGANIZED_LAYOUT:
     DEFAULT_DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-    DEFAULT_CACHE_DIR = os.path.join(PROJECT_ROOT, "cache")
     default_dataset_path = os.path.join(DEFAULT_DATA_DIR, "dataset", "dataset_braga.jsonl")
-    default_audio_cache_dir = os.path.join(DEFAULT_CACHE_DIR, "audio")
     default_storage_dir = os.path.join(DEFAULT_DATA_DIR, "storage")
     default_devices_path = os.path.join(DEFAULT_DATA_DIR, "devices", "registered_devices.json")
 else:
     # Mantém o comportamento atual para execução local fora da pasta app/.
     default_dataset_path = os.path.join(PROJECT_ROOT, "dataset_braga.jsonl")
-    default_audio_cache_dir = os.path.join(PROJECT_ROOT, "audio_cache")
     default_storage_dir = os.path.join(PROJECT_ROOT, "storage")
     default_devices_path = os.path.join(PROJECT_ROOT, "registered_devices.json")
 
 DATASET_PATH = os.getenv("DATASET_PATH", default_dataset_path)
-AUDIO_CACHE_DIR = os.getenv("AUDIO_CACHE_DIR", default_audio_cache_dir)
 STORAGE_DIR = os.getenv("STORAGE_DIR", default_storage_dir)
 DEVICES_PATH = os.getenv("DEVICES_PATH", default_devices_path)
-RELEASES_DIR = os.getenv("BRAGA_RELEASES_DIR", os.path.join(PROJECT_ROOT, "releases"))
 
 # Garante que os diretórios existem (mesmo comportamento do server.py linhas 151-154).
 os.makedirs(os.path.dirname(DATASET_PATH), exist_ok=True)
-os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 os.makedirs(STORAGE_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(DEVICES_PATH), exist_ok=True)
 
@@ -189,7 +183,6 @@ def reload_secrets(*, force_reload: bool = True, override: bool = True) -> dict[
 __all__ = [
     "ADMIN_TOTP_SECRET",
     "APP_DIR",
-    "AUDIO_CACHE_DIR",
     "AUTH_PEPPER_SECRET",
     "AWS_SSM_PREFIX",
     "BLIND_INDEX_PEPPER",
@@ -213,7 +206,6 @@ __all__ = [
     "PUBLIC_API_BASE_URL",
     "RECAPTCHA_SECRET",
     "RECAPTCHA_VERIFY_URL",
-    "RELEASES_DIR",
     "SERVICE_ACCOUNT_PATH",
     "SERVICE_TOKEN",
     "STORAGE_DIR",

@@ -28,6 +28,12 @@ scripts/server/storage/
 # Locks dos arquivos de diagnóstico e dados locais
 *.jsonl.lock
 *.log.lock
+# Resíduos de runtime do rastreio de LLM e do webhook (nunca versionar).
+llm_trace.jsonl
+llm_trace.jsonl.lock
+scripts/server/llm_trace.jsonl
+scripts/server/webhook_outbox.log
+scripts/server/webhook_outbox.log.lock
 
 # Binários Go compilados
 /go/braga-chat

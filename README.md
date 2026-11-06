@@ -124,6 +124,7 @@ gateway-api/
 │   │   ├── routers/                     # Endpoints REST e WebSocket por domínio
 │   │   │   ├── auth.py                  # Autenticação, OTP e sessões
 │   │   │   ├── care_os.py               # Contratos de família, cuidadores e farmácia
+│   │   │   ├── consultations.py         # Consultas médicas e confirmação de rascunho por voz
 │   │   │   ├── sync.py                  # Sincronização de saúde, perfil e vitais
 │   │   │   └── admin.py                 # Portal administrativo / KPIs de serviço
 │   │   ├── schemas/                     # Contratos Pydantic
@@ -156,7 +157,9 @@ gateway-api/
 | **POST** | `/api/sync/vitals` | Python (`FastAPI`) | Ingestão e disparo de alertas clínicos para cuidadores |
 | **POST** | `/v1/chat/completions` | Python (`FastAPI`) | Canal conversacional de inteligência artificial clínica |
 | **WS** | `/ws/orb` | Python (`FastAPI`) | Sessão contínua de diálogo por voz streaming (Orb) |
-| **POST** | `/api/family/messages/e2ee` | Python (`FastAPI`) | Blind Relay de chat familiar criptografado de ponta a ponta |
+| **POST** | `/api/family/messages/*` | Go (`braga-chat`) | Blind Relay de chat familiar E2EE, recibos de leitura e tombstone |
+| **GET** | `/api/family/bindings/{user_id}` | Go (`braga-chat`) | Vínculos familiares autorizados |
+| **POST** | `/api/consultation/*` | Python (`FastAPI`) | Consultas médicas: criar/aceitar/recusar/concluir/cancelar e confirmar rascunho por voz |
 
 ---
 
