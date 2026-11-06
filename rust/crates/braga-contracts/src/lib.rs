@@ -553,6 +553,36 @@ impl Default for AudioRetiredResponse {
     }
 }
 
+/// Resposta 410 Gone do canal WhatsApp aposentado (SPEC-08).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WhatsappRetiredResponse {
+    pub detail: String,
+}
+
+impl Default for WhatsappRetiredResponse {
+    fn default() -> Self {
+        Self {
+            detail: "Canal WhatsApp descontinuado (SPEC-08)".to_string(),
+        }
+    }
+}
+
+/// Resposta 410 Gone das rotas aposentadas de alimentação/supermercado (SPEC-08).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NutritionRetiredResponse {
+    pub detail: String,
+    pub code: String,
+}
+
+impl Default for NutritionRetiredResponse {
+    fn default() -> Self {
+        Self {
+            detail: "O módulo de alimentação foi descontinuado.".to_string(),
+            code: "nutrition_retired".to_string(),
+        }
+    }
+}
+
 /// Papel de mensagem no Orb WebSocket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
