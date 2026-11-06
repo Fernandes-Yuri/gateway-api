@@ -1375,6 +1375,13 @@ async fn vitals_handler(
             let id: sqlx::types::Uuid = r.try_get("id").unwrap_or_default();
             let measured_at: Option<DateTime<Utc>> = r.try_get("measured_at").ok();
             let created_at: Option<DateTime<Utc>> = r.try_get("created_at").ok();
+            // FASE 8A (DT-051): colunas reais da vital_signs confirmadas nas
+            // migrations 004/054 e no `_COLS` do Python em produção
+            // (services/health_queries.py): heart_rate, glucose_level,
+            // glucose_type, oxygen_saturation, confirmed_via,
+            // confirmation_code. As leituras antigas (`heart_rate_bpm`,
+            // `glucose_mg_dl`, `oxygen_saturation_percent`) apontavam para
+            // colunas inexistentes e o `.ok()` transformava o erro em `null`.
             VitalSignRecord {
                 id: id.to_string(),
                 user_id: r.try_get("user_id").unwrap_or_default(),
@@ -1382,12 +1389,13 @@ async fn vitals_handler(
                 created_at: created_at.map(|d| d.to_rfc3339()),
                 systolic_pressure: r.try_get("systolic_pressure").ok(),
                 diastolic_pressure: r.try_get("diastolic_pressure").ok(),
-                pulse_bpm: r.try_get("heart_rate_bpm").ok(),
-                blood_glucose_mg_dl: r.try_get("glucose_mg_dl").ok(),
-                body_temperature_c: r.try_get("body_temperature_c").ok(),
-                oxygen_saturation_percent: r.try_get("oxygen_saturation_percent").ok(),
+                heart_rate: r.try_get("heart_rate").ok(),
+                glucose_level: r.try_get("glucose_level").ok(),
+                glucose_type: r.try_get("glucose_type").ok(),
+                oxygen_saturation: r.try_get("oxygen_saturation").ok(),
                 hydration_ml: r.try_get("hydration_ml").ok(),
-                notes: r.try_get("notes").ok(),
+                confirmed_via: r.try_get("confirmed_via").ok(),
+                confirmation_code: r.try_get("confirmation_code").ok(),
             }
         })
         .collect();

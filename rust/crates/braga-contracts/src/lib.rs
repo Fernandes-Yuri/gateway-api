@@ -121,7 +121,15 @@ pub struct BiometryRecord {
     pub measured_at: String,
 }
 
-/// Contrato de sinais vitais (/api/vitals/{user_id})
+/// Contrato de sinais vitais (/api/vitals/{user_id}).
+///
+/// FASE 8A (DT-051): os nomes dos campos precisam ser idênticos aos que o app
+/// Android parseia em `BragaApiClient.getVitalSigns` — `heart_rate`,
+/// `glucose_level`, `oxygen_saturation`, `glucose_type`, `confirmed_via` e
+/// `confirmation_code` (snake_case, sem `rename_all`). Versões anteriores
+/// serializavam `pulse_bpm`/`blood_glucose_mg_dl`/`oxygen_saturation_percent`,
+/// que o app nunca leu, e liam colunas inexistentes (`heart_rate_bpm`,
+/// `glucose_mg_dl`), fazendo glicose/pulso/Spo2 chegarem sempre `null`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VitalSignRecord {
     pub id: String,
@@ -134,17 +142,19 @@ pub struct VitalSignRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diastolic_pressure: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pulse_bpm: Option<i32>,
+    pub heart_rate: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub blood_glucose_mg_dl: Option<i32>,
+    pub glucose_level: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub body_temperature_c: Option<f64>,
+    pub glucose_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub oxygen_saturation_percent: Option<i32>,
+    pub oxygen_saturation: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hydration_ml: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub notes: Option<String>,
+    pub confirmed_via: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmation_code: Option<String>,
 }
 
 /// Contrato de métricas diárias (/api/metrics/daily/{user_id})
@@ -888,4 +898,117 @@ pub struct AgentRelayResponse {
     pub usage: Option<AgentUsageDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FASE 8A (DT-051): o GET /api/vitals/:user_id precisa serializar exatamente
+    /// as chaves que o app Android parseia (BragaApiClient.getVitalSigns).
+    /// Regressão: pulse_bpm/blood_glucose_mg_dl/oxygen_saturation_percent —
+    /// nomes que nunca existiram no Postgres nem no parser do app — não podem
+    /// voltar a aparecer no JSON.
+    #[test]
+    fn vital_sign_record_serializa_contrato_do_app_android() {
+        let record = VitalSignRecord {
+            id: "0d0f9c60-5b1e-4a3f-9d55-2f4b7c9a1e10".to_string(),
+            user_id: "uid-teste".to_string(),
+            measured_at: "2026-11-06T17:40:00+00:00".to_string(),
+            created_at: Some("2026-11-06T17:40:01+00:00".to_string()),
+            systolic_pressure: Some(120),
+            diastolic_pressure: Some(80),
+            heart_rate: Some(72),
+            glucose_level: Some(95),
+            glucose_type: Some("jejum".to_string()),
+            oxygen_saturation: Some(97),
+            hydration_ml: Some(250),
+            confirmed_via: Some("app".to_string()),
+            confirmation_code: Some("A1B2C3".to_string()),
+        };
+
+        let json: serde_json::Value = serde_json::to_value(&record).expect("serializável");
+
+        // Chaves que o app Android lê — todas presentes.
+        for chave in [
+            "id",
+            "user_id",
+            "measured_at",
+            "created_at",
+            "systolic_pressure",
+            "diastolic_pressure",
+            "heart_rate",
+            "glucose_level",
+            "glucose_type",
+            "oxygen_saturation",
+            "hydration_ml",
+            "confirmed_via",
+            "confirmation_code",
+        ] {
+            assert!(
+                json.get(chave).is_some(),
+                "chave ausente no contrato: {chave}"
+            );
+        }
+
+        // Valores íntegros.
+        assert_eq!(json["heart_rate"], 72);
+        assert_eq!(json["glucose_level"], 95);
+        assert_eq!(json["oxygen_saturation"], 97);
+        assert_eq!(json["glucose_type"], "jejum");
+
+        // Nomes legados jamais podem voltar.
+        for proibida in [
+            "pulse_bpm",
+            "blood_glucose_mg_dl",
+            "oxygen_saturation_percent",
+            "body_temperature_c",
+            "notes",
+        ] {
+            assert!(
+                json.get(proibida).is_none(),
+                "chave legada presente: {proibida}"
+            );
+        }
+    }
+
+    /// Campos ausentes não aparecem no JSON (skip_serializing_if), como o
+    /// parser do app espera (obj.isNull(...) -> null no Kotlin).
+    #[test]
+    fn vital_sign_record_omitir_campos_ausentes() {
+        let vazio = VitalSignRecord {
+            id: "x".to_string(),
+            user_id: "uid".to_string(),
+            measured_at: "2026-11-06T17:40:00+00:00".to_string(),
+            created_at: None,
+            systolic_pressure: None,
+            diastolic_pressure: None,
+            heart_rate: None,
+            glucose_level: None,
+            glucose_type: None,
+            oxygen_saturation: None,
+            hydration_ml: None,
+            confirmed_via: None,
+            confirmation_code: None,
+        };
+
+        let json: serde_json::Value = serde_json::to_value(&vazio).expect("serializável");
+        for chave in [
+            "created_at",
+            "systolic_pressure",
+            "diastolic_pressure",
+            "heart_rate",
+            "glucose_level",
+            "glucose_type",
+            "oxygen_saturation",
+            "hydration_ml",
+            "confirmed_via",
+            "confirmation_code",
+        ] {
+            assert!(
+                json.get(chave).is_none(),
+                "chave vazia deveria ser omitida: {chave}"
+            );
+        }
+    }
 }
