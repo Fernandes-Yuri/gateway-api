@@ -120,25 +120,11 @@ class FamilyE2eeBlindRelayRoutesTest(unittest.TestCase):
             'isRead': False,
             'sentAt': self.now_iso,
         }
+        # ETAPA 1: rota legada desativada (chat assumido pelo Go braga-chat): 410 Gone.
+        # A persistência de ciphertext e o push com corpo mascarado agora sao
+        # responsabilidade do Go braga-chat, nao do roteador Python.
         res = self.client.post('/api/family/messages/send', json=payload)
-        self.assertEqual(200, res.status_code)
-        self.assertEqual(1, res.json()['encryptionVersion'])
-
-        sql, *params = self.conn.fetchrow.call_args.args
-        self.assertIn('body_encrypted', sql)
-        self.assertIn('encryption_version', sql)
-        # message_text ($5) fica vazio no banco; apenas body_encrypted ($6) recebe o blob cifrado
-        db_message_text = params[4]
-        db_body_encrypted = params[5]
-        db_enc_version = params[6]
-        self.assertEqual('', db_message_text)
-        self.assertEqual(parse_e2ee_envelope(envelope, strict=True), db_body_encrypted)
-        self.assertEqual(1, db_enc_version)
-
-        # Push FCM nunca vaza o blob cifrado nem exige texto plano
-        self.dispatch.assert_called_once()
-        self.assertEqual(E2EE_PUSH_BODY, self.dispatch.call_args.kwargs['body'])
-        self.assertEqual('1', self.dispatch.call_args.kwargs['data']['encryptionVersion'])
+        self.assertEqual(410, res.status_code)
 
     def test_sync_family_message_auto_detects_e2ee_envelope_in_message_text(self):
         envelope = _sample_e2ee_envelope()
@@ -193,20 +179,10 @@ class FamilyE2eeBlindRelayRoutesTest(unittest.TestCase):
             },
         ]
 
+        # ETAPA 1: rota legada desativada (chat assumido pelo Go braga-chat): 410 Gone.
+        # A leitura de mensagens familiares agora e de responsabilidade do Go braga-chat.
         res = self.client.get('/api/family/messages?patient_id=patient')
-        self.assertEqual(200, res.status_code)
-        items = res.json()
-        self.assertEqual(2, len(items))
-
-        e2ee_item = items[0]
-        self.assertEqual(1, e2ee_item['encryption_version'])
-        self.assertEqual(envelope, e2ee_item['body_encrypted'])
-        self.assertEqual(envelope, e2ee_item['message_text'])
-
-        legacy_item = items[1]
-        self.assertEqual(0, legacy_item['encryption_version'])
-        self.assertIsNone(legacy_item['body_encrypted'])
-        self.assertEqual('Mensagem antiga antes do E2EE', legacy_item['message_text'])
+        self.assertEqual(410, res.status_code)
 
     def test_tombstone_scrubs_encrypted_body(self):
         now = datetime.now(timezone.utc)
