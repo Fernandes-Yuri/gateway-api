@@ -71,7 +71,7 @@ flowchart TD
 - **Assistente Clínico & IA:** Groq Cloud, chat REST (`/v1/chat/completions`) e voz streaming Orb (`/ws/orb`).
 - **Background Jobs:** push FCM, e-mails transacionais, retenção, reconciliação de conta e rotinas proativas.
 
-> **Nota (Fase #6):** o chat familiar e o E2EE foram removidos do Python — quem os serve é o Go `braga-chat`. A **única** rota familiar ainda no Python é `POST /api/sync/family-binding` (criação/revogação de convite), que ainda não possui equivalente no Go; ela vive em `routers/sync.py` e está coberta por teste dedicado até ser portada.
+> **Nota (Fases #6/#7):** o chat familiar, os vínculos e o E2EE são servidos **exclusivamente** pelo Go `braga-chat`. O Python não tem mais rotas familiares — a antiga `POST /api/sync/family-binding` foi portada para o Go na Fase #7.
 
 ---
 
@@ -217,6 +217,7 @@ gateway-api/
 | **POST** | `/api/family/accept` | Aceite do convite (vinculação) |
 | **POST** | `/api/family/e2ee/public-key` | Publicação de chave pública ECDH |
 | **GET** | `/api/family/bindings/{userId}` | Vínculos autorizados do usuário |
+| **POST** | `/api/sync/family-binding` | Criação/revogação de convite familiar (rate limit 10/min por IP) |
 
 ### Core Python (`FastAPI`)
 | Método | Caminho | Descrição |
@@ -224,12 +225,11 @@ gateway-api/
 | **POST** | `/api/auth/otp/send` e `/api/auth/otp/verify` | Autenticação móvel via OTP e emissão de sessão |
 | **POST/GET** | `/api/consultation/*` | Criar/aceitar/recusar/concluir/cancelar consultas e confirmar rascunho por voz |
 | **POST** | `/api/sync/profile`, `/api/sync/vitals`, `/api/sync/medication`, sociais e feedback | Sincronização e regras de negócio |
-| **POST** | `/api/sync/family-binding` | Criação/revogação de convite familiar (rota em transição até o port para o Go) |
 | **POST** | `/v1/chat/completions` | Canal conversacional do assistente clínico |
 | **WS** | `/ws/orb` | Diálogo por voz streaming (Orb) |
 | **GET** | `/socorro` | Página pública de orientação de emergência |
 
-> **Canais aposentados (Fase #6):** supermercado/alimentação e WhatsApp foram removidos do Python — não há mais handlers dedicados a eles (respondem `404`; a borda mantém `410` apenas para APK e áudio). Novos clientes não devem consumir esses caminhos.
+> **Canais aposentados (Fases #6/#7):** áudio/TTS e distribuição de APK (`410`), e agora também WhatsApp (`/api/whatsapp*`) e supermercado/alimentação (`/api/catalog/*` e `/api/admin/grocery*`) respondem `410 Gone` **nativamente na borda Rust**, com os corpos/headers originais. Novos clientes não devem consumir esses caminhos.
 
 ---
 

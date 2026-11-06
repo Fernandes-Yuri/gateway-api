@@ -7,7 +7,7 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::header::{HeaderMap, HeaderName, HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{any, get, patch, post, put};
 use axum::Router;
 use braga_contracts::{
     compute_imc, compute_occurrence_id, format_agent_closing, height_in_meters,
@@ -16,8 +16,8 @@ use braga_contracts::{
     AudioRetiredResponse, AuditLogSyncDto, BarcodeMedication, BiometryRecord, BiometrySyncDto,
     ComponentStatus, DailyMetricRecord, DailyMetricSyncDto, DbPoolStatsDto, FeatureFlagsDto,
     HealthResponse, HttpErrorResponse, InternalStatsResponse, LandingResponse, MedicationLogRecord,
-    MedicationLogSyncDto, MedicationRecord, MedicationSyncDto, ReadinessResponse, SyncResponse,
-    VitalSignRecord, VitalSignSyncDto,
+    MedicationLogSyncDto, MedicationRecord, MedicationSyncDto, NutritionRetiredResponse,
+    ReadinessResponse, SyncResponse, VitalSignRecord, VitalSignSyncDto, WhatsappRetiredResponse,
 };
 use braga_identity::{
     check_user_moderation, require_family_access, require_owner, require_owner_or_caregiver,
@@ -221,6 +221,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(audio_retired_handler)
                 .post(audio_retired_handler)
                 .options(options_cors_handler),
+        )
+        // Fase 7 (DT-050): canais aposentados respondem 410 Gone nativamente na
+        // borda, com os mesmos corpos/headers do Python legado removido na Fase #6.
+        // WhatsApp (SPEC-08): todos os métodos, inclusive OPTIONS.
+        .route("/api/whatsapp", any(whatsapp_retired_handler))
+        .route("/api/whatsapp/*path", any(whatsapp_retired_handler))
+        // Alimentação / Supermercado (SPEC-08): mesmos caminhos e métodos do
+        // antigo routers/catalog.py.
+        .route(
+            "/api/admin/grocery-prices/import-csv",
+            post(nutrition_retired_handler),
+        )
+        .route(
+            "/api/catalog/grocery-prices",
+            get(nutrition_retired_handler),
+        )
+        .route("/api/admin/grocery-prices", get(nutrition_retired_handler))
+        .route(
+            "/api/admin/grocery-prices/missing",
+            get(nutrition_retired_handler),
+        )
+        .route(
+            "/api/admin/grocery-prices/ingredient/:slug",
+            put(nutrition_retired_handler),
+        )
+        .route(
+            "/api/admin/grocery-prices/:food_name",
+            put(nutrition_retired_handler),
+        )
+        .route(
+            "/api/admin/grocery-prices/import-ingredients",
+            post(nutrition_retired_handler),
+        )
+        .route(
+            "/api/admin/grocery-ingredients/import",
+            post(nutrition_retired_handler),
+        )
+        .route(
+            "/api/admin/grocery-ingredients",
+            post(nutrition_retired_handler),
+        )
+        .route(
+            "/api/admin/grocery-ingredients/:slug",
+            patch(nutrition_retired_handler).delete(nutrition_retired_handler),
+        )
+        .route(
+            "/api/admin/grocery-prices/refresh",
+            post(nutrition_retired_handler),
+        )
+        .route(
+            "/api/catalog/grocery-price-contributions",
+            post(nutrition_retired_handler),
+        )
+        .route(
+            "/api/catalog/grocery-price-contributions/averages",
+            get(nutrition_retired_handler),
+        )
+        .route(
+            "/api/catalog/grocery-ingredients",
+            get(nutrition_retired_handler),
+        )
+        .route("/api/catalog/nutrition", get(nutrition_retired_handler))
+        .route("/api/catalog/grocery/cards", get(nutrition_retired_handler))
+        .route(
+            "/api/admin/grocery/retail",
+            get(nutrition_retired_handler).put(nutrition_retired_handler),
+        )
+        .route(
+            "/api/admin/grocery/nutrition-suggestions",
+            get(nutrition_retired_handler),
+        )
+        .route(
+            "/api/catalog/grocery/basket-comparison",
+            post(nutrition_retired_handler),
         )
         // Fase 2A: Catálogo ANVISA e Cache Moka
         .route(
@@ -536,6 +610,31 @@ async fn audio_retired_handler() -> impl IntoResponse {
         StatusCode::GONE,
         headers,
         Json(AudioRetiredResponse::default()),
+    )
+}
+
+// Fase 7 (DT-050): canal WhatsApp aposentado (SPEC-08).
+async fn whatsapp_retired_handler() -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("access-control-allow-origin"),
+        HeaderValue::from_static("*"),
+    );
+    (
+        StatusCode::GONE,
+        headers,
+        Json(WhatsappRetiredResponse::default()),
+    )
+}
+
+// Fase 7 (DT-050): rotas de alimentação/supermercado aposentadas (SPEC-08).
+async fn nutrition_retired_handler() -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    (
+        StatusCode::GONE,
+        headers,
+        Json(NutritionRetiredResponse::default()),
     )
 }
 
@@ -2736,6 +2835,7 @@ async fn sync_vitals_handler(
 pub fn is_go_chat_route(path: &str) -> bool {
     path == "/ws/family"
         || path == "/api/sync/family-message"
+        || path == "/api/sync/family-binding"
         || path == "/api/family/messages"
         || path.starts_with("/api/family/messages/")
         || path == "/api/family/message/delete"
@@ -2762,6 +2862,8 @@ mod tests {
         assert!(is_go_chat_route("/api/family/accept"));
         assert!(is_go_chat_route("/api/family/e2ee/public-key"));
         assert!(is_go_chat_route("/api/family/bindings/user-abc"));
+        // Fase 7: criação/revogação de convite familiar agora é do Go.
+        assert!(is_go_chat_route("/api/sync/family-binding"));
 
         // Rotas clínicas do Care OS que DEVEM continuar indo para o Python
         assert!(!is_go_chat_route(
@@ -2781,10 +2883,42 @@ mod tests {
         ));
         assert!(!is_go_chat_route("/api/family/health-alert"));
 
-        // Rotas de sincronização de outros domínios ou consultas médicas
-        assert!(!is_go_chat_route("/api/sync/family-binding"));
+        // Rotas de outros domínios, consultas médicas e canais aposentados
         assert!(!is_go_chat_route("/api/consultation/create"));
         assert!(!is_go_chat_route("/api/catalog/search"));
+        assert!(!is_go_chat_route("/api/whatsapp"));
+        assert!(!is_go_chat_route("/api/catalog/nutrition"));
+    }
+
+    #[tokio::test]
+    async fn test_whatsapp_retired_handler_returns_410() {
+        let response = whatsapp_retired_handler().await.into_response();
+        assert_eq!(response.status(), StatusCode::GONE);
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap(),
+            "*"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: WhatsappRetiredResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.detail, "Canal WhatsApp descontinuado (SPEC-08)");
+    }
+
+    #[tokio::test]
+    async fn test_nutrition_retired_handler_returns_410() {
+        let response = nutrition_retired_handler().await.into_response();
+        assert_eq!(response.status(), StatusCode::GONE);
+        assert_eq!(response.headers().get(CACHE_CONTROL).unwrap(), "no-store");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: NutritionRetiredResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.code, "nutrition_retired");
+        assert_eq!(parsed.detail, "O módulo de alimentação foi descontinuado.");
     }
 
     #[test]
