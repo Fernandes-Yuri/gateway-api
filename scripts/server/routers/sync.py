@@ -13,12 +13,13 @@ LGPD Art. 18 no delete de conta (ON DELETE CASCADE).
 """
 import asyncio
 import base64
+import binascii
 import json
 import logging
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Path, Query, Request, UploadFile, status
@@ -36,6 +37,33 @@ from services.content_moderation import ModerationUnavailable, moderate_avatar
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _parse_uuid(value: str) -> uuid.UUID:
+    """AUD-G14: uuid.UUID() sem guarda transforma input invalido em 500.
+
+    Devolve 422, que e o correto para input ruim.
+    """
+    try:
+        return uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(422, 'ID inválido.')
+
+
+def _validate_e2ee_public_key(raw_key: Optional[str]) -> Optional[str]:
+    """Valida a chave publica ECDH (SubjectPublicKeyInfo Base64) sem chaves privadas no servidor."""
+    if raw_key is None:
+        return None
+    cleaned = raw_key.strip()
+    if not cleaned:
+        return None
+    try:
+        decoded = base64.b64decode(cleaned, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(422, 'Chave pública E2EE inválida.')
+    if not (32 <= len(decoded) <= 512):
+        raise HTTPException(422, 'Tamanho de chave pública E2EE inválido.')
+    return base64.b64encode(decoded).decode('ascii')
 
 
 # =============================================================
@@ -240,6 +268,75 @@ class AgentReceiptDto(BaseModel):
     idempotencyKey: str = Field(min_length=1, max_length=64)
     status: str = "confirmed"
     result: Optional[Dict[str, Any]] = None
+
+
+class FamilyBindingSyncDto(BaseModel):
+    """Vinculo familiar local -> nuvem (Fase #6)."""
+    id: Optional[str] = None
+    patientId: str
+    caregiverId: Optional[str] = None
+    caregiverName: str
+    caregiverRelation: str
+    connectionCode: str
+    status: Optional[str] = "PENDING"
+    caregiverRole: str = "CAREGIVER_VIEWER"
+    permissions: List[str] = Field(default_factory=list)
+    patientPublicKey: Optional[str] = None
+    caregiverPublicKey: Optional[str] = None
+    createdAt: str
+    expiresAt: str
+
+
+# =============================================================
+# VÍNCULO FAMILIAR (criação/revogação de convite)
+# =============================================================
+# Fase #6: unica rota familiar preservada no Python. O microservico Go
+# braga-chat ja expoe listagem, busca por codigo, aceite e publicacao de
+# chaves, mas ainda nao possui o equivalente de POST /api/sync/family-binding,
+# que cria o convite PENDING e confirma a revogacao. Quando esse endpoint for
+# portado, este bloco sai do Python em definitivo.
+@router.post("/api/sync/family-binding")
+async def sync_family_binding(b: FamilyBindingSyncDto, request: Request, uid: str = Depends(firebase_uid)):
+    db_pool = _state.db_pool
+    client_ip = get_client_ip(request)
+    if not db_pool:
+        raise HTTPException(503, "Banco indisponível")
+    await _state.rate_limiter.check("family_binding_ip", client_ip, limit=10, window_seconds=60, ip=client_ip, pool=db_pool)
+    patient_pub_key = _validate_e2ee_public_key(getattr(b, 'patientPublicKey', None))
+    async with db_pool.acquire() as conn, conn.transaction():
+        if b.status == 'REVOKED':
+            row = await conn.fetchrow('SELECT * FROM family_bindings WHERE id=$1 FOR UPDATE', _parse_uuid(b.id))
+            if not row or uid not in (row['patient_id'], row['caregiver_id']):
+                raise HTTPException(403, 'Vínculo indisponível.')
+            await conn.execute("UPDATE family_bindings SET status='REVOKED' WHERE id=$1", row['id'])
+            return {'status': 'success', 'id': str(row['id'])}
+        require_owner(uid, b.patientId)
+        if b.status != 'PENDING' or b.caregiverId:
+            raise HTTPException(422, 'Use o convite para conectar o acompanhante.')
+        allowed_roles = {'ADMIN_CHILD', 'CAREGIVER_VIEWER', 'PROFESSIONAL_NURSE'}
+        allowed_permissions = {'care:read', 'medication:write', 'medication:take', 'medical:share', 'emergency:share'}
+        if b.caregiverRole not in allowed_roles or not set(b.permissions).issubset(allowed_permissions):
+            raise HTTPException(422, 'Papel ou permissões do cuidador inválidos.')
+        code = b.connectionCode.strip().upper()
+        if len(code) != 8 or any(c not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' for c in code):
+            raise HTTPException(422, 'Código inválido.')
+        binding_id = _parse_uuid(b.id) if b.id else uuid.uuid4()
+        now = datetime.now(timezone.utc)
+        caregiver_name = sanitize_zero_trust_text(b.caregiverName, max_length=100, field_name="caregiverName", ip=client_ip, rate_limiter=_state.rate_limiter, pool=db_pool)
+        caregiver_relation = sanitize_zero_trust_text(b.caregiverRelation, max_length=50, field_name="caregiverRelation", ip=client_ip, rate_limiter=_state.rate_limiter, pool=db_pool)
+        row = await conn.fetchrow('''INSERT INTO family_bindings
+            (id, patient_id, caregiver_name, caregiver_relation, connection_code, status, created_at, expires_at,
+             caregiver_role, permissions, patient_public_key)
+            VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7,$8,$9,$10)
+            ON CONFLICT DO NOTHING RETURNING *''', binding_id, uid, caregiver_name,
+            caregiver_relation, code, now, now + timedelta(days=7), b.caregiverRole, b.permissions, patient_pub_key)
+        if row is None:
+            row = await conn.fetchrow('SELECT * FROM family_bindings WHERE id=$1', binding_id)
+            if not row or row['patient_id'] != uid or row['connection_code'] != code or row['status'] != 'PENDING':
+                raise HTTPException(409, 'Convite indisponível. Gere um novo código.')
+            if patient_pub_key and not row.get('patient_public_key'):
+                await conn.execute('UPDATE family_bindings SET patient_public_key=$2 WHERE id=$1', binding_id, patient_pub_key)
+        return {'status': 'success', 'id': str(row['id'])}
 
 
 # =============================================================
