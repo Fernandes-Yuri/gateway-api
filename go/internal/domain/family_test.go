@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -132,4 +133,53 @@ func TestFamilyBindingJSONSerialization(t *testing.T) {
 			t.Errorf("Esperava '\"permissions\":[\"ALL\"]' no JSON, obteve: %s", str)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Fase #7: validadores do vínculo familiar local->nuvem.
+// ---------------------------------------------------------------------------
+func TestNormalizeConnectionCode(t *testing.T) {
+	t.Run("normalizes lowercase and spaces", func(t *testing.T) {
+		code, err := NormalizeConnectionCode("  abcd1234  ")
+		if err != nil || code != "ABCD1234" {
+			t.Fatalf("Esperava ABCD1234, obteve %q (err=%v)", code, err)
+		}
+	})
+
+	for _, invalid := range []string{"", "ABC", "ABCD12345", "ABCD-123", "ABCD 234", "abcde12!"} {
+		t.Run("rejects "+invalid, func(t *testing.T) {
+			if _, err := NormalizeConnectionCode(invalid); !errors.Is(err, ErrInvalidConnectionCode) {
+				t.Fatalf("Esperava ErrInvalidConnectionCode para %q, obteve %v", invalid, err)
+			}
+		})
+	}
+}
+
+func TestValidateCaregiverRoleAndPermissions(t *testing.T) {
+	valid := [][]string{{}, {"care:read"}, {"care:read", "medication:take", "emergency:share"}}
+	for _, perms := range valid {
+		if err := ValidateCaregiverRoleAndPermissions("CAREGIVER_VIEWER", perms); err != nil {
+			t.Fatalf("Permissões válidas %v rejeitadas: %v", perms, err)
+		}
+	}
+	for _, role := range []string{"ROOT", "ADMIN", "admin_child", ""} {
+		if err := ValidateCaregiverRoleAndPermissions(role, nil); !errors.Is(err, ErrInvalidCaregiverRole) {
+			t.Fatalf("Esperava ErrInvalidCaregiverRole para %q, obteve %v", role, err)
+		}
+	}
+	if err := ValidateCaregiverRoleAndPermissions("ADMIN_CHILD", []string{"care:read", "admin:root"}); !errors.Is(err, ErrInvalidPermissions) {
+		t.Fatalf("Esperava ErrInvalidPermissions, obteve %v", err)
+	}
+}
+
+func TestSanitizeBindingText(t *testing.T) {
+	if got := SanitizeBindingText("  <b>Ana</b> Silva  ", 100); got != "Ana Silva" {
+		t.Fatalf("Sanitização inesperada: %q", got)
+	}
+	if got := SanitizeBindingText("Ana\x00Maria", 100); got != "AnaMaria" {
+		t.Fatalf("Caracteres de controle deveriam ser removidos: %q", got)
+	}
+	if got := SanitizeBindingText("abcdefghij", 4); got != "abcd" {
+		t.Fatalf("Truncagem inesperada: %q", got)
+	}
 }

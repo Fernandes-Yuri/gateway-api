@@ -21,10 +21,14 @@ import (
 
 // MockFamilyRepository é uma implementação em memória thread-safe de FamilyRepository
 type MockFamilyRepository struct {
-	mu        sync.RWMutex
-	messages  map[string]domain.FamilyMessage
-	bindings  map[string]domain.FamilyBinding
-	accessMap map[string]map[string]bool
+	mu              sync.RWMutex
+	messages        map[string]domain.FamilyMessage
+	bindings        map[string]domain.FamilyBinding
+	accessMap       map[string]map[string]bool
+	syncBindingFn   func(req *domain.SyncFamilyBindingRequest, requesterID string) (*domain.FamilyBinding, error)
+	syncBindingLast *domain.SyncFamilyBindingRequest
+	syncBindingUID  string
+	syncBindingHits int
 }
 
 func NewMockFamilyRepository() *MockFamilyRepository {
@@ -263,6 +267,27 @@ func (m *MockFamilyRepository) ListBindings(ctx context.Context, userID string) 
 		}
 	}
 	return list, nil
+}
+
+func (m *MockFamilyRepository) SyncBinding(
+	ctx context.Context,
+	req *domain.SyncFamilyBindingRequest,
+	requesterID string,
+) (*domain.FamilyBinding, error) {
+	m.mu.Lock()
+	m.syncBindingHits++
+	m.syncBindingLast = req
+	m.syncBindingUID = requesterID
+	fn := m.syncBindingFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(req, requesterID)
+	}
+	return &domain.FamilyBinding{
+		ID:        req.ID,
+		PatientID: req.PatientID,
+		Status:    req.Status,
+	}, nil
 }
 
 // Struct de deserialização das fixtures canônicas
@@ -660,4 +685,183 @@ func TestSecurityAndEdgeCases(t *testing.T) {
 			t.Errorf("Mensagem deveria estar marcada como is_read = true")
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Fase #7: POST /api/sync/family-binding (contrato do app Android no Python).
+// ---------------------------------------------------------------------------
+func TestSyncFamilyBindingHandler(t *testing.T) {
+	mockRepo := NewMockFamilyRepository()
+	router := transporthttp.NewRouter(mockRepo)
+
+	validBody := func(mut func(map[string]interface{})) []byte {
+		payload := map[string]interface{}{
+			"id":                uuid.NewString(),
+			"patientId":         "patient-1",
+			"caregiverName":     "",
+			"caregiverRelation": "",
+			"connectionCode":    "abcd1234",
+			"status":            "PENDING",
+			"caregiverRole":     "CAREGIVER_VIEWER",
+			"permissions":       []string{"care:read"},
+			"createdAt":         "2026-11-06T12:00:00Z",
+			"expiresAt":         "2026-11-13T12:00:00Z",
+		}
+		if mut != nil {
+			mut(payload)
+		}
+		b, _ := json.Marshal(payload)
+		return b
+	}
+
+	call := func(body []byte, uid string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/api/sync/family-binding", bytes.NewReader(body))
+		if uid != "" {
+			req.Header.Set("X-User-Id", uid)
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	t.Run("unauthenticated fails closed without touching repo", func(t *testing.T) {
+		w := call(validBody(nil), "")
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("Esperava 401, obteve %d: %s", w.Code, w.Body.String())
+		}
+		if mockRepo.syncBindingHits != 0 {
+			t.Fatalf("Repositório não deveria ser chamado sem autenticação")
+		}
+	})
+
+	t.Run("invalid JSON is 422", func(t *testing.T) {
+		w := call([]byte("{invalid"), "patient-1")
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("Esperava 422, obteve %d", w.Code)
+		}
+	})
+
+	t.Run("invalid connection code is 422", func(t *testing.T) {
+		w := call(validBody(func(p map[string]interface{}) { p["connectionCode"] = "ABC" }), "patient-1")
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("Esperava 422, obteve %d", w.Code)
+		}
+	})
+
+	t.Run("invalid role is 422", func(t *testing.T) {
+		w := call(validBody(func(p map[string]interface{}) { p["caregiverRole"] = "ROOT" }), "patient-1")
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("Esperava 422, obteve %d", w.Code)
+		}
+	})
+
+	t.Run("pending creation returns server id and normalizes payload", func(t *testing.T) {
+		bindingID := uuid.NewString()
+		mockRepo.mu.Lock()
+		mockRepo.syncBindingFn = func(req *domain.SyncFamilyBindingRequest, requesterID string) (*domain.FamilyBinding, error) {
+			return &domain.FamilyBinding{ID: bindingID, PatientID: req.PatientID, Status: req.Status}, nil
+		}
+		mockRepo.mu.Unlock()
+
+		w := call(validBody(func(p map[string]interface{}) {
+			p["id"] = bindingID
+			p["caregiverName"] = "  <b>Ana</b>  "
+			p["caregiverRelation"] = "Filha"
+		}), "patient-1")
+		if w.Code != http.StatusOK {
+			t.Fatalf("Esperava 200, obteve %d: %s", w.Code, w.Body.String())
+		}
+		var resp domain.SyncFamilyBindingResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("Resposta inválida: %v", err)
+		}
+		if resp.Status != "success" || resp.ID != bindingID {
+			t.Fatalf("Resposta inesperada: %+v", resp)
+		}
+		mockRepo.mu.RLock()
+		last := mockRepo.syncBindingLast
+		uid := mockRepo.syncBindingUID
+		mockRepo.mu.RUnlock()
+		if last == nil || uid != "patient-1" {
+			t.Fatalf("Repositório recebeu requisição inesperada: %+v uid=%q", last, uid)
+		}
+		if last.ConnectionCode != "ABCD1234" {
+			t.Fatalf("Código deveria ser normalizado, veio %q", last.ConnectionCode)
+		}
+		if last.CaregiverName != "Ana" {
+			t.Fatalf("Nome deveria ser sanitizado/truncado, veio %q", last.CaregiverName)
+		}
+	})
+
+	t.Run("revocation by stranger is 403", func(t *testing.T) {
+		mockRepo.mu.Lock()
+		mockRepo.syncBindingFn = func(req *domain.SyncFamilyBindingRequest, requesterID string) (*domain.FamilyBinding, error) {
+			return nil, repository.ErrForbidden
+		}
+		mockRepo.mu.Unlock()
+		w := call(validBody(func(p map[string]interface{}) { p["status"] = "REVOKED" }), "intruder")
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("Esperava 403, obteve %d", w.Code)
+		}
+	})
+
+	t.Run("revocation of unknown binding is 403 (paridade com Python)", func(t *testing.T) {
+		mockRepo.mu.Lock()
+		mockRepo.syncBindingFn = func(req *domain.SyncFamilyBindingRequest, requesterID string) (*domain.FamilyBinding, error) {
+			return nil, repository.ErrNotFound
+		}
+		mockRepo.mu.Unlock()
+		w := call(validBody(func(p map[string]interface{}) { p["status"] = "REVOKED" }), "patient-1")
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("Esperava 403, obteve %d", w.Code)
+		}
+	})
+
+	t.Run("conflicting invite is 409", func(t *testing.T) {
+		mockRepo.mu.Lock()
+		mockRepo.syncBindingFn = func(req *domain.SyncFamilyBindingRequest, requesterID string) (*domain.FamilyBinding, error) {
+			return nil, repository.ErrConflict
+		}
+		mockRepo.mu.Unlock()
+		w := call(validBody(nil), "patient-1")
+		if w.Code != http.StatusConflict {
+			t.Fatalf("Esperava 409, obteve %d", w.Code)
+		}
+	})
+
+	t.Run("database unavailable is 503", func(t *testing.T) {
+		mockRepo.mu.Lock()
+		mockRepo.syncBindingFn = func(req *domain.SyncFamilyBindingRequest, requesterID string) (*domain.FamilyBinding, error) {
+			return nil, repository.ErrDatabaseUnavailable
+		}
+		mockRepo.mu.Unlock()
+		w := call(validBody(nil), "patient-1")
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("Esperava 503, obteve %d", w.Code)
+		}
+	})
+}
+
+func TestSyncFamilyBindingRateLimit(t *testing.T) {
+	mockRepo := NewMockFamilyRepository()
+	router := transporthttp.NewRouter(mockRepo)
+
+	body := []byte(`{"patientId":"patient-1","connectionCode":"ABCD1234","status":"PENDING","caregiverRole":"CAREGIVER_VIEWER","permissions":["care:read"]}`)
+	for i := 0; i < 10; i++ {
+		req := httptest.NewRequest("POST", "/api/sync/family-binding", bytes.NewReader(body))
+		req.Header.Set("X-User-Id", "patient-1")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("Requisição %d deveria ser 200, obteve %d", i+1, w.Code)
+		}
+	}
+
+	req := httptest.NewRequest("POST", "/api/sync/family-binding", bytes.NewReader(body))
+	req.Header.Set("X-User-Id", "patient-1")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("11ª requisição deveria ser 429, obteve %d", w.Code)
+	}
 }

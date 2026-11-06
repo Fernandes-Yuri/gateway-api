@@ -44,6 +44,10 @@ func NewRouter(repo repository.FamilyRepository, hub ...*ws.Hub) http.Handler {
 
 	msgHandler := NewMessageHandler(repo, wsHub)
 	bindingHandler := NewBindingHandler(repo)
+	// Fase #7: rate limit por IP da criação/revogação de convite familiar
+	// (10/min no Python legado). Mantido no processo Go porque o limiter da
+	// borda Rust só aplica bloqueio global de IP, não janelas por rota.
+	bindingSyncLimiter := rateLimitMiddleware(newSlidingWindowLimiter(10, time.Minute))
 
 	// Grupo de rotas HTTP protegidas com timeout rígido de 10s
 	r.Group(func(api chi.Router) {
@@ -64,6 +68,8 @@ func NewRouter(repo repository.FamilyRepository, hub ...*ws.Hub) http.Handler {
 			protected.Post("/api/family/message/delete", msgHandler.HandleDeleteMessage)
 			protected.Post("/api/family/messages/send", msgHandler.HandleSendMessage)
 			protected.Post("/api/sync/family-message", msgHandler.HandleSendMessage)
+			// Fase #7: vínculo familiar local->nuvem (antes no Python).
+			protected.With(bindingSyncLimiter).Post("/api/sync/family-binding", bindingHandler.HandleSyncBinding)
 			protected.Get("/api/family/messages", msgHandler.HandleGetMessages)
 			// Dinâmicas depois:
 			protected.Get("/api/family/messages/{patientId}", msgHandler.HandleGetMessages)

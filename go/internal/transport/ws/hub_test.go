@@ -117,6 +117,10 @@ func (m *mockFamilyRepo) FindByConnectionCode(ctx context.Context, code string) 
 	return nil, repository.ErrNotFound
 }
 
+func (m *mockFamilyRepo) SyncBinding(ctx context.Context, req *domain.SyncFamilyBindingRequest, requesterID string) (*domain.FamilyBinding, error) {
+	return nil, repository.ErrNotFound
+}
+
 func (m *mockFamilyRepo) AcceptInvitation(ctx context.Context, code string, caregiverID string, caregiverName string, caregiverRelation string, caregiverPublicKey *string) (*domain.FamilyBinding, error) {
 	return nil, repository.ErrNotFound
 }

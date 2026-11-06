@@ -640,3 +640,132 @@ func sanitizePermissions(perms []string) []string {
 	}
 	return perms
 }
+
+// SyncBinding cria (PENDING) ou revoga (REVOKED) um convite familiar.
+// Fase #7: substitui o endpoint POST /api/sync/family-binding que ainda vivia
+// no Python legado, mantendo o mesmo contrato e as mesmas regras de autorização.
+func (r *PostgresRepository) SyncBinding(
+	ctx context.Context,
+	req *domain.SyncFamilyBindingRequest,
+	requesterID string,
+) (*domain.FamilyBinding, error) {
+	if r.pool == nil {
+		return nil, ErrDatabaseUnavailable
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao iniciar transação de vínculo: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if req.Status == "REVOKED" {
+		var patientID string
+		var caregiverID *string
+		err := tx.QueryRow(ctx,
+			`SELECT patient_id, caregiver_id FROM family_bindings WHERE id=$1 FOR UPDATE;`,
+			req.ID,
+		).Scan(&patientID, &caregiverID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrNotFound
+			}
+			return nil, fmt.Errorf("falha ao verificar vínculo para revogação: %w", err)
+		}
+		if requesterID != patientID && (caregiverID == nil || requesterID != *caregiverID) {
+			return nil, ErrForbidden
+		}
+		if _, err := tx.Exec(ctx, `UPDATE family_bindings SET status='REVOKED' WHERE id=$1;`, req.ID); err != nil {
+			return nil, fmt.Errorf("falha ao revogar vínculo: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return &domain.FamilyBinding{
+			ID:          req.ID,
+			PatientID:   patientID,
+			CaregiverID: caregiverID,
+			Status:      "REVOKED",
+		}, nil
+	}
+
+	if requesterID != req.PatientID {
+		return nil, ErrForbidden
+	}
+
+	bindingID := req.ID
+	if bindingID == "" {
+		bindingID = uuid.NewString()
+	}
+	now := time.Now().UTC()
+	expiresAt := now.Add(7 * 24 * time.Hour)
+	permissions := sanitizePermissions(req.Permissions)
+
+	insertQuery := `
+		INSERT INTO family_bindings (
+			id, patient_id, caregiver_name, caregiver_relation, connection_code,
+			status, created_at, expires_at, caregiver_role, permissions, patient_public_key
+		) VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7,$8,$9,$10)
+		ON CONFLICT DO NOTHING
+		RETURNING id, patient_id, caregiver_id, caregiver_name, caregiver_relation,
+		          connection_code, status, created_at, expires_at, caregiver_role,
+		          permissions, patient_public_key, caregiver_public_key;
+	`
+	binding := &domain.FamilyBinding{}
+	err = tx.QueryRow(ctx, insertQuery,
+		bindingID, req.PatientID, req.CaregiverName, req.CaregiverRelation,
+		req.ConnectionCode, now, expiresAt, req.CaregiverRole, permissions,
+		req.PatientPublicKey,
+	).Scan(
+		&binding.ID, &binding.PatientID, &binding.CaregiverID, &binding.CaregiverName,
+		&binding.CaregiverRelation, &binding.ConnectionCode, &binding.Status,
+		&binding.CreatedAt, &binding.ExpiresAt, &binding.CaregiverRole,
+		&binding.Permissions, &binding.PatientPublicKey, &binding.CaregiverPublicKey,
+	)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("falha ao criar vínculo familiar: %w", err)
+	}
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Conflito: idempotência apenas para o mesmo convite PENDING do dono.
+		existing := &domain.FamilyBinding{}
+		err = tx.QueryRow(ctx, `
+			SELECT id, patient_id, caregiver_id, caregiver_name, caregiver_relation,
+			       connection_code, status, created_at, expires_at, caregiver_role,
+			       permissions, patient_public_key, caregiver_public_key
+			FROM family_bindings WHERE id=$1;`, bindingID,
+		).Scan(
+			&existing.ID, &existing.PatientID, &existing.CaregiverID, &existing.CaregiverName,
+			&existing.CaregiverRelation, &existing.ConnectionCode, &existing.Status,
+			&existing.CreatedAt, &existing.ExpiresAt, &existing.CaregiverRole,
+			&existing.Permissions, &existing.PatientPublicKey, &existing.CaregiverPublicKey,
+		)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrConflict
+			}
+			return nil, fmt.Errorf("falha ao reconciliar convite existente: %w", err)
+		}
+		if existing.PatientID != requesterID ||
+			existing.ConnectionCode != req.ConnectionCode ||
+			existing.Status != "PENDING" {
+			return nil, ErrConflict
+		}
+		if req.PatientPublicKey != nil && existing.PatientPublicKey == nil {
+			if _, err := tx.Exec(ctx,
+				`UPDATE family_bindings SET patient_public_key=$2 WHERE id=$1;`,
+				bindingID, *req.PatientPublicKey,
+			); err != nil {
+				return nil, fmt.Errorf("falha ao atualizar chave pública do convite: %w", err)
+			}
+			existing.PatientPublicKey = req.PatientPublicKey
+		}
+		binding = existing
+	}
+
+	binding.Permissions = sanitizePermissions(binding.Permissions)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return binding, nil
+}
