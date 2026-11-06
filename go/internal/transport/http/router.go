@@ -54,12 +54,19 @@ func NewRouter(repo repository.FamilyRepository, hub ...*ws.Hub) http.Handler {
 			protected.Use(AuthMiddleware)
 
 			// Mensagens Familiares E2EE (SPEC-13 & D47)
-			protected.Post("/api/family/messages/send", msgHandler.HandleSendMessage)
-			protected.Post("/api/sync/family-message", msgHandler.HandleSendMessage)
-			protected.Get("/api/family/messages/{patientId}", msgHandler.HandleGetMessages)
-			protected.Get("/api/family/messages", msgHandler.HandleGetMessages)
+			//
+			// ORDEM CRÍTICA (Etapa 5): registrar TODAS as rotas literais antes das
+			// rotas dinâmicas com parâmetro coringa. Se `{patientId}` for avaliado
+			// primeiro, um POST /api/family/messages/read casa com o padrão dinâmico
+			// (que só aceita GET) e o Chi responde 405 Method Not Allowed (Allow: GET).
+			// Literais primeiro:
 			protected.Post("/api/family/messages/read", msgHandler.HandleMarkMessagesRead)
 			protected.Post("/api/family/message/delete", msgHandler.HandleDeleteMessage)
+			protected.Post("/api/family/messages/send", msgHandler.HandleSendMessage)
+			protected.Post("/api/sync/family-message", msgHandler.HandleSendMessage)
+			protected.Get("/api/family/messages", msgHandler.HandleGetMessages)
+			// Dinâmicas depois:
+			protected.Get("/api/family/messages/{patientId}", msgHandler.HandleGetMessages)
 
 			// Vínculos Familiares & ECDH
 			protected.Get("/api/family/find-by-code/{code}", bindingHandler.HandleFindByCode)
