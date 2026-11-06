@@ -20,8 +20,8 @@ use braga_contracts::{
     VitalSignRecord, VitalSignSyncDto,
 };
 use braga_identity::{
-    check_user_moderation, require_family_access, require_owner, require_patient_permission,
-    verify_firebase_id_token, FirebaseCertCache, VerifiedIdentity,
+    check_user_moderation, require_family_access, require_owner, require_owner_or_caregiver,
+    require_patient_permission, verify_firebase_id_token, FirebaseCertCache, VerifiedIdentity,
 };
 use braga_limiter::{run_limiter_ipc_socket, StrictRateLimiter};
 use chrono::{DateTime, Utc};
@@ -1321,14 +1321,22 @@ async fn daily_metrics_handler(
         Err(resp) => return resp,
     };
 
-    if require_owner(&identity.uid, &user_id).is_err() {
-        let mut resp = Response::new(Body::from(
-            "{\"detail\":\"Esta operação pertence a outra conta.\"}",
-        ));
-        *resp.status_mut() = StatusCode::FORBIDDEN;
-        resp.headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        return resp;
+    // AUD-ETAPA1: titular OU cuidador com vínculo ACTIVE. Antes era
+    // require_owner, que travava o acompanhamento legítimo do cuidador
+    // autorizado aos registros de passos e hidratação do paciente.
+    if let Some(ref pool) = state.pool {
+        if require_owner_or_caregiver(pool, &identity.uid, &user_id)
+            .await
+            .is_err()
+        {
+            let mut resp = Response::new(Body::from(
+                "{\"detail\":\"O acompanhamento deste familiar não está autorizado.\"}",
+            ));
+            *resp.status_mut() = StatusCode::FORBIDDEN;
+            resp.headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            return resp;
+        }
     }
 
     let pool = match state.pool {

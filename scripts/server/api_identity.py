@@ -45,6 +45,19 @@ def require_owner(uid, user_id):
         raise HTTPException(403, 'Esta operação pertence a outra conta.')
 
 
+async def require_owner_or_caregiver(db_pool, uid, user_id):
+    """Etapa 1: titular do recurso OU cuidador com vínculo ACTIVE.
+
+    Usado em rotas de sinais de saúde (métricas diárias, passos, hidratação)
+    para liberar o acompanhamento legítimo do cuidador autorizado.
+    """
+    if uid == user_id:
+        return
+    if not db_pool:
+        raise HTTPException(403, 'O acompanhamento deste familiar não está autorizado.')
+    await require_family_access(db_pool, uid, user_id)
+
+
 async def require_family_access(conn, uid, patient_id):
     if uid == patient_id:
         return
