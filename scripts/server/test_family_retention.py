@@ -73,9 +73,9 @@ class RetentionRoutes(unittest.TestCase):
         self.conn.fetchrow.return_value = dict(sender_id='patient', id=uuid.UUID(self.id),patient_id='patient')
         # ETAPA 1: rota legada desativada (chat assumido pelo Go braga-chat): 410 Gone.
         self.assertEqual(410, self.client.post('/api/family/message/delete', json={'id':self.id}).status_code)
-        sql = self.conn.execute.call_args.args[0]
-        self.assertIn("message_text=''", sql)
-        self.assertNotIn('expires_at=', sql)
+        # A exclusao de conteudo e retenção de expiração agora sao responsabilidade
+        # do Go braga-chat; o roteador Python nao executa mais DELETE local.
+        self.conn.execute.assert_not_awaited()
 
     def test_expired_message_is_rejected_before_insert(self):
         result = self.client.post('/api/sync/family-message', json=dict(id=self.id, patientId='patient', senderId='patient',
