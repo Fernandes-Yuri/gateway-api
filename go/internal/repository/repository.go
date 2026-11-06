@@ -25,6 +25,7 @@ type FamilyRepository interface {
 
 	// Vínculos & Acesso
 	CheckFamilyAccess(ctx context.Context, uid string, patientID string) (bool, error)
+	SyncBinding(ctx context.Context, req *domain.SyncFamilyBindingRequest, requesterID string) (*domain.FamilyBinding, error)
 	FindByConnectionCode(ctx context.Context, code string) (*domain.FamilyBinding, error)
 	AcceptInvitation(ctx context.Context, code string, caregiverID string, caregiverName string, caregiverRelation string, caregiverPublicKey *string) (*domain.FamilyBinding, error)
 	PublishPublicKey(ctx context.Context, bindingID *string, patientID *string, uid string, publicKey string) (*domain.PublishFamilyPublicKeyResponse, error)
