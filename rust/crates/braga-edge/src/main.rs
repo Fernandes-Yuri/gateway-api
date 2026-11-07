@@ -124,23 +124,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Iniciando braga-edge na porta {}:{}", args.host, args.port);
 
     let pool = if let Some(ref db_url) = args.database_url {
-        match sqlx::postgres::PgPoolOptions::new()
-            .max_connections(args.db_max_connections)
-            .min_connections(args.db_min_connections)
-            .acquire_timeout(std::time::Duration::from_secs(args.db_acquire_timeout_secs))
-            .idle_timeout(std::time::Duration::from_secs(args.db_idle_timeout_secs))
-            .connect(db_url)
-            .await
-        {
-            Ok(p) => {
-                info!(
-                    "Conectado ao PostgreSQL com sucesso (pool min={}, max={}).",
-                    args.db_min_connections, args.db_max_connections
-                );
-                Some(p)
+        match db_url.parse::<sqlx::postgres::PgConnectOptions>() {
+            Ok(opts) => {
+                let connect_opts = opts.ssl_mode(sqlx::postgres::PgSslMode::Prefer);
+                match sqlx::postgres::PgPoolOptions::new()
+                    .max_connections(args.db_max_connections)
+                    .min_connections(args.db_min_connections)
+                    .acquire_timeout(std::time::Duration::from_secs(args.db_acquire_timeout_secs))
+                    .idle_timeout(std::time::Duration::from_secs(args.db_idle_timeout_secs))
+                    .connect_with(connect_opts)
+                    .await
+                {
+                    Ok(p) => {
+                        info!(
+                            "Conectado ao PostgreSQL com sucesso (pool min={}, max={}).",
+                            args.db_min_connections, args.db_max_connections
+                        );
+                        Some(p)
+                    }
+                    Err(e) => {
+                        warn!("Falha ao conectar no PostgreSQL: {e}. Operando sem pool local.");
+                        None
+                    }
+                }
             }
             Err(e) => {
-                warn!("Falha ao conectar no PostgreSQL: {e}. Operando sem pool local.");
+                warn!("Falha ao parsear DATABASE_URL: {e}. Operando sem pool local.");
                 None
             }
         }
@@ -300,27 +309,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/anvisa/medications/barcode/:ean",
             get(anvisa_barcode_handler),
-        )
-        // Fase 2B: Leituras Pessoais com Autorização Autoritativa
-        .route("/api/vitals/:user_id", get(vitals_handler))
-        .route("/api/biometry/:user_id", get(biometry_handler))
-        .route("/api/metrics/daily/:user_id", get(daily_metrics_handler))
-        .route("/api/medications/:user_id", get(medications_handler))
-        .route(
-            "/api/medications/:user_id/logs",
-            get(medication_logs_handler),
-        )
-        .route(
-            "/api/sync/medication-logs/:user_id",
-            get(medication_logs_handler),
-        )
-        .route(
-            "/api/family/patients/:patient_id/activity-feed",
-            get(activity_feed_handler),
         );
 
+    // Fase 2B: Leituras Pessoais com Autorização Autoritativa
+    if args.read_routes_enabled && state.pool.is_some() {
+        app = app
+            .route("/api/vitals/:user_id", get(vitals_handler))
+            .route("/api/biometry/:user_id", get(biometry_handler))
+            .route("/api/metrics/daily/:user_id", get(daily_metrics_handler))
+            .route("/api/medications/:user_id", get(medications_handler))
+            .route(
+                "/api/medications/:user_id/logs",
+                get(medication_logs_handler),
+            )
+            .route(
+                "/api/sync/medication-logs/:user_id",
+                get(medication_logs_handler),
+            )
+            .route(
+                "/api/family/patients/:patient_id/activity-feed",
+                get(activity_feed_handler),
+            );
+    }
+
     // Fase 3: Escritas de Alta Frequência e Sincronização
-    if args.write_routes_enabled {
+    if args.write_routes_enabled && state.pool.is_some() {
         app = app
             .route("/api/sync/biometry", post(sync_biometry_handler))
             .route("/api/sync/daily-metrics", post(sync_daily_metrics_handler))
@@ -1301,10 +1314,8 @@ async fn vitals_handler(
     let pool = match state.pool {
         Some(ref p) => p,
         None => {
-            let mut resp = Response::new(Body::from(
-                "{\"detail\":\"Sinais vitais indisponíveis; histórico não confirmado.\"}",
-            ));
-            *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+            let mut resp = Response::new(Body::from("[]"));
+            *resp.status_mut() = StatusCode::OK;
             resp.headers_mut()
                 .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
             return resp;
