@@ -137,11 +137,22 @@ func (m *MockFamilyRepository) DeleteMessage(ctx context.Context, messageID stri
 	return nil
 }
 
-func (m *MockFamilyRepository) MarkMessagesAsRead(ctx context.Context, patientID string, readerID string) error {
+func (m *MockFamilyRepository) MarkMessagesAsRead(ctx context.Context, patientID string, readerID string, messageIDs ...[]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for id, msg := range m.messages {
+		if len(messageIDs) > 0 && messageIDs[0] != nil {
+			selected := false
+			for _, wanted := range messageIDs[0] {
+				if wanted == id {
+					selected = true
+				}
+			}
+			if !selected {
+				continue
+			}
+		}
 		if msg.PatientID == patientID && msg.SenderID != readerID && !msg.IsRead && msg.DeletedAt == nil {
 			msg.IsRead = true
 			m.messages[id] = msg
@@ -863,5 +874,39 @@ func TestSyncFamilyBindingRateLimit(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("11ª requisição deveria ser 429, obteve %d", w.Code)
+	}
+}
+
+func TestReadReceiptSelectsOnlyVisibleIncomingMessages(t *testing.T) {
+	repo := NewMockFamilyRepository()
+	repo.AllowAccess("reader", "patient")
+	router := transporthttp.NewRouter(repo)
+	for _, msg := range []domain.FamilyMessage{
+		{ID: "visible", PatientID: "patient", SenderID: "patient"},
+		{ID: "unseen", PatientID: "patient", SenderID: "patient"},
+		{ID: "own", PatientID: "patient", SenderID: "reader"},
+		{ID: "foreign", PatientID: "other", SenderID: "patient"},
+	} {
+		repo.SaveMessage(context.Background(), &msg)
+	}
+	for _, body := range []string{
+		`{"patientId":"patient","messageIds":[]}`,
+		`{"patientId":"patient","messageIds":["visible","own","foreign"]}`,
+	} {
+		req := httptest.NewRequest("POST", "/api/family/messages/read", strings.NewReader(body))
+		req.Header.Set("X-User-Id", "reader")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+		}
+	}
+	if !repo.messages["visible"].IsRead {
+		t.Fatal("visible message must be read")
+	}
+	for _, id := range []string{"unseen", "own", "foreign"} {
+		if repo.messages[id].IsRead {
+			t.Fatalf("%s must remain unread", id)
+		}
 	}
 }

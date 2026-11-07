@@ -21,7 +21,7 @@ type FamilyRepository interface {
 	SaveMessage(ctx context.Context, msg *domain.FamilyMessage) error
 	GetMessages(ctx context.Context, patientID string, limit, offset int) ([]domain.FamilyMessage, error)
 	DeleteMessage(ctx context.Context, messageID string, senderID string, patientID *string, sentAt *time.Time) error
-	MarkMessagesAsRead(ctx context.Context, patientID string, readerID string) error
+	MarkMessagesAsRead(ctx context.Context, patientID string, readerID string, messageIDs ...[]string) error
 
 	// Vínculos & Acesso
 	CheckFamilyAccess(ctx context.Context, uid string, patientID string) (bool, error)
