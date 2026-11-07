@@ -1,6 +1,7 @@
 import os
 import asyncio
 from datetime import datetime, timezone
+from functools import partial
 from typing import Optional, Any
 from fastapi import BackgroundTasks, FastAPI, HTTPException as HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,7 +19,7 @@ from security_defense import (
 # Nucleo extraido (Fase A passo 2, Fase B): helpers de dispositivos, tokens FCM e push.
 from core.devices import (
     dispatch_push,
-    get_active_tokens_for_caregivers,
+    get_active_tokens_for_patient_caregivers,
     load_devices,
     migrate_legacy_json_devices,
 )
@@ -91,6 +92,7 @@ except ImportError:
     HAS_SCHEDULER = False
 
 # Suporte defensivo a Firebase Cloud Messaging (FCM)
+messaging = None
 try:
     import firebase_admin
     from firebase_admin import credentials, messaging
@@ -368,6 +370,7 @@ async def scheduled_proactive_job(periodo: str):
                     title="Lembrete do Braga Saúde",
                     body=msg,
                     data={"type": "PROACTIVE_BRAGA", "period": periodo},
+                    messaging=messaging, has_fcm=HAS_FCM,
                 )
             except Exception as push_err:
                 print(f"[Scheduler] Falha no push pró-ativo para {uid}: {push_err}")
@@ -430,14 +433,7 @@ async def dispatch_clinical_alert(
 
     # 1. Notificação Push (FCM) para aparelhos de cuidador, exceto o próprio.
     try:
-        caregiver_tokens = []
-        if pool:
-            caregiver_tokens = await get_active_tokens_for_caregivers(pool, exclude_user_id=source_user_id)
-        if not caregiver_tokens:
-            devices = load_devices()
-            for uid, dev in devices.items():
-                if dev.get("role") in ("CAREGIVER", "caregiver") and uid != source_user_id and dev.get("token"):
-                    caregiver_tokens.append(dev["token"])
+        caregiver_tokens = await get_active_tokens_for_patient_caregivers(pool, source_user_id)
         for token in caregiver_tokens:
             try:
                 await asyncio.to_thread(
@@ -445,7 +441,9 @@ async def dispatch_clinical_alert(
                     token,
                     "Alerta Clínico Braga Saúde",
                     msg_body,
-                    {"type": "ALERT_CRITICAL", "sourceUserId": source_user_id},
+                    {"type": "ALERT_CRITICAL", "sourceUserId": source_user_id,
+                     "title": "Alerta Clínico Braga Saúde", "body": msg_body},
+                    include_notification=False, messaging=messaging, has_fcm=HAS_FCM,
                 )
             except Exception as push_err:
                 print(f"[Clinical Alert] Falha no push para cuidador: {push_err}")
@@ -461,10 +459,11 @@ async def dispatch_clinical_alert(
 consultations_router.configure_state(
     db_pool=None,  # preenchido no startup por _propagate_db_pool()
     load_devices=load_devices,
-    dispatch_push=dispatch_push,
+    dispatch_push=partial(dispatch_push, messaging=messaging, has_fcm=HAS_FCM),
 )
 app.include_router(consultations_router.router)
-install_caregiver_alert_routes(app, lambda: db_pool, load_devices, dispatch_push)
+install_caregiver_alert_routes(app, lambda: db_pool, load_devices, dispatch_push,
+                              messaging=messaging, has_fcm=HAS_FCM)
 
 # =============================================================
 # ROTAS REST DE SINCRONIZACAO POSTGRESQL — ver routers/sync.py

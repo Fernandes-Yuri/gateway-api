@@ -1301,8 +1301,10 @@ async fn vitals_handler(
     let pool = match state.pool {
         Some(ref p) => p,
         None => {
-            let mut resp = Response::new(Body::from("[]"));
-            *resp.status_mut() = StatusCode::OK;
+            let mut resp = Response::new(Body::from(
+                "{\"detail\":\"Sinais vitais indisponíveis; histórico não confirmado.\"}",
+            ));
+            *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
             resp.headers_mut()
                 .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
             return resp;
@@ -1328,7 +1330,7 @@ async fn vitals_handler(
     let rows = if let Some(ref before) = query.before {
         if let Ok(b_dt) = DateTime::parse_from_rfc3339(before) {
             sqlx::query(
-                "SELECT * FROM vital_signs WHERE user_id = $1 AND measured_at < $2 ORDER BY measured_at DESC LIMIT $3 OFFSET $4",
+                "SELECT * FROM vital_signs WHERE user_id = $1 AND measured_at < $2 ORDER BY measured_at DESC, id DESC LIMIT $3 OFFSET $4",
             )
             .bind(&user_id)
             .bind(b_dt.with_timezone(&Utc))
@@ -1338,7 +1340,7 @@ async fn vitals_handler(
             .await
         } else {
             sqlx::query(
-                "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC LIMIT $2 OFFSET $3",
+                "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3",
             )
             .bind(&user_id)
             .bind(limit)
@@ -1348,7 +1350,7 @@ async fn vitals_handler(
         }
     } else {
         sqlx::query(
-            "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC LIMIT $2 OFFSET $3",
+            "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3",
         )
         .bind(&user_id)
         .bind(limit)

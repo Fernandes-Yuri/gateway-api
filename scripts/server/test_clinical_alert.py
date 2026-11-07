@@ -27,7 +27,7 @@ class DispatchClinicalAlertTest(unittest.IsolatedAsyncioTestCase):
         }
 
     async def test_critical_pressure_notifies_only_caregiver_devices(self):
-        with patch.object(server, 'load_devices', return_value=self.devices), \
+        with patch.object(server, 'get_active_tokens_for_patient_caregivers', AsyncMock(return_value=['cg-token'])), \
                 patch.object(server, 'dispatch_push', MagicMock(return_value=True)) as push:
             triggered = await server.dispatch_clinical_alert(
                 make_pool(), 'patient', systolic=160, diastolic=100)
@@ -38,9 +38,13 @@ class DispatchClinicalAlertTest(unittest.IsolatedAsyncioTestCase):
         # title, body, data passam posicionalmente no dispatch_push.
         self.assertEqual(args[3]['type'], 'ALERT_CRITICAL')
         self.assertNotIn(args[0], ['pt-token'])
+        self.assertIs(kwargs['messaging'], server.messaging)
+        self.assertEqual(kwargs['has_fcm'], server.HAS_FCM)
+        self.assertFalse(kwargs['include_notification'])
+        self.assertEqual(args[3]['body'], args[2])
 
     async def test_normal_reading_triggers_nothing(self):
-        with patch.object(server, 'load_devices', return_value=self.devices), \
+        with patch.object(server, 'get_active_tokens_for_patient_caregivers', AsyncMock(return_value=['cg-token'])), \
                 patch.object(server, 'dispatch_push', MagicMock(return_value=True)) as push:
             triggered = await server.dispatch_clinical_alert(
                 make_pool(), 'patient', systolic=120, diastolic=80, glucose=95)
@@ -48,7 +52,7 @@ class DispatchClinicalAlertTest(unittest.IsolatedAsyncioTestCase):
         push.assert_not_called()
 
     async def test_critical_glucose_out_of_range_alerts(self):
-        with patch.object(server, 'load_devices', return_value=self.devices), \
+        with patch.object(server, 'get_active_tokens_for_patient_caregivers', AsyncMock(return_value=['cg-token'])), \
                 patch.object(server, 'dispatch_push', MagicMock(return_value=True)) as push:
             triggered = await server.dispatch_clinical_alert(
                 make_pool(), 'patient', glucose=250, glucose_type='jejum')
@@ -57,11 +61,35 @@ class DispatchClinicalAlertTest(unittest.IsolatedAsyncioTestCase):
 
 
     async def test_push_failure_never_raises(self):
-        with patch.object(server, 'load_devices', side_effect=RuntimeError('boom')):
+        with patch.object(server, 'get_active_tokens_for_patient_caregivers', AsyncMock(side_effect=RuntimeError('boom'))):
             # Não deve levantar — o registro do paciente é prioridade.
             triggered = await server.dispatch_clinical_alert(
                 make_pool(), 'patient', systolic=190)
         self.assertTrue(triggered)
+
+    async def test_empty_authorized_targets_never_fall_back_to_global_devices(self):
+        with patch.object(server, 'get_active_tokens_for_patient_caregivers', AsyncMock(return_value=[])) as targets, \
+                patch.object(server, 'load_devices', return_value=self.devices) as legacy, \
+                patch.object(server, 'dispatch_push') as push:
+            await server.dispatch_clinical_alert(make_pool(), 'patient', systolic=160)
+        targets.assert_awaited_once()
+        self.assertEqual(targets.call_args.args[1], 'patient')
+        legacy.assert_not_called()
+        push.assert_not_called()
+
+    async def test_vitals_database_outage_is_not_an_empty_history(self):
+        with patch.object(server.sync_router._state, 'db_pool', None):
+            from fastapi import HTTPException
+            with self.assertRaises(HTTPException) as error:
+                await server.sync_router.get_vitals('patient', uid='patient', limit=200, offset=0, before=None)
+            self.assertEqual(error.exception.status_code, 503)
+
+    async def test_no_database_never_sends_unverified_alert(self):
+        with patch.object(server, 'load_devices', return_value=self.devices) as legacy, \
+                patch.object(server, 'dispatch_push') as push:
+            self.assertTrue(await server.dispatch_clinical_alert(None, 'patient', systolic=160))
+        legacy.assert_not_called()
+        push.assert_not_called()
 
 
 if __name__ == '__main__':

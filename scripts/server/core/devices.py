@@ -89,6 +89,30 @@ async def get_active_tokens_for_caregivers(pool, exclude_user_id: Optional[str] 
         return []
 
 
+async def get_active_tokens_for_patient_caregivers(pool, patient_user_id: str) -> List[str]:
+    """Alerta clínico somente para dispositivos de vínculos ativos do paciente.
+
+    Sem banco não há como confirmar autorização; nunca usa o JSON legado.
+    O vínculo autoriza o acesso, independentemente do papel salvo no token.
+    """
+    if pool is None:
+        return []
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT d.token FROM device_push_tokens d
+            JOIN family_bindings b ON b.caregiver_id = d.user_id
+            WHERE b.patient_id = $1 AND b.status = 'ACTIVE'
+              AND d.is_active = true AND d.user_id != $1
+              AND NOT EXISTS (
+                  SELECT 1 FROM profiles p
+                  WHERE p.id = d.user_id AND p.paused_at IS NOT NULL
+              );
+            """, patient_user_id,
+        )
+    return [row["token"] for row in rows]
+
+
 async def get_active_devices_for_users(pool) -> List[Dict[str, Any]]:
     """Retorna lista de dispositivos ativos registrados no sistema."""
     if not pool:
@@ -226,7 +250,7 @@ def dispatch_push(token: str, title: str, body: str, data: Dict[str, str] = None
                     # balao (onMessageReceived nao roda); com app aberto o
                     # service le data["type"] e faz o deep link.
                     click_action="OPEN_FAMILY_MESSAGES" if (data or {}).get("type") == "FAMILY_MESSAGE" else None,
-                ),
+                ) if include_notification else None,
             )
             message = messaging.Message(
                 notification=messaging.Notification(title=title, body=body) if include_notification else None,
@@ -234,7 +258,8 @@ def dispatch_push(token: str, title: str, body: str, data: Dict[str, str] = None
                 android=android_cfg,
                 token=token
             )
-            messaging.send(message)
+            message_id = messaging.send(message)
+            print(f"[FCM Accepted] {message_id}")
             return True
         except Exception as e:
             print(f"[FCM Error] {e}")

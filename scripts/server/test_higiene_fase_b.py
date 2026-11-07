@@ -148,6 +148,8 @@ class TestServerStartupAndProactiveCleanliness(unittest.IsolatedAsyncioTestCase)
         mock_push.assert_called_once()
         self.assertEqual(mock_push.call_args.kwargs.get("token"), "token-1")
         self.assertIn("Maria", mock_push.call_args.kwargs.get("body"))
+        self.assertIs(mock_push.call_args.kwargs["messaging"], server.messaging)
+        self.assertEqual(mock_push.call_args.kwargs["has_fcm"], server.HAS_FCM)
 
 
 class TestDeployWorkflow(unittest.TestCase):
