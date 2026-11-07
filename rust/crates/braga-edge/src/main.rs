@@ -312,7 +312,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
     // Fase 2B: Leituras Pessoais com Autorização Autoritativa
-    if args.read_routes_enabled && pool.is_some() {
+    if args.read_routes_enabled && state.pool.is_some() {
         app = app
             .route("/api/vitals/:user_id", get(vitals_handler))
             .route("/api/biometry/:user_id", get(biometry_handler))
@@ -333,7 +333,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Fase 3: Escritas de Alta Frequência e Sincronização
-    if args.write_routes_enabled && pool.is_some() {
+    if args.write_routes_enabled && state.pool.is_some() {
         app = app
             .route("/api/sync/biometry", post(sync_biometry_handler))
             .route("/api/sync/daily-metrics", post(sync_daily_metrics_handler))
