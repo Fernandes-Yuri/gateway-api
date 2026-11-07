@@ -309,7 +309,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/anvisa/medications/barcode/:ean",
             get(anvisa_barcode_handler),
-        )
         );
 
     // Fase 2B: Leituras Pessoais com Autorização Autoritativa
