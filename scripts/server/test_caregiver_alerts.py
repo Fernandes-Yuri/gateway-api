@@ -19,9 +19,11 @@ class CaregiverAlertsTest(unittest.IsolatedAsyncioTestCase):
         self.conn = Mock(fetchval=AsyncMock(return_value=True), fetch=AsyncMock(return_value=[]))
         self.pool = Mock(acquire=Mock(return_value=Acquisition(self.conn)))
         self.dispatch = Mock(return_value=True)
+        self.messaging = Mock()
         app = FastAPI()
         install_caregiver_alert_routes(app, lambda: self.pool,
-            lambda: {'caregiver': {'token': 'test-token'}, 'unrelated': {'token': 'never-use'}}, self.dispatch)
+            lambda: {'caregiver': {'token': 'test-token'}, 'unrelated': {'token': 'never-use'}}, self.dispatch,
+            messaging=self.messaging, has_fcm=True)
         self.endpoint = next(r.endpoint for r in app.routes if r.path == '/api/family/health-alert')
         self.req = CaregiverAlert(patientId='patient', caregiverId='caregiver', message='Teste')
 
@@ -31,6 +33,10 @@ class CaregiverAlertsTest(unittest.IsolatedAsyncioTestCase):
         self.dispatch.assert_called_once()
         self.assertEqual(self.dispatch.call_args.kwargs['token'], 'test-token')
         self.conn.fetchval.assert_awaited_once()
+        self.assertIs(self.dispatch.call_args.kwargs['messaging'], self.messaging)
+        self.assertTrue(self.dispatch.call_args.kwargs['has_fcm'])
+        self.assertFalse(self.dispatch.call_args.kwargs['include_notification'])
+        self.assertEqual(self.dispatch.call_args.kwargs['data']['body'], 'Teste')
 
     async def test_wrong_owner_and_revoked_binding_do_not_send(self):
         with self.assertRaises(HTTPException) as error:

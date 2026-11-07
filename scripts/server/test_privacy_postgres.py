@@ -43,6 +43,33 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
             await conn.execute((ROOT / "migrations/077_social_moderation_and_blocks.sql").read_text(encoding="utf-8"))
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('paciente','Paciente'),('cuidador','Cuidador')")
 
+    async def test_clinical_push_targets_only_active_unpaused_linked_devices(self):
+        from core.devices import get_active_tokens_for_patient_caregivers
+        async with self.pool.acquire() as conn:
+            await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('unrelated','Outro'),('revoked','Revogado'),('paused','Pausado'),('inactive','Inativo')")
+            await conn.execute("UPDATE profiles SET paused_at=NOW() WHERE id='paused'")
+            for uid, status in [('cuidador', 'ACTIVE'), ('revoked', 'REVOKED'), ('paused', 'ACTIVE'), ('inactive', 'ACTIVE')]:
+                await conn.execute("INSERT INTO family_bindings(patient_id,caregiver_id,caregiver_name,caregiver_relation,connection_code,status,expires_at) VALUES ('paciente',$1,'Teste','Familiar',$1,$2,NOW()+INTERVAL '1 day')", uid, status)
+            for uid in ('paciente', 'cuidador', 'unrelated', 'revoked', 'paused', 'inactive'):
+                await conn.execute("INSERT INTO device_push_tokens(user_id,token,role,is_active) VALUES ($1,$1,'caregiver',$2)", uid, uid != 'inactive')
+            await conn.execute("INSERT INTO device_push_tokens(user_id,token,role) VALUES ('cuidador','second-device','PATIENT')")
+        self.assertEqual(set(await get_active_tokens_for_patient_caregivers(self.pool, 'paciente')), {'cuidador', 'second-device'})
+        async with self.pool.acquire() as conn:
+            await conn.execute("UPDATE family_bindings SET status='REVOKED' WHERE caregiver_id='cuidador'")
+        self.assertEqual(await get_active_tokens_for_patient_caregivers(self.pool, 'paciente'), [])
+
+    async def test_vitals_pagination_keeps_all_readings_with_the_same_timestamp(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute("INSERT INTO vital_signs(user_id,hydration_ml,measured_at) SELECT 'paciente',250,'2026-11-07T12:00:00Z'::timestamptz FROM generate_series(1,201)")
+        with patch.object(sync, '_state', SimpleNamespace(db_pool=self.pool)):
+            first = await sync.get_vitals('paciente', uid='paciente', limit=200, offset=0, before=None)
+            second = await sync.get_vitals('paciente', uid='paciente', limit=200, offset=200, before=None)
+            repeat = await sync.get_vitals('paciente', uid='paciente', limit=200, offset=0, before=None)
+        self.assertEqual(len(first), 200)
+        self.assertEqual(len(second), 1)
+        self.assertEqual([row['id'] for row in first], [row['id'] for row in repeat])
+        self.assertEqual(len({row['id'] for row in first + second}), 201)
+
     async def test_social_reaction_change_removal_and_private_audience(self):
         from datetime import datetime, timezone
         async with self.pool.acquire() as conn:

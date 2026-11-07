@@ -638,19 +638,19 @@ async def get_vitals(
 ):
     db_pool = _state.db_pool
     if not db_pool:
-        return []
+        raise HTTPException(503, "Sinais vitais indisponíveis; histórico não confirmado.")
     async with db_pool.acquire() as conn:
         await require_family_access(conn, uid, user_id)
         if before:
             try:
                 b_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
-                query = "SELECT * FROM vital_signs WHERE user_id = $1 AND measured_at < $2 ORDER BY measured_at DESC LIMIT $3 OFFSET $4"
+                query = "SELECT * FROM vital_signs WHERE user_id = $1 AND measured_at < $2 ORDER BY measured_at DESC, id DESC LIMIT $3 OFFSET $4"
                 rows = await conn.fetch(query, user_id, b_dt, limit, offset)
             except Exception:
-                query = "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC LIMIT $2 OFFSET $3"
+                query = "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3"
                 rows = await conn.fetch(query, user_id, limit, offset)
         else:
-            query = "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC LIMIT $2 OFFSET $3"
+            query = "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3"
             rows = await conn.fetch(query, user_id, limit, offset)
 
         result = []

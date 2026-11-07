@@ -1,6 +1,6 @@
 """Testes de regressão da Higiene Crítica do Gateway — Fase A."""
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 import config
@@ -28,13 +28,13 @@ class HigieneFaseATest(unittest.IsolatedAsyncioTestCase):
         }
         called_tokens = []
 
-        def fake_push(token, title, body, data):
+        def fake_push(token, title, body, data, **kwargs):
             if token == "token-1":
                 raise TimeoutError("FCM timeout")
             called_tokens.append(token)
             return True
 
-        with patch.object(server, "load_devices", return_value=devices), \
+        with patch.object(server, "get_active_tokens_for_patient_caregivers", AsyncMock(return_value=[devices["cg-1"]["token"], devices["cg-2"]["token"]])), \
                 patch.object(server, "dispatch_push", side_effect=fake_push):
             pool = MagicMock()
             triggered = await server.dispatch_clinical_alert(

@@ -12,7 +12,8 @@ class CaregiverAlert(BaseModel):
     message: str = Field(min_length=1, max_length=1500)
 
 
-def install_caregiver_alert_routes(app, get_pool, load_devices, dispatch_push):
+def install_caregiver_alert_routes(app, get_pool, load_devices, dispatch_push,
+                                   messaging=None, has_fcm=False):
     @app.post('/api/family/health-alert')
     async def health_alert(req: CaregiverAlert, uid: str = Depends(firebase_uid)):
         require_owner(uid, req.patientId)
@@ -35,7 +36,9 @@ def install_caregiver_alert_routes(app, get_pool, load_devices, dispatch_push):
         for device in targets:
             sent = await asyncio.to_thread(dispatch_push, token=device['token'],
                 title='Aviso de cuidado familiar', body=req.message,
-                data={'type': 'HEALTH_ALERT', 'sourceUserId': uid}) or sent
+                data={'type': 'HEALTH_ALERT', 'sourceUserId': uid,
+                      'title': 'Aviso de cuidado familiar', 'body': req.message},
+                include_notification=False, messaging=messaging, has_fcm=has_fcm) or sent
         if not sent:
             raise HTTPException(502, 'O serviço de notificações não aceitou o alerta.')
         # Aceitação pelo FCM não comprova leitura ou recebimento no dispositivo.
