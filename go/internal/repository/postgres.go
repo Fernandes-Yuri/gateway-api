@@ -213,17 +213,23 @@ func (r *PostgresRepository) DeleteMessage(ctx context.Context, messageID string
 }
 
 // MarkMessagesAsRead marca como lidas as mensagens do patientID que foram enviadas por outro usuário
-func (r *PostgresRepository) MarkMessagesAsRead(ctx context.Context, patientID string, readerID string) error {
+func (r *PostgresRepository) MarkMessagesAsRead(ctx context.Context, patientID string, readerID string, messageIDs ...[]string) error {
 	if r.pool == nil {
 		return ErrDatabaseUnavailable
 	}
 
+	var ids []string
+	if len(messageIDs) > 0 {
+		ids = messageIDs[0]
+	}
 	query := `
 		UPDATE family_messages
 		SET is_read = true
-		WHERE patient_id = $1 AND sender_id != $2 AND is_read = false AND deleted_at IS NULL;
+		WHERE patient_id = $1 AND sender_id != $2 AND is_read = false
+		  AND deleted_at IS NULL AND expires_at > now()
+		  AND ($3::text[] IS NULL OR id::text = ANY($3::text[]));
 	`
-	if _, err := r.pool.Exec(ctx, query, patientID, readerID); err != nil {
+	if _, err := r.pool.Exec(ctx, query, patientID, readerID, ids); err != nil {
 		return fmt.Errorf("falha ao marcar mensagens como lidas: %w", err)
 	}
 	return nil

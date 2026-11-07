@@ -98,13 +98,24 @@ func (m *mockFamilyRepo) DeleteMessage(ctx context.Context, messageID string, se
 	return nil
 }
 
-func (m *mockFamilyRepo) MarkMessagesAsRead(ctx context.Context, patientID string, readerID string) error {
+func (m *mockFamilyRepo) MarkMessagesAsRead(ctx context.Context, patientID string, readerID string, messageIDs ...[]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.dbDown {
 		return repository.ErrDatabaseUnavailable
 	}
 	for id, msg := range m.messages {
+		if len(messageIDs) > 0 && messageIDs[0] != nil {
+			selected := false
+			for _, wanted := range messageIDs[0] {
+				if wanted == id {
+					selected = true
+				}
+			}
+			if !selected {
+				continue
+			}
+		}
 		if msg.PatientID == patientID && msg.SenderID != readerID {
 			msg.IsRead = true
 			m.messages[id] = msg

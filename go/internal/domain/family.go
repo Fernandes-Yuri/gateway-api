@@ -78,7 +78,8 @@ type SendFamilyMessageResponse struct {
 
 // MarkMessagesReadRequest é o payload JSON para marcar mensagens de uma conversa como lidas
 type MarkMessagesReadRequest struct {
-	PatientID string `json:"patientId"`
+	PatientID  string   `json:"patientId"`
+	MessageIDs []string `json:"messageIds"`
 }
 
 // DeleteFamilyMessageRequest é o payload para exclusão (tombstone)

@@ -319,7 +319,15 @@ func (h *MessageHandler) HandleMarkMessagesRead(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if err := h.repo.MarkMessagesAsRead(r.Context(), patientID, uid); err != nil {
+	if len(req.MessageIDs) > 100 {
+		writeJSONError(w, http.StatusUnprocessableEntity, "Informe até 100 mensagens por recibo.")
+		return
+	}
+	if req.MessageIDs != nil && len(req.MessageIDs) == 0 {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "success"})
+		return
+	}
+	if err := h.repo.MarkMessagesAsRead(r.Context(), patientID, uid, req.MessageIDs); err != nil {
 		if errors.Is(err, repository.ErrDatabaseUnavailable) {
 			writeJSONError(w, http.StatusServiceUnavailable, "Banco indisponível. Tente novamente.")
 			return
@@ -329,7 +337,7 @@ func (h *MessageHandler) HandleMarkMessagesRead(w http.ResponseWriter, r *http.R
 	}
 
 	if h.hub != nil {
-		_ = h.hub.BroadcastMessagesRead(patientID, uid)
+		_ = h.hub.BroadcastMessagesRead(patientID, uid, req.MessageIDs)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "success"})

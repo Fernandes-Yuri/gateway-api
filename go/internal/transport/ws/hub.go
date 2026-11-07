@@ -24,15 +24,16 @@ type MessageDeletedData struct {
 
 // MessagesReadData payload do evento MESSAGE_READ
 type MessagesReadData struct {
-	PatientID      string `json:"patientId"`
-	PatientIDSnake string `json:"patient_id,omitempty"`
-	ReaderID       string `json:"readerId"`
-	ReaderIDSnake  string `json:"reader_id,omitempty"`
+	PatientID      string   `json:"patientId"`
+	PatientIDSnake string   `json:"patient_id,omitempty"`
+	ReaderID       string   `json:"readerId"`
+	ReaderIDSnake  string   `json:"reader_id,omitempty"`
+	MessageIDs     []string `json:"messageIds,omitempty"`
 }
 
 // Hub gerencia as conexões WebSocket ativas, indexadas por patientId e userId de forma thread-safe
 type Hub struct {
-	mu       sync.RWMutex
+	mu sync.RWMutex
 	// patientID -> userID -> set de *Client
 	clients  map[string]map[string]map[*Client]bool
 	done     chan struct{}
@@ -120,7 +121,11 @@ func (h *Hub) BroadcastMessageDeleted(patientID string, messageID string) error 
 }
 
 // BroadcastMessagesRead envia o evento MESSAGE_READ informando visualização em tempo real
-func (h *Hub) BroadcastMessagesRead(patientID string, readerID string) error {
+func (h *Hub) BroadcastMessagesRead(patientID string, readerID string, messageIDs ...[]string) error {
+	var ids []string
+	if len(messageIDs) > 0 {
+		ids = messageIDs[0]
+	}
 	event := Event{
 		Type: "MESSAGE_READ",
 		Data: MessagesReadData{
@@ -128,6 +133,7 @@ func (h *Hub) BroadcastMessagesRead(patientID string, readerID string) error {
 			PatientIDSnake: patientID,
 			ReaderID:       readerID,
 			ReaderIDSnake:  readerID,
+			MessageIDs:     ids,
 		},
 	}
 	return h.BroadcastToFamily(patientID, event)
