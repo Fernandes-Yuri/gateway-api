@@ -51,7 +51,7 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
             for uid, status in [('cuidador', 'ACTIVE'), ('revoked', 'REVOKED'), ('paused', 'ACTIVE'), ('inactive', 'ACTIVE')]:
                 await conn.execute("INSERT INTO family_bindings(patient_id,caregiver_id,caregiver_name,caregiver_relation,connection_code,status,expires_at) VALUES ('paciente',$1,'Teste','Familiar',$1,$2,NOW()+INTERVAL '1 day')", uid, status)
             for uid in ('paciente', 'cuidador', 'unrelated', 'revoked', 'paused', 'inactive'):
-                await conn.execute("INSERT INTO device_push_tokens(user_id,token,role,is_active) VALUES ($1,$1,'caregiver',$2)", uid, uid != 'inactive')
+                await conn.execute("INSERT INTO device_push_tokens(user_id,token,role,is_active) VALUES ($1,$2,'caregiver',$3)", uid, uid, uid != 'inactive')
             await conn.execute("INSERT INTO device_push_tokens(user_id,token,role) VALUES ('cuidador','second-device','PATIENT')")
         self.assertEqual(set(await get_active_tokens_for_patient_caregivers(self.pool, 'paciente')), {'cuidador', 'second-device'})
         async with self.pool.acquire() as conn:
