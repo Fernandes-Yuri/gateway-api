@@ -41,6 +41,8 @@ class PrivacyPostgres(unittest.IsolatedAsyncioTestCase):
             await conn.execute((ROOT / "migrations/056_firebase_account_reconciliation.sql").read_text(encoding="utf-8"))
             await conn.execute((ROOT / "migrations/071_account_pause_and_mail.sql").read_text(encoding="utf-8"))
             await conn.execute((ROOT / "migrations/077_social_moderation_and_blocks.sql").read_text(encoding="utf-8"))
+            await conn.execute((ROOT / "migrations/054_vital_signs_oxygen.sql").read_text())
+            await conn.execute((ROOT / "migrations/080_clinical_sync_integrity.sql").read_text())
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('paciente','Paciente'),('cuidador','Cuidador')")
 
     async def test_clinical_push_targets_only_active_unpaused_linked_devices(self):
