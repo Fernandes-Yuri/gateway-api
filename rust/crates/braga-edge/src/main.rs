@@ -2785,21 +2785,43 @@ async fn sync_vitals_handler(
 
     let pool = match state.pool {
         Some(ref p) => p,
-        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(HttpErrorResponse::new("Medição ainda não confirmada."))).into_response(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(HttpErrorResponse::new("Medição ainda não confirmada.")),
+            )
+                .into_response()
+        }
     };
     let vital_id = match payload.id.as_deref() {
         Some(value) => match uuid::Uuid::parse_str(value) {
             Ok(id) => id,
-            Err(_) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(HttpErrorResponse::new("Identificador inválido."))).into_response(),
+            Err(_) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(HttpErrorResponse::new("Identificador inválido.")),
+                )
+                    .into_response()
+            }
         },
         None => uuid::Uuid::new_v4(),
     };
     let measured_dt = match DateTime::parse_from_rfc3339(&payload.measured_at) {
         Ok(dt) => dt.with_timezone(&Utc),
-        Err(_) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(HttpErrorResponse::new("Data inválida ou sem fuso horário."))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(HttpErrorResponse::new("Data inválida ou sem fuso horário.")),
+            )
+                .into_response()
+        }
     };
     if payload.hydration_ml.is_some_and(|ml| ml <= 0 || ml > 20000) {
-        return (StatusCode::UNPROCESSABLE_ENTITY, Json(HttpErrorResponse::new("Volume de água inválido."))).into_response();
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(HttpErrorResponse::new("Volume de água inválido.")),
+        )
+            .into_response();
     }
     let query = r#"
         INSERT INTO vital_signs (
@@ -2838,7 +2860,11 @@ async fn sync_vitals_handler(
             )
                 .into_response()
         }
-        Err(sqlx::Error::RowNotFound) => (StatusCode::CONFLICT, Json(HttpErrorResponse::new("Identificador indisponível."))).into_response(),
+        Err(sqlx::Error::RowNotFound) => (
+            StatusCode::CONFLICT,
+            Json(HttpErrorResponse::new("Identificador indisponível.")),
+        )
+            .into_response(),
         Err(e) => {
             error!("Erro ao gravar vital_signs: {e}");
             (
