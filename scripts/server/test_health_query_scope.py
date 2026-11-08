@@ -1,6 +1,6 @@
 import unittest
 
-from services.health_queries import blood_pressure_today
+from services.health_queries import blood_pressure_today, format_value
 from services.operations import OperationContext
 
 
@@ -29,6 +29,11 @@ class HealthQueryScopeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(conn.args[0], "patient")
         self.assertEqual(len(conn.args), 3)
         self.assertLess(conn.args[1], conn.args[2])
+
+    def test_oxygen_format_preserves_decimal_in_pt_br_and_integer_when_whole(self):
+        self.assertEqual(format_value("saturacao", {"oxygen_saturation": 98.5}), "98,5")
+        self.assertEqual(format_value("saturacao", {"oxygen_saturation": 98.0}), "98")
+        self.assertEqual(format_value("saturacao", {"oxygen_saturation": 97}), "97")
 
 
 if __name__ == "__main__":

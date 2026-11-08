@@ -1018,6 +1018,7 @@ pub struct VitalsQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
     pub before: Option<String>,
+    pub contract: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1382,12 +1383,25 @@ async fn vitals_handler(
         }
     };
 
+    let contract_version = query.contract.unwrap_or_else(|| {
+        headers
+            .get("x-braga-vitals-contract")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .unwrap_or(1)
+    });
+
     let records: Vec<VitalSignRecord> = rows
         .into_iter()
         .map(|r| {
             let id: sqlx::types::Uuid = r.try_get("id").unwrap_or_default();
             let measured_at: Option<DateTime<Utc>> = r.try_get("measured_at").ok();
             let created_at: Option<DateTime<Utc>> = r.try_get("created_at").ok();
+            let oxygen_saturation = r
+                .try_get::<f64, _>("oxygen_saturation")
+                .ok()
+                .or_else(|| r.try_get::<i32, _>("oxygen_saturation").ok().map(f64::from))
+                .map(|v| (v * 100.0).round() / 100.0);
             // FASE 8A (DT-051): colunas reais da vital_signs confirmadas nas
             // migrations 004/054 e no `_COLS` do Python em produção
             // (services/health_queries.py): heart_rate, glucose_level,
@@ -1405,7 +1419,7 @@ async fn vitals_handler(
                 heart_rate: r.try_get("heart_rate").ok(),
                 glucose_level: r.try_get("glucose_level").ok(),
                 glucose_type: r.try_get("glucose_type").ok(),
-                oxygen_saturation: r.try_get("oxygen_saturation").ok(),
+                oxygen_saturation,
                 hydration_ml: r.try_get("hydration_ml").ok(),
                 confirmed_via: r.try_get("confirmed_via").ok(),
                 confirmation_code: r.try_get("confirmation_code").ok(),
@@ -1413,10 +1427,24 @@ async fn vitals_handler(
         })
         .collect();
 
+    if contract_version < 2
+        && records
+            .iter()
+            .any(|rec| rec.oxygen_saturation.is_some_and(|v| v.fract() != 0.0))
+    {
+        let mut resp = Response::new(Body::from(
+            "{\"detail\":\"Leitura fracionada de oxigenação requer contrato v2 (contract=2).\"}",
+        ));
+        *resp.status_mut() = StatusCode::CONFLICT;
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        return resp;
+    }
+
     let mut resp = Response::new(Body::from(
         serde_json::to_string(&records).unwrap_or_default(),
     ));
-    *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+    *resp.status_mut() = StatusCode::OK;
     resp.headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     resp
@@ -2823,11 +2851,58 @@ async fn sync_vitals_handler(
         )
             .into_response();
     }
+    if payload
+        .systolic_pressure
+        .is_some_and(|v| !(40..=300).contains(&v))
+        || payload
+            .diastolic_pressure
+            .is_some_and(|v| !(20..=200).contains(&v))
+        || payload.heart_rate.is_some_and(|v| !(20..=250).contains(&v))
+        || payload
+            .oxygen_saturation
+            .is_some_and(|v| !v.is_finite() || !(30.0..=100.0).contains(&v))
+        || payload
+            .glucose_level
+            .is_some_and(|v| !(10..=1000).contains(&v))
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(HttpErrorResponse::new("Medição fora da faixa aceitável.")),
+        )
+            .into_response();
+    }
+    let confirmed_via = match payload
+        .confirmed_via
+        .as_deref()
+        .map(|s| s.trim().to_ascii_lowercase())
+    {
+        None => "app".to_string(),
+        Some(ref s) if s.is_empty() => "app".to_string(),
+        Some(ref s) if s == "braga.whatsapp" => "whatsapp".to_string(),
+        Some(s)
+            if matches!(
+                s.as_str(),
+                "app" | "whatsapp" | "web" | "braga.manual" | "braga.voice"
+            ) =>
+        {
+            s
+        }
+        Some(_) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(HttpErrorResponse::new("Origem da medição inválida.")),
+            )
+                .into_response();
+        }
+    };
+    let oxygen_saturation = payload
+        .oxygen_saturation
+        .map(|v| (v * 100.0).round() / 100.0);
     let query = r#"
         INSERT INTO vital_signs (
             id, user_id, systolic_pressure, diastolic_pressure, heart_rate,
-            oxygen_saturation, glucose_level, glucose_type, hydration_ml, measured_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            oxygen_saturation, glucose_level, glucose_type, hydration_ml, confirmed_via, measured_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
         ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id
         WHERE vital_signs.user_id=EXCLUDED.user_id RETURNING id"#;
 
@@ -2837,10 +2912,11 @@ async fn sync_vitals_handler(
         .bind(payload.systolic_pressure)
         .bind(payload.diastolic_pressure)
         .bind(payload.heart_rate)
-        .bind(payload.oxygen_saturation)
+        .bind(oxygen_saturation)
         .bind(payload.glucose_level)
         .bind(payload.glucose_type)
         .bind(payload.hydration_ml)
+        .bind(confirmed_via)
         .bind(measured_dt)
         .fetch_one(pool)
         .await;
@@ -2850,13 +2926,11 @@ async fn sync_vitals_handler(
             let id: uuid::Uuid = r.get("id");
             (
                 StatusCode::OK,
-                Json(SyncResponse {
-                    status: "success".to_string(),
-                    id: id.to_string(),
-                    medication_contract: None,
-                    medication_batch_contract: None,
-                    dose_status: None,
-                }),
+                Json(serde_json::json!({
+                    "status": "success",
+                    "id": id.to_string(),
+                    "vitalsContract": 2,
+                })),
             )
                 .into_response()
         }

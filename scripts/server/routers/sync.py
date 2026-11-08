@@ -15,6 +15,7 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import os
 import re
 import uuid
@@ -95,17 +96,78 @@ class ProfileSyncDto(BaseModel):
     avatarIdentifier: Optional[str] = None
 
 
+VITALS_CONTRACT_VERSION = 2
+ALLOWED_VITAL_ORIGINS = {"app", "whatsapp", "web", "braga.manual", "braga.voice", "braga.whatsapp"}
+
+
+def normalize_vital_origin(raw: Optional[str]) -> str:
+    if raw is None:
+        return "app"
+    cleaned = raw.strip().lower()
+    if not cleaned:
+        return "app"
+    if cleaned == "braga.whatsapp":
+        return "whatsapp"
+    if cleaned not in ALLOWED_VITAL_ORIGINS:
+        raise ValueError("Origem da medição inválida.")
+    return cleaned
+
+
+def _normalize_oxygen_value(val: Any) -> Optional[int | float]:
+    if val is None:
+        return None
+    num = round(float(val), 2)
+    return int(num) if num.is_integer() else num
+
+
+def _has_fractional_oxygen(val: Any) -> bool:
+    if val is None:
+        return False
+    return not round(float(val), 2).is_integer()
+
+
+def _resolve_vitals_contract(contract: Any = None, request: Optional[Request] = None) -> int:
+    if isinstance(contract, int) and not isinstance(contract, bool):
+        return contract
+    if request is not None and hasattr(request, "headers") and request.headers is not None:
+        raw = (request.headers.get("x-braga-vitals-contract") or "").strip()
+        if raw.isdigit():
+            return int(raw)
+    return 1
+
+
 class VitalSignSyncDto(BaseModel):
     id: Optional[uuid.UUID] = None
     userId: str
     systolicPressure: Optional[int] = None
     diastolicPressure: Optional[int] = None
     heartRate: Optional[int] = None
-    oxygenSaturation: Optional[int] = None
+    oxygenSaturation: Optional[float] = None
     glucoseLevel: Optional[int] = None
     glucoseType: Optional[str] = None
     hydrationMl: Optional[int] = None
+    confirmedVia: Optional[str] = None
     measuredAt: str
+
+    @field_validator("systolicPressure", "diastolicPressure", "heartRate", "glucoseLevel", "hydrationMl", mode="before")
+    @classmethod
+    def require_strict_int(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            raise ValueError("A medição deve ser um número inteiro.")
+        if float(value) % 1 != 0:
+            raise ValueError("A medição deve ser um número inteiro.")
+        return int(value)
+
+    @field_validator("oxygenSaturation", mode="before")
+    @classmethod
+    def require_finite_oxygen(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            raise ValueError("A saturação deve ser um número válido.")
+        return round(float(value), 2)
 
 
 class BiometrySyncDto(BaseModel):
@@ -577,19 +639,26 @@ async def sync_vital_sign(
 
     # Validacao de faixa clinica: valores absurdos (ex.: 99999 mmHg) eram
     # aceitos e geravam alertas sem sentido.
-    def _range(val, lo, hi, nome):
+    def _range(val, lo, hi, nome, *, allow_fraction: bool = False):
         if val is None:
             return
-        if not isinstance(val, (int, float)) or isinstance(val, bool):
+        if not isinstance(val, (int, float)) or isinstance(val, bool) or not math.isfinite(float(val)):
             raise HTTPException(422, f"{nome} deve ser um número.")
-        if not (lo <= val <= hi):
+        if not allow_fraction and float(val) % 1 != 0:
+            raise HTTPException(422, f"{nome} deve ser um número inteiro.")
+        if not (lo <= float(val) <= hi):
             raise HTTPException(422, f"{nome} fora da faixa aceitável ({lo}-{hi}).")
 
     _range(v.systolicPressure, 40, 300, "Pressão sistólica")
     _range(v.diastolicPressure, 20, 200, "Pressão diastólica")
     _range(v.heartRate, 20, 250, "Frequência cardíaca")
-    _range(v.oxygenSaturation, 30, 100, "Saturação")
+    _range(v.oxygenSaturation, 30, 100, "Saturação", allow_fraction=True)
     _range(v.glucoseLevel, 10, 1000, "Glicemia")
+    try:
+        confirmed_via = normalize_vital_origin(v.confirmedVia)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    oxygen_val = round(float(v.oxygenSaturation), 2) if v.oxygenSaturation is not None else None
 
     client_ip = get_client_ip(request)
     if _state.rate_limiter:
@@ -607,11 +676,11 @@ async def sync_vital_sign(
     async with db_pool.acquire() as conn, conn.transaction():
         row = await conn.fetchrow("""INSERT INTO vital_signs
             (id,user_id,systolic_pressure,diastolic_pressure,heart_rate,oxygen_saturation,
-             glucose_level,glucose_type,hydration_ml,measured_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+             glucose_level,glucose_type,hydration_ml,confirmed_via,measured_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
             ON CONFLICT (id) DO NOTHING RETURNING id""",
             vital_id, uid, v.systolicPressure, v.diastolicPressure, v.heartRate,
-            v.oxygenSaturation, v.glucoseLevel, v.glucoseType, v.hydrationMl, m_at)
+            oxygen_val, v.glucoseLevel, v.glucoseType, v.hydrationMl, confirmed_via, m_at)
         if row is None:
             existing = await conn.fetchval("SELECT id FROM vital_signs WHERE id=$1 AND user_id=$2", vital_id, uid)
             if existing is None:
@@ -620,7 +689,7 @@ async def sync_vital_sign(
             await _state.dispatch_clinical_alert(
                 db_pool, uid, systolic=v.systolicPressure, diastolic=v.diastolicPressure,
                 glucose=v.glucoseLevel, glucose_type=v.glucoseType, background_tasks=background_tasks)
-    return {"status": "success", "id": str(vital_id)}
+    return {"status": "success", "id": str(vital_id), "vitalsContract": VITALS_CONTRACT_VERSION}
 
 
 @router.post("/api/vitals/{vital_id}/undo-hydration")
@@ -639,16 +708,37 @@ async def undo_hydration(vital_id: uuid.UUID, uid: str = Depends(firebase_uid)):
 
 
 @router.get("/api/vitals/{user_id}/changes")
-async def vital_changes(user_id: str, after: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=500),
-                        uid: str = Depends(firebase_uid)):
+async def vital_changes(
+    user_id: str,
+    after: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=500),
+    contract: Optional[int] = Query(None, ge=1, le=2),
+    request: Request = None,
+    uid: str = Depends(firebase_uid),
+):
     if not _state.db_pool:
         raise HTTPException(503, "Histórico indisponível.")
+    resolved_contract = _resolve_vitals_contract(contract, request)
     async with _state.db_pool.acquire() as conn:
         await require_family_access(conn, uid, user_id)
         rows = await conn.fetch("SELECT revision,payload FROM vital_sign_changes WHERE user_id=$1 AND revision>$2 ORDER BY revision LIMIT $3", user_id, after, limit + 1)
     selected = rows[:limit]
-    return {"changes": [{"revision": r["revision"], "vital": json.loads(r["payload"]) if isinstance(r["payload"], str) else dict(r["payload"])} for r in selected],
-            "nextCursor": selected[-1]["revision"] if selected else after, "hasMore": len(rows) > limit}
+    changes = []
+    for r in selected:
+        vital = json.loads(r["payload"]) if isinstance(r["payload"], str) else dict(r["payload"])
+        if _has_fractional_oxygen(vital.get("oxygen_saturation")) and resolved_contract < VITALS_CONTRACT_VERSION:
+            raise HTTPException(409, "Leitura fracionada de oxigenação requer contrato v2 (contract=2).")
+        if "oxygen_saturation" in vital:
+            vital["oxygen_saturation"] = _normalize_oxygen_value(vital.get("oxygen_saturation"))
+        changes.append({"revision": r["revision"], "vital": vital})
+    response = {
+        "changes": changes,
+        "nextCursor": selected[-1]["revision"] if selected else after,
+        "hasMore": len(rows) > limit,
+    }
+    if resolved_contract >= VITALS_CONTRACT_VERSION:
+        response["vitalsContract"] = VITALS_CONTRACT_VERSION
+    return response
 
 
 @router.get("/api/vitals/{user_id}")
@@ -657,11 +747,14 @@ async def get_vitals(
     uid: str = Depends(firebase_uid),
     limit: int = Query(50, ge=1, le=200, description="Quantidade máxima de registros a retornar"),
     offset: int = Query(0, ge=0, description="Deslocamento para paginação tradicional"),
-    before: Optional[str] = Query(None, description="Cursor datetime ISO para paginação baseada em cursor")
+    before: Optional[str] = Query(None, description="Cursor datetime ISO para paginação baseada em cursor"),
+    contract: Optional[int] = Query(None, ge=1, le=2, description="Versão do contrato de sinais vitais"),
+    request: Request = None,
 ):
     db_pool = _state.db_pool
     if not db_pool:
         raise HTTPException(503, "Sinais vitais indisponíveis; histórico não confirmado.")
+    resolved_contract = _resolve_vitals_contract(contract, request)
     async with db_pool.acquire() as conn:
         await require_family_access(conn, uid, user_id)
         if before:
@@ -679,7 +772,11 @@ async def get_vitals(
         result = []
         for r in rows:
             d = dict(r)
+            if _has_fractional_oxygen(d.get("oxygen_saturation")) and resolved_contract < VITALS_CONTRACT_VERSION:
+                raise HTTPException(409, "Leitura fracionada de oxigenação requer contrato v2 (contract=2).")
             d["id"] = str(d["id"])
+            if "oxygen_saturation" in d:
+                d["oxygen_saturation"] = _normalize_oxygen_value(d.get("oxygen_saturation"))
             d["measured_at"] = d["measured_at"].isoformat()
             if d.get("created_at"):
                 d["created_at"] = d["created_at"].isoformat()
