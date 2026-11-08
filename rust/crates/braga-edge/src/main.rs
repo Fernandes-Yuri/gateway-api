@@ -2966,6 +2966,8 @@ pub fn is_go_chat_route(path: &str) -> bool {
         || path == "/api/family/accept"
         || path == "/api/family/e2ee/public-key"
         || path.starts_with("/api/family/bindings/")
+        || path == "/api/notifications"
+        || path.starts_with("/api/notifications/")
 }
 
 #[cfg(test)]
@@ -2987,6 +2989,12 @@ mod tests {
         assert!(is_go_chat_route("/api/family/bindings/user-abc"));
         // Fase 7: criação/revogação de convite familiar agora é do Go.
         assert!(is_go_chat_route("/api/sync/family-binding"));
+        // Central de notificações (RTL-07) servida pelo Go braga-chat.
+        assert!(is_go_chat_route("/api/notifications"));
+        assert!(is_go_chat_route("/api/notifications/changes"));
+        assert!(is_go_chat_route("/api/notifications/unread"));
+        assert!(is_go_chat_route("/api/notifications/read"));
+        assert!(is_go_chat_route("/api/notifications/archive"));
 
         // Rotas clínicas do Care OS que DEVEM continuar indo para o Python
         assert!(!is_go_chat_route(

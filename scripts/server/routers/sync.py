@@ -34,6 +34,12 @@ from community_identity import normalize_nickname
 from social_time import parse_social_timestamp, serialize_social_timestamp
 from security_defense import get_client_ip, sanitize_zero_trust_text
 from services.content_moderation import ModerationUnavailable, moderate_avatar
+from services.notification_center import (
+    block_notification_pair,
+    emit_notification,
+    remove_notification,
+    remove_resource_notifications,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -910,7 +916,9 @@ async def mutate_social_post(post_id: uuid.UUID, uid: str, edit: Optional[Social
                 raise HTTPException(status_code=404, detail="Publicação não encontrada")
             require_owner(uid, post["user_id"])
             if edit is None:
-                await conn.execute("UPDATE social_posts SET is_visible = FALSE WHERE id = $1", post_id)
+                if post["is_visible"]:
+                    await conn.execute("UPDATE social_posts SET is_visible = FALSE WHERE id = $1", post_id)
+                    await remove_resource_notifications(conn, "post", str(post_id))
                 return {"status": "success", "id": str(post_id)}
             if not post["is_visible"]:
                 raise HTTPException(status_code=404, detail="Publicação não encontrada")
@@ -1068,12 +1076,15 @@ async def block_social_user(target_user_id: str = Path(min_length=1, max_length=
         raise HTTPException(503, "Bloqueio não enviado: banco indisponível.")
     await _state.rate_limiter.check("social_block", uid, limit=30, window_seconds=60, pool=_state.db_pool)
     async with _state.db_pool.acquire() as conn:
-        saved = await conn.fetchval("""INSERT INTO social_user_blocks(user_id,blocked_user_id)
-            SELECT $1,id FROM profiles WHERE id=$2
-            ON CONFLICT (user_id,blocked_user_id) DO UPDATE SET blocked_user_id=EXCLUDED.blocked_user_id
-            RETURNING blocked_user_id""", uid, target_user_id)
-    if saved is None:
-        raise HTTPException(404, "Conta não encontrada.")
+        async with conn.transaction():
+            await conn.execute("SELECT notification_lock_pair($1,$2)", uid, target_user_id)
+            saved = await conn.fetchval("""INSERT INTO social_user_blocks(user_id,blocked_user_id)
+                SELECT $1,id FROM profiles WHERE id=$2
+                ON CONFLICT (user_id,blocked_user_id) DO UPDATE SET blocked_user_id=EXCLUDED.blocked_user_id
+                RETURNING blocked_user_id""", uid, target_user_id)
+            if saved is None:
+                raise HTTPException(404, "Conta não encontrada.")
+            await block_notification_pair(conn, uid, target_user_id)
     return {"status": "blocked"}
 
 
@@ -1104,11 +1115,10 @@ async def sync_post_reaction(r: PostReactionSyncDto, uid: str = Depends(firebase
     require_owner(uid, r.userId)
     if not _state.db_pool:
         raise HTTPException(503, "Reação não persistida: banco indisponível.")
-    # A audiência é a mesma do mural: não aceitar reação em publicação privada
-    # de outra família, oculta ou inexistente. Repetir substitui o tipo sem duplicar.
+    # Serializar o par antes do post mantém o bloqueio e as mudanças de reação
+    # na mesma ordem. Depois do lock, a audiência é revalidada contra o mural.
     query = """
-    INSERT INTO post_reactions (post_id, user_id, reaction_type, created_at)
-    SELECT sp.id, $2::varchar, $3::varchar, $4::timestamptz FROM social_posts sp
+    SELECT sp.user_id FROM social_posts sp
     WHERE sp.id = $1 AND sp.is_visible = TRUE AND (
         sp.visibility = 'PUBLIC' OR sp.user_id = $2::varchar OR EXISTS (
             SELECT 1 FROM family_bindings b WHERE b.status = 'ACTIVE' AND (
@@ -1121,17 +1131,38 @@ async def sync_post_reaction(r: PostReactionSyncDto, uid: str = Depends(firebase
         WHERE (sb.user_id=$2 AND sb.blocked_user_id=sp.user_id)
            OR (sb.user_id=sp.user_id AND sb.blocked_user_id=$2)
     )
-    ON CONFLICT (post_id, user_id) DO UPDATE SET reaction_type = EXCLUDED.reaction_type
-    RETURNING post_id;
+    FOR UPDATE OF sp;
     """
     try:
         created_at = parse_social_timestamp(r.createdAt)
     except (ValueError, TypeError):
         raise HTTPException(422, "Data da reação inválida.")
     async with _state.db_pool.acquire() as conn:
-        saved = await conn.fetchval(query, r.postId, uid, r.reactionType or "apoio", created_at)
-    if saved is None:
-        raise HTTPException(404, "Publicação indisponível.")
+        async with conn.transaction():
+            post = await conn.fetchrow("SELECT user_id FROM social_posts WHERE id=$1", r.postId)
+            if post is None:
+                raise HTTPException(404, "Publicação indisponível.")
+            await conn.execute("SELECT notification_lock_pair($1,$2)", uid, post["user_id"])
+            post = await conn.fetchrow(query, r.postId, uid)
+            if post is None:
+                raise HTTPException(404, "Publicação indisponível.")
+            previous = await conn.fetchrow(
+                "SELECT reaction_type FROM post_reactions WHERE post_id=$1 AND user_id=$2 FOR UPDATE",
+                r.postId, uid,
+            )
+            kind = r.reactionType or "apoio"
+            if previous is not None and previous["reaction_type"] == kind:
+                return {"status": "success"}
+            await conn.execute("""INSERT INTO post_reactions (post_id,user_id,reaction_type,created_at)
+                VALUES ($1,$2,$3,$4) ON CONFLICT (post_id,user_id)
+                DO UPDATE SET reaction_type = EXCLUDED.reaction_type""", r.postId, uid, kind, created_at)
+            if post["user_id"] != uid:
+                await emit_notification(
+                    conn, recipient_id=post["user_id"], event_key=f"reaction:{r.postId}:{uid}",
+                    group_key=f"post:{r.postId}", kind="POST_REACTION", category="COMMUNITY",
+                    resource_type="post", resource_id=str(r.postId), actor_id=uid,
+                    payload={"reaction": kind}, realert=previous is None,
+                )
     return {"status": "success"}
 
 
@@ -1145,7 +1176,16 @@ async def delete_post_reaction(post_id: uuid.UUID, expected_user_id: Optional[st
     # Idempotente e restrita ao titular. Não exige vínculo ainda ativo para
     # permitir retirar a própria reação após perder acesso à publicação.
     async with _state.db_pool.acquire() as conn:
-        await conn.execute("DELETE FROM post_reactions WHERE post_id = $1 AND user_id = $2", post_id, uid)
+        async with conn.transaction():
+            post = await conn.fetchrow("SELECT user_id FROM social_posts WHERE id=$1", post_id)
+            if post is not None:
+                await conn.execute("SELECT notification_lock_pair($1,$2)", uid, post["user_id"])
+                post = await conn.fetchrow("SELECT user_id FROM social_posts WHERE id=$1 FOR UPDATE", post_id)
+            deleted = await conn.fetchval(
+                "DELETE FROM post_reactions WHERE post_id = $1 AND user_id = $2 RETURNING id", post_id, uid,
+            )
+            if deleted is not None and post is not None and post["user_id"] != uid:
+                await remove_notification(conn, post["user_id"], f"reaction:{post_id}:{uid}")
     return {"status": "success"}
 
 

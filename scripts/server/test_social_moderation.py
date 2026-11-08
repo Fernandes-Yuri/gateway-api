@@ -21,7 +21,9 @@ class SocialModerationTests(unittest.IsolatedAsyncioTestCase):
         self.pool.acquire.return_value.__aenter__ = AsyncMock(return_value=self.conn)
         self.pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
         state = SimpleNamespace(db_pool=self.pool, rate_limiter=MagicMock(check=AsyncMock()))
+        self.block_notifications = AsyncMock()
         for patcher in (patch.object(sync, '_state', state), patch.object(admin, '_state', state),
+                        patch.object(sync, 'block_notification_pair', self.block_notifications),
                         patch.dict('os.environ', {'SERVICE_TOKEN': 'test-service-only'})):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -60,6 +62,7 @@ class SocialModerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(404, (await self.client.post('/api/social/users/missing/block')).status_code)
         self.conn.fetchval.return_value = 'author'
         self.assertEqual(200, (await self.client.post('/api/social/users/author/block')).status_code)
+        self.block_notifications.assert_awaited_once_with(self.conn, 'reader', 'author')
         self.assertEqual(200, (await self.client.delete('/api/social/users/author/block')).status_code)
         self.assertEqual(('reader', 'author'), self.conn.execute.call_args.args[1:])
 

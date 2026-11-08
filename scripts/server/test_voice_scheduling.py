@@ -9,8 +9,9 @@ correcao por voz e cancelamento.
 """
 import asyncio
 import unittest
+import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from voice_scheduling import (
     quer_agendar,
@@ -157,8 +158,11 @@ class RascunhoFluxoTests(unittest.TestCase):
 
     def setUp(self):
         descartar_rascunho(self.UID, self.PID)
+        self.emitter_patch = patch('routers.consultations.emit_consultation_event', new_callable=AsyncMock)
+        self.emitter = self.emitter_patch.start()
 
     def tearDown(self):
+        self.emitter_patch.stop()
         descartar_rascunho(self.UID, self.PID)
 
     def test_agendar_cria_rascunho_sem_gravar(self):
@@ -187,6 +191,8 @@ class RascunhoFluxoTests(unittest.TestCase):
         self.assertIn(self.PID, str(conn.fetchrow.call_args))
         # rascunho consumido
         self.assertIsNone(obter_rascunho(self.UID, self.PID))
+        self.emitter.assert_awaited_once_with(conn, conn.fetchrow.return_value, self.UID, 'CONSULTATION_CREATED')
+        conn.transaction.assert_called_once()
 
     def test_confirmar_sem_rascunho_nao_grava(self):
         conn = self._conn()
@@ -228,6 +234,31 @@ class RascunhoFluxoTests(unittest.TestCase):
         env = asyncio.run(confirmar_rascunho_por_id(
             conn, self.UID, self.PID, draft_id))
         self.assertEqual(env["acao"], "CONSULTA_AGENDADA")
+        self.assertEqual(conn.fetchrow.call_args.args[1], uuid.UUID(draft_id))
+
+    def test_resposta_perdida_retorna_mesma_consulta_sem_novo_evento(self):
+        conn = self._conn()
+        asyncio.run(agendar_por_voz(conn, self.UID, self.PID,
+            "Agenda uma consulta com o cardiologista quinta-feira as 14h"))
+        draft_id = obter_rascunho(self.UID, self.PID)["id"]
+        first = asyncio.run(confirmar_rascunho_por_id(conn, self.UID, self.PID, draft_id))
+        second = asyncio.run(confirmar_rascunho_por_id(conn, self.UID, self.PID, draft_id))
+        self.assertEqual(first, second)
+        self.emitter.assert_awaited_once()
+        self.assertIn('created_by=$3', conn.fetchrow.call_args.args[0])
+        self.assertEqual(conn.fetchrow.call_args.args[2:], (self.PID, self.UID))
+
+    def test_falha_de_emissao_preserva_rascunho_para_retry(self):
+        conn = self._conn()
+        asyncio.run(agendar_por_voz(conn, self.UID, self.PID,
+            "Agenda uma consulta com o cardiologista quinta-feira as 14h"))
+        draft = obter_rascunho(self.UID, self.PID)
+        self.emitter.side_effect = RuntimeError('caixa indisponível')
+        with self.assertRaises(RuntimeError):
+            asyncio.run(confirmar_rascunho_por_id(conn, self.UID, self.PID, draft['id']))
+        self.assertEqual(obter_rascunho(self.UID, self.PID), draft)
+        conn.transaction.return_value.__aexit__.assert_awaited_once()
+        self.assertIs(conn.transaction.return_value.__aexit__.call_args.args[0], RuntimeError)
 
     def test_botao_com_id_forjado_nao_grava(self):
         conn = self._conn()

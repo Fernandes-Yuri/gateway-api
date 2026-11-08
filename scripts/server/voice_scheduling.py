@@ -412,9 +412,6 @@ async def _confirmar_rascunho(conn, uid_cuidador, patient_id, caregiver_name="")
                         "cardiologista quinta às 14h”?",
                 "acao": "AGENDAR_FALHA", "parametros": {}}
 
-    from api_identity import require_family_access
-    await require_family_access(conn, uid_cuidador, patient_id)
-
     try:
         quando = datetime.fromisoformat(draft["scheduledDate"])
     except Exception:
@@ -422,18 +419,37 @@ async def _confirmar_rascunho(conn, uid_cuidador, patient_id, caregiver_name="")
         return {"fala": "Não consegui ler a data do agendamento. Vamos tentar de novo?",
                 "acao": "AGENDAR_FALHA", "parametros": {}}
 
-    consulta_id = uuid.uuid4()
-    row = await conn.fetchrow(
-        """INSERT INTO consultations
-           (id, user_id, title, scheduled_date, status, created_at,
-            caregiver_id, caregiver_name)
-           VALUES ($1, $2, $3, $4, 'ACCEPTED', now(), $5, $6)
-           RETURNING id, title, scheduled_date""",
-        consulta_id, patient_id, draft["title"], quando, uid_cuidador,
-        draft.get("caregiver_name") or caregiver_name or "Cuidador")
+    from api_identity import require_family_access
+    from fastapi import HTTPException
+    from routers.consultations import emit_consultation_event
 
+    # O mesmo rascunho conserva a identidade em confirmações simultâneas/retries.
+    consulta_id = uuid.UUID(draft["id"])
+    async with conn.transaction():
+        await require_family_access(conn, uid_cuidador, patient_id)
+        row = await conn.fetchrow(
+            """INSERT INTO consultations
+               (id, user_id, title, scheduled_date, status, created_at,
+                caregiver_id, caregiver_name, created_by)
+               VALUES ($1, $2, $3, $4, 'ACCEPTED', now(), $5, $6, $5)
+               ON CONFLICT(id) DO NOTHING RETURNING *""",
+            consulta_id, patient_id, draft["title"], quando, uid_cuidador,
+            draft.get("caregiver_name") or caregiver_name or "Cuidador")
+        if row is not None:
+            await emit_consultation_event(conn, row, uid_cuidador, 'CONSULTATION_CREATED')
+        else:
+            row = await conn.fetchrow('''SELECT * FROM consultations
+                WHERE id=$1 AND user_id=$2 AND created_by=$3''', consulta_id, patient_id, uid_cuidador)
+            if row is None:
+                raise HTTPException(409, 'Identificador de consulta indisponível.')
+
+    # Só consome o rascunho depois do commit da consulta e da caixa/outbox.
     descartar_rascunho(uid_cuidador, patient_id)
 
+    return _envelope_confirmado(row)
+
+
+def _envelope_confirmado(row):
     data_pt = row["scheduled_date"].strftime("%d/%m/%Y às %Hh%M")
     return {
         "fala": f"Confirmado! Consulta com {row['title']} no dia {data_pt}. "
@@ -455,6 +471,20 @@ async def confirmar_rascunho_por_id(conn, uid_cuidador: str, patient_id: str,
     identificador forjado nao agenda nada (fail-closed).
     """
     draft = obter_rascunho(uid_cuidador, patient_id)
+    if not draft:
+        # Resposta perdida após commit: confirma a mesma consulta, sem outro evento.
+        from api_identity import require_family_access
+        try:
+            consultation_id = uuid.UUID(draft_id)
+        except (ValueError, TypeError, AttributeError):
+            consultation_id = None
+        if consultation_id is not None:
+            await require_family_access(conn, uid_cuidador, patient_id)
+            row = await conn.fetchrow('''SELECT * FROM consultations
+                WHERE id=$1 AND user_id=$2 AND created_by=$3 AND status='ACCEPTED' ''',
+                consultation_id, patient_id, uid_cuidador)
+            if row is not None:
+                return _envelope_confirmado(row)
     if not draft or draft.get("id") != draft_id:
         return {"fala": "Esse agendamento expirou ou não é seu. Vamos refazer?",
                 "acao": "AGENDAR_FALHA", "parametros": {}}
