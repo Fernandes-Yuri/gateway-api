@@ -166,10 +166,10 @@ async def create_consultation(c: CreateConsultation, uid: str = Depends(firebase
     patient = c.patientId or uid
     try:
         scheduled = datetime.fromisoformat(c.scheduledDate.replace('Z', '+00:00'))
-        if scheduled.tzinfo is None or scheduled <= datetime.now(timezone.utc) or not c.title.strip():
+        if scheduled.tzinfo is None or not c.title.strip():
             raise ValueError('invalid')
     except ValueError:
-        raise HTTPException(422, 'Informe título e uma data futura com fuso horário.')
+        raise HTTPException(422, 'Informe título e uma data com fuso horário.')
     consultation_id = c.id or uuid.uuid4()
     async with _pool().acquire() as conn, conn.transaction():
         await require_family_access(conn, uid, patient)
