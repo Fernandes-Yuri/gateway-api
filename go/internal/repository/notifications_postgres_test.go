@@ -92,7 +92,7 @@ func notificationBinding(t *testing.T, pool *pgxpool.Pool, patient, caregiver, s
 	_, err := pool.Exec(context.Background(), `INSERT INTO family_bindings
 		(id,patient_id,caregiver_id,caregiver_name,caregiver_relation,connection_code,status,expires_at)
 		VALUES($1,$2,$3,'Fixture','Familiar',$4,$5,now()+interval '7 days')`,
-		id, patient, caregiverID, id[:8], status)
+		id, patient, caregiverID, strings.ToUpper(id[:8]), status)
 	if err != nil {
 		t.Fatal(err)
 	}

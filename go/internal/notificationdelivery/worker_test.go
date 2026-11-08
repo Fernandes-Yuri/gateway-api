@@ -154,6 +154,7 @@ func outboxTestPool(t *testing.T) *pgxpool.Pool {
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "../../.."))
 	for _, rel := range []string{
 		"scripts/docker/init_schema.sql",
+		"migrations/018_device_push_tokens_and_audit_schemas.sql",
 		"migrations/080_clinical_sync_integrity.sql",
 		"migrations/082_notification_center.sql",
 	} {
