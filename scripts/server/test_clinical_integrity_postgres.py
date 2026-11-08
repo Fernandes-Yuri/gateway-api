@@ -33,7 +33,7 @@ class ClinicalIntegrityPostgres(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as conn:
             await conn.execute((root / 'scripts/docker/init_schema.sql').read_text())
             await conn.execute('CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)')
-            for file in ('054_vital_signs_oxygen.sql', '080_clinical_sync_integrity.sql'):
+            for file in ('054_vital_signs_oxygen.sql', '080_clinical_sync_integrity.sql', '081_vital_signs_readings_contract.sql'):
                 await conn.execute((root / 'migrations' / file).read_text())
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES('patient','Paciente'),('caregiver','Cuidador'),('stranger','Outro')")
             await conn.execute("INSERT INTO family_bindings(patient_id,caregiver_id,caregiver_name,caregiver_relation,connection_code,status,expires_at) VALUES('patient','caregiver','Ana','Filha','TEST1234','ACTIVE',now()+interval '1 day')")
@@ -143,3 +143,74 @@ class ClinicalIntegrityPostgres(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as conn:
             payload = json.loads(await conn.fetchval('SELECT payload FROM vital_sign_changes'))
         self.assertEqual(payload['user_id'], 'patient')
+
+    async def test_fractional_oxygen_and_origin_roundtrip_with_contract_guard(self):
+        voice_vital = self.vital(
+            hydrationMl=None,
+            heartRate=103,
+            oxygenSaturation=98.5,
+            confirmedVia='braga.voice',
+        )
+        manual_vital = self.vital(
+            hydrationMl=None,
+            heartRate=72,
+            oxygenSaturation=97.0,
+            confirmedVia='braga.manual',
+            measuredAt=(datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+        )
+        res_voice = await self.upload(voice_vital)
+        self.assertEqual(res_voice['vitalsContract'], 2)
+        self.assertEqual(res_voice, await self.upload(voice_vital))
+        await self.upload(manual_vital)
+
+        # Consumidor legado (v1, sem contract=2) nunca recebe fração que seria truncada por getInt().
+        with self.assertRaises(HTTPException) as legacy_list_err:
+            await sync.get_vitals('patient', uid='patient', limit=50, offset=0, before=None)
+        self.assertEqual(legacy_list_err.exception.status_code, 409)
+
+        with self.assertRaises(HTTPException) as legacy_delta_err:
+            await sync.vital_changes('patient', after=0, limit=200, uid='patient')
+        self.assertEqual(legacy_delta_err.exception.status_code, 409)
+
+        # Consumidor v2 (contract=2 via query ou header) recebe 98.5 exato, 97 inteiro e confirmed_via preservado.
+        rows_v2 = await sync.get_vitals('patient', uid='patient', limit=50, offset=0, before=None, contract=2)
+        by_id = {r['id']: r for r in rows_v2}
+        self.assertEqual(by_id[str(voice_vital.id)]['oxygen_saturation'], 98.5)
+        self.assertIsInstance(by_id[str(voice_vital.id)]['oxygen_saturation'], float)
+        self.assertEqual(by_id[str(voice_vital.id)]['heart_rate'], 103)
+        self.assertEqual(by_id[str(voice_vital.id)]['confirmed_via'], 'braga.voice')
+
+        self.assertEqual(by_id[str(manual_vital.id)]['oxygen_saturation'], 97)
+        self.assertIsInstance(by_id[str(manual_vital.id)]['oxygen_saturation'], int)
+        self.assertEqual(by_id[str(manual_vital.id)]['confirmed_via'], 'braga.manual')
+
+        header_req = SimpleNamespace(headers={'x-braga-vitals-contract': '2'})
+        delta_v2 = await sync.vital_changes('patient', after=0, limit=200, request=header_req, uid='caregiver')
+        self.assertEqual(delta_v2['vitalsContract'], 2)
+        delta_by_id = {c['vital']['id']: c['vital'] for c in delta_v2['changes']}
+        self.assertEqual(delta_by_id[str(voice_vital.id)]['oxygen_saturation'], 98.5)
+        self.assertEqual(delta_by_id[str(voice_vital.id)]['confirmed_via'], 'braga.voice')
+        self.assertEqual(delta_by_id[str(manual_vital.id)]['oxygen_saturation'], 97)
+        self.assertEqual(delta_by_id[str(manual_vital.id)]['confirmed_via'], 'braga.manual')
+
+    async def test_bounds_and_origin_validation_reject_invalid_readings(self):
+        from pydantic import ValidationError
+        for invalid_dto in (
+            dict(heartRate=72.5),
+            dict(oxygenSaturation=float('nan')),
+            dict(oxygenSaturation=float('inf')),
+            dict(heartRate=True),
+        ):
+            with self.assertRaises(ValidationError):
+                self.vital(**invalid_dto)
+
+        for invalid_upload in (
+            dict(heartRate=19),
+            dict(heartRate=251),
+            dict(oxygenSaturation=29.9),
+            dict(oxygenSaturation=100.1),
+            dict(confirmedVia='origem.desconhecida'),
+        ):
+            with self.assertRaises(HTTPException) as err:
+                await self.upload(self.vital(**invalid_upload))
+            self.assertEqual(err.exception.status_code, 422)

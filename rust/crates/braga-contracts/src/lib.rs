@@ -121,6 +121,23 @@ pub struct BiometryRecord {
     pub measured_at: String,
 }
 
+fn serialize_optional_oxygen<S>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        Some(v) => {
+            let rounded = (v * 100.0).round() / 100.0;
+            if rounded.fract() == 0.0 {
+                serializer.serialize_i64(rounded as i64)
+            } else {
+                serializer.serialize_f64(rounded)
+            }
+        }
+        None => serializer.serialize_none(),
+    }
+}
+
 /// Contrato de sinais vitais (/api/vitals/{user_id}).
 ///
 /// FASE 8A (DT-051): os nomes dos campos precisam ser idênticos aos que o app
@@ -147,8 +164,11 @@ pub struct VitalSignRecord {
     pub glucose_level: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub glucose_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oxygen_saturation: Option<i32>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_oxygen"
+    )]
+    pub oxygen_saturation: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hydration_ml: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -357,13 +377,15 @@ pub struct VitalSignSyncDto {
     #[serde(default)]
     pub heart_rate: Option<i32>,
     #[serde(default)]
-    pub oxygen_saturation: Option<i32>,
+    pub oxygen_saturation: Option<f64>,
     #[serde(default)]
     pub glucose_level: Option<i32>,
     #[serde(default)]
     pub glucose_type: Option<String>,
     #[serde(default)]
     pub hydration_ml: Option<i32>,
+    #[serde(default)]
+    pub confirmed_via: Option<String>,
     pub measured_at: String,
 }
 
@@ -921,7 +943,7 @@ mod tests {
             heart_rate: Some(72),
             glucose_level: Some(95),
             glucose_type: Some("jejum".to_string()),
-            oxygen_saturation: Some(97),
+            oxygen_saturation: Some(97.0),
             hydration_ml: Some(250),
             confirmed_via: Some("app".to_string()),
             confirmation_code: Some("A1B2C3".to_string()),
@@ -956,6 +978,14 @@ mod tests {
         assert_eq!(json["glucose_level"], 95);
         assert_eq!(json["oxygen_saturation"], 97);
         assert_eq!(json["glucose_type"], "jejum");
+
+        let mut fracionado = record.clone();
+        fracionado.oxygen_saturation = Some(98.5);
+        fracionado.confirmed_via = Some("braga.voice".to_string());
+        let json_frac: serde_json::Value =
+            serde_json::to_value(&fracionado).expect("serializável fracionado");
+        assert_eq!(json_frac["oxygen_saturation"], 98.5);
+        assert_eq!(json_frac["confirmed_via"], "braga.voice");
 
         // Nomes legados jamais podem voltar.
         for proibida in [

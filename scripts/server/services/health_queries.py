@@ -107,16 +107,24 @@ def _no_reading_message(owner: Optional[str], label: str) -> str:
 
 
 def format_value(kind: str, row: Any) -> str:
-    """Valor já formatado para exibição (ex.: '130 x 85', '74,5')."""
+    """Valor já formatado para exibição (ex.: '130 x 85', '74,5', '98,5')."""
     if kind == "pressao":
         return f"{row['systolic_pressure']} x {row['diastolic_pressure']}"
     if kind == "peso":
         peso = row["weight_kg"]
         return f"{peso:.1f}".replace(".", ",") if isinstance(peso, float) else str(peso)
+    if kind == "saturacao":
+        spo2 = row["oxygen_saturation"]
+        if isinstance(spo2, (int, float)) and not isinstance(spo2, bool):
+            val = round(float(spo2), 2)
+            if val.is_integer():
+                return str(int(val))
+            formatted = f"{val:.2f}".rstrip("0").rstrip(".")
+            return formatted.replace(".", ",")
+        return str(spo2)
     campo = {
         "glicemia": "glucose_level",
         "batimentos": "heart_rate",
-        "saturacao": "oxygen_saturation",
     }[kind]
     return str(row[campo])
 
@@ -330,7 +338,7 @@ async def day_summary(conn: Any, context: OperationContext, *,
             leituras.append({"kind": "batimentos", "value": str(row["heart_rate"]),
                              "unit": _UNIT["batimentos"], "at": row["measured_at"].isoformat()})
         if row["oxygen_saturation"]:
-            leituras.append({"kind": "saturacao", "value": str(row["oxygen_saturation"]),
+            leituras.append({"kind": "saturacao", "value": format_value("saturacao", row),
                              "unit": _UNIT["saturacao"], "at": row["measured_at"].isoformat()})
         if row["weight_kg"]:
             leituras.append({"kind": "peso", "value": format_value("peso", row),
