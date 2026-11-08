@@ -14,21 +14,25 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from api_identity import firebase_uid
+from api_identity import firebase_uid, require_family_access
 from core.devices import load_devices_by_user
 
 router = APIRouter()
 
 
 class CreateConsultation(BaseModel):
-    title: str
-    scheduledDate: str  # ISO format string
+    id: Optional[uuid.UUID] = None
+    patientId: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=200)
+    scheduledDate: str
+    caregiverName: Optional[str] = None
+    caregiverRelation: Optional[str] = None
 
 
 class AcceptConsultation(BaseModel):
-    consultationId: str
+    consultationId: uuid.UUID
     # doc 10 §2.2: antes esses campos eram lidos com hasattr() em um BaseModel
     # stricto — Pydantic descarta extras, então o nome do cuidador nunca era
     # persistido. Agora são parte do contrato.
@@ -37,7 +41,7 @@ class AcceptConsultation(BaseModel):
 
 
 class RejectConsultation(BaseModel):
-    consultationId: str
+    consultationId: uuid.UUID
 
 
 class ConfirmVoiceDraft(BaseModel):
@@ -128,100 +132,105 @@ async def _notify_consultation(row, uid, event_type, title, body):
                 print(f'[Consultation] Falha no push para {recipient_uid}: {push_err}')
 
 
+def consultation_json(row):
+    def iso(value):
+        return value.isoformat() if value is not None else None
+    return {'id': str(row['id']), 'patientId': row['user_id'], 'title': row['title'],
+            'scheduledDate': iso(row['scheduled_date']), 'status': row['status'],
+            'createdBy': row.get('created_by') or row['user_id'],
+            'caregiverId': row.get('caregiver_id'), 'caregiverName': row.get('caregiver_name'),
+            'caregiverRelation': row.get('caregiver_relation'),
+            'createdAt': iso(row.get('created_at')), 'updatedAt': iso(row.get('updated_at'))}
+
+
+async def authorized_consultation(conn, consultation_id, uid):
+    row = await conn.fetchrow('SELECT * FROM consultations WHERE id=$1 FOR UPDATE', consultation_id)
+    if row is None:
+        raise HTTPException(404, 'Consulta não encontrada.')
+    await require_family_access(conn, uid, row['user_id'])
+    return row
+
+
+@router.get('/api/consultations/{patient_id}')
+async def list_consultations(patient_id: str, offset: int = 0, uid: str = Depends(firebase_uid)):
+    if offset < 0:
+        raise HTTPException(422, 'Página inválida.')
+    async with _pool().acquire() as conn:
+        await require_family_access(conn, uid, patient_id)
+        rows = await conn.fetch('SELECT * FROM consultations WHERE user_id=$1 ORDER BY scheduled_date,id LIMIT 100 OFFSET $2', patient_id, offset)
+    return [consultation_json(row) for row in rows]
+
+
 @router.post('/api/consultation/create')
 async def create_consultation(c: CreateConsultation, uid: str = Depends(firebase_uid)):
-    """Usuário agenda uma consulta para si mesmo."""
+    patient = c.patientId or uid
+    try:
+        scheduled = datetime.fromisoformat(c.scheduledDate.replace('Z', '+00:00'))
+        if scheduled.tzinfo is None or scheduled <= datetime.now(timezone.utc) or not c.title.strip():
+            raise ValueError('invalid')
+    except ValueError:
+        raise HTTPException(422, 'Informe título e uma data futura com fuso horário.')
+    consultation_id = c.id or uuid.uuid4()
     async with _pool().acquire() as conn, conn.transaction():
-        now = datetime.now(timezone.utc)
-        try:
-            scheduled = datetime.fromisoformat(c.scheduledDate.replace('Z', '+00:00'))
-        except ValueError:
-            raise HTTPException(422, 'Data/hora inválida.')
+        await require_family_access(conn, uid, patient)
+        row = await conn.fetchrow("""INSERT INTO consultations
+            (id,user_id,title,scheduled_date,status,created_at,created_by,caregiver_id,caregiver_name,caregiver_relation)
+            VALUES($1,$2,$3,$4,$5,now(),$6,$7,$8,$9) ON CONFLICT(id) DO NOTHING RETURNING *""",
+            consultation_id, patient, c.title.strip(), scheduled,
+            'SUGGESTED' if patient == uid else 'ACCEPTED', uid,
+            None if patient == uid else uid, c.caregiverName, c.caregiverRelation)
+        created = row is not None
+        if row is None:
+            row = await conn.fetchrow('SELECT * FROM consultations WHERE id=$1 AND user_id=$2 AND created_by=$3', consultation_id, patient, uid)
+            if row is None:
+                raise HTTPException(409, 'Identificador de consulta indisponível.')
+    if created:
+        await _notify_consultation(row, uid, 'CONSULTATION_CREATED', 'Consulta agendada',
+                                   f'Consulta "{row["title"]}" agendada. Toque para ver os detalhes.')
+    return consultation_json(row)
 
-        consultation_id = uuid.uuid4()
-        row = await conn.fetchrow('''INSERT INTO consultations
-            (id, user_id, title, scheduled_date, status, created_at)
-            VALUES ($1,$2,$3,$4,'SUGGESTED',$5) RETURNING *''',
-            consultation_id, uid, c.title, scheduled, now)
-    # Avisa os cuidadores ativos de que uma consulta foi sugerida.
-    await _notify_consultation(row, uid, 'CONSULTATION_CREATED',
-        'Nova consulta sugerida',
-        f'Foi sugerida a consulta "{row["title"]}". Toque para acompanhar.')
-    return {'id': str(row['id']), 'title': row['title'],
-            'scheduledDate': row['scheduled_date'].isoformat(), 'status': row['status']}
+
+async def transition_consultation(consultation_id, uid, target, name=None, relation=None):
+    async with _pool().acquire() as conn, conn.transaction():
+        row = await authorized_consultation(conn, consultation_id, uid)
+        if target in ('ACCEPTED', 'REJECTED'):
+            try:
+                validate_consultation_acceptance(row, uid)
+            except ValueError as error:
+                raise HTTPException(409, str(error)) from error
+        elif row['status'] in ('CANCELLED', 'REJECTED', 'COMPLETED') and row['status'] != target:
+            raise HTTPException(409, 'Esta consulta já foi encerrada.')
+        if row['status'] == target:
+            return consultation_json(row)
+        if target == 'ACCEPTED':
+            updated = await conn.fetchrow("""UPDATE consultations SET status=$2,caregiver_id=$3,
+                caregiver_name=$4,caregiver_relation=$5,updated_at=now() WHERE id=$1 RETURNING *""",
+                row['id'], target, uid, name or '', relation or '')
+        else:
+            updated = await conn.fetchrow('UPDATE consultations SET status=$2,updated_at=now() WHERE id=$1 RETURNING *', row['id'], target)
+    await _notify_consultation(updated, uid, f'CONSULTATION_{target}', 'Consulta atualizada',
+                               f'A consulta "{updated["title"]}" foi atualizada.')
+    return consultation_json(updated)
 
 
 @router.post('/api/consultation/accept')
 async def accept_consultation(p: AcceptConsultation, uid: str = Depends(firebase_uid)):
-    """Cuidador/familiar aceita uma consulta sugerida."""
-    async with _pool().acquire() as conn, conn.transaction():
-        row = await conn.fetchrow('SELECT * FROM consultations WHERE id=$1 FOR UPDATE', p.consultationId)
-        if not row:
-            raise HTTPException(404, 'Consulta não encontrada.')
-        try:
-            validate_consultation_acceptance(row, uid)
-        except ValueError as error:
-            raise HTTPException(409, str(error)) from error
-
-        caregiver_name = p.caregiverName or ''
-        caregiver_relation = p.caregiverRelation or ''
-        updated = await conn.fetchrow("""UPDATE consultations SET status='ACCEPTED',
-            caregiver_id=$2, caregiver_name=$3, caregiver_relation=$4 WHERE id=$1 RETURNING *""",
-            row['id'], uid, caregiver_name, caregiver_relation)
-    await _notify_consultation(updated, uid, 'CONSULTATION_ACCEPTED',
-        'Consulta aceita',
-        f'{caregiver_name or "Seu familiar"} aceitou a consulta "{updated["title"]}".')
-    return {'id': str(updated['id']), 'status': updated['status']}
+    return await transition_consultation(p.consultationId, uid, 'ACCEPTED', p.caregiverName, p.caregiverRelation)
 
 
 @router.post('/api/consultation/reject')
 async def reject_consultation(p: RejectConsultation, uid: str = Depends(firebase_uid)):
-    """Usuário rejeita uma consulta sugerida pelo cuidador."""
-    async with _pool().acquire() as conn, conn.transaction():
-        row = await conn.fetchrow('SELECT * FROM consultations WHERE id=$1 FOR UPDATE', p.consultationId)
-        if not row:
-            raise HTTPException(404, 'Consulta não encontrada.')
-        try:
-            validate_consultation_acceptance(row, uid)
-        except ValueError as error:
-            raise HTTPException(409, str(error)) from error
-
-        updated = await conn.fetchrow("""UPDATE consultations SET status='REJECTED' WHERE id=$1 RETURNING *""",
-            row['id'])
-    await _notify_consultation(updated, uid, 'CONSULTATION_REJECTED',
-        'Consulta recusada',
-        f'Foi recusada a consulta "{updated["title"]}".')
-    return {'id': str(updated['id']), 'status': updated['status']}
+    return await transition_consultation(p.consultationId, uid, 'REJECTED')
 
 
 @router.post('/api/consultation/complete')
-async def complete_consultation(c: AcceptConsultation, uid: str = Depends(firebase_uid)):
-    """Usuário marca consulta como concluída."""
-    async with _pool().acquire() as conn, conn.transaction():
-        row = await conn.fetchrow('SELECT * FROM consultations WHERE id=$1 FOR UPDATE', c.consultationId)
-        if not row:
-            raise HTTPException(404, 'Consulta não encontrada.')
-        updated = await conn.fetchrow("""UPDATE consultations SET status='COMPLETED' WHERE id=$1 RETURNING *""",
-            row['id'])
-    await _notify_consultation(updated, uid, 'CONSULTATION_COMPLETED',
-        'Consulta concluída',
-        f'A consulta "{updated["title"]}" foi marcada como concluída.')
-    return {'id': str(updated['id']), 'status': updated['status']}
+async def complete_consultation(p: AcceptConsultation, uid: str = Depends(firebase_uid)):
+    return await transition_consultation(p.consultationId, uid, 'COMPLETED')
 
 
 @router.post('/api/consultation/cancel')
-async def cancel_consultation(c: AcceptConsultation, uid: str = Depends(firebase_uid)):
-    """Usuário cancela uma consulta agendada."""
-    async with _pool().acquire() as conn, conn.transaction():
-        row = await conn.fetchrow('SELECT * FROM consultations WHERE id=$1 FOR UPDATE', c.consultationId)
-        if not row:
-            raise HTTPException(404, 'Consulta não encontrada.')
-        updated = await conn.fetchrow("""UPDATE consultations SET status='CANCELLED' WHERE id=$1 RETURNING *""",
-            row['id'])
-    await _notify_consultation(updated, uid, 'CONSULTATION_CANCELLED',
-        'Consulta cancelada',
-        f'A consulta "{updated["title"]}" foi cancelada.')
-    return {'id': str(updated['id']), 'status': updated['status']}
+async def cancel_consultation(p: AcceptConsultation, uid: str = Depends(firebase_uid)):
+    return await transition_consultation(p.consultationId, uid, 'CANCELLED')
 
 
 # --- D51: confirmacao por BOTAO do rascunho de agendamento por voz ---

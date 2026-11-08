@@ -1314,8 +1314,8 @@ async fn vitals_handler(
     let pool = match state.pool {
         Some(ref p) => p,
         None => {
-            let mut resp = Response::new(Body::from("[]"));
-            *resp.status_mut() = StatusCode::OK;
+            let mut resp = Response::new(Body::from("{\"detail\":\"Histórico indisponível.\"}"));
+            *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
             resp.headers_mut()
                 .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
             return resp;
@@ -1341,7 +1341,7 @@ async fn vitals_handler(
     let rows = if let Some(ref before) = query.before {
         if let Ok(b_dt) = DateTime::parse_from_rfc3339(before) {
             sqlx::query(
-                "SELECT * FROM vital_signs WHERE user_id = $1 AND measured_at < $2 ORDER BY measured_at DESC, id DESC LIMIT $3 OFFSET $4",
+                "SELECT * FROM vital_signs WHERE user_id = $1 AND deleted_at IS NULL AND measured_at < $2 ORDER BY measured_at DESC, id DESC LIMIT $3 OFFSET $4",
             )
             .bind(&user_id)
             .bind(b_dt.with_timezone(&Utc))
@@ -1351,7 +1351,7 @@ async fn vitals_handler(
             .await
         } else {
             sqlx::query(
-                "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3",
+                "SELECT * FROM vital_signs WHERE user_id = $1 AND deleted_at IS NULL ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3",
             )
             .bind(&user_id)
             .bind(limit)
@@ -1361,7 +1361,7 @@ async fn vitals_handler(
         }
     } else {
         sqlx::query(
-            "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3",
+            "SELECT * FROM vital_signs WHERE user_id = $1 AND deleted_at IS NULL ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3",
         )
         .bind(&user_id)
         .bind(limit)
@@ -1374,8 +1374,8 @@ async fn vitals_handler(
         Ok(r) => r,
         Err(e) => {
             error!("Erro ao buscar sinais vitais: {e}");
-            let mut resp = Response::new(Body::from("[]"));
-            *resp.status_mut() = StatusCode::OK;
+            let mut resp = Response::new(Body::from("{\"detail\":\"Histórico indisponível.\"}"));
+            *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
             resp.headers_mut()
                 .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
             return resp;
@@ -1416,7 +1416,7 @@ async fn vitals_handler(
     let mut resp = Response::new(Body::from(
         serde_json::to_string(&records).unwrap_or_default(),
     ));
-    *resp.status_mut() = StatusCode::OK;
+    *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
     resp.headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     resp
@@ -2785,31 +2785,32 @@ async fn sync_vitals_handler(
 
     let pool = match state.pool {
         Some(ref p) => p,
-        None => {
-            return (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "offline_mode",
-                    "id": payload.id.unwrap_or_else(|| "local".to_string())
-                })),
-            )
-                .into_response();
-        }
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(HttpErrorResponse::new("Medição ainda não confirmada."))).into_response(),
     };
-
-    let measured_dt = DateTime::parse_from_rfc3339(&payload.measured_at)
-        .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now());
-
+    let vital_id = match payload.id.as_deref() {
+        Some(value) => match uuid::Uuid::parse_str(value) {
+            Ok(id) => id,
+            Err(_) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(HttpErrorResponse::new("Identificador inválido."))).into_response(),
+        },
+        None => uuid::Uuid::new_v4(),
+    };
+    let measured_dt = match DateTime::parse_from_rfc3339(&payload.measured_at) {
+        Ok(dt) => dt.with_timezone(&Utc),
+        Err(_) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(HttpErrorResponse::new("Data inválida ou sem fuso horário."))).into_response(),
+    };
+    if payload.hydration_ml.is_some_and(|ml| ml <= 0 || ml > 20000) {
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(HttpErrorResponse::new("Volume de água inválido."))).into_response();
+    }
     let query = r#"
         INSERT INTO vital_signs (
-            user_id, systolic_pressure, diastolic_pressure, heart_rate,
+            id, user_id, systolic_pressure, diastolic_pressure, heart_rate,
             oxygen_saturation, glucose_level, glucose_type, hydration_ml, measured_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        RETURNING id"#;
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id
+        WHERE vital_signs.user_id=EXCLUDED.user_id RETURNING id"#;
 
     let row = sqlx::query(query)
+        .bind(vital_id)
         .bind(&payload.user_id)
         .bind(payload.systolic_pressure)
         .bind(payload.diastolic_pressure)
@@ -2837,6 +2838,7 @@ async fn sync_vitals_handler(
             )
                 .into_response()
         }
+        Err(sqlx::Error::RowNotFound) => (StatusCode::CONFLICT, Json(HttpErrorResponse::new("Identificador indisponível."))).into_response(),
         Err(e) => {
             error!("Erro ao gravar vital_signs: {e}");
             (

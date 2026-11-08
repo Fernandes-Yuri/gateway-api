@@ -96,7 +96,7 @@ class ProfileSyncDto(BaseModel):
 
 
 class VitalSignSyncDto(BaseModel):
-    id: Optional[str] = None
+    id: Optional[uuid.UUID] = None
     userId: str
     systolicPressure: Optional[int] = None
     diastolicPressure: Optional[int] = None
@@ -573,7 +573,7 @@ async def sync_vital_sign(
     require_owner(uid, v.userId)
     db_pool = _state.db_pool
     if not db_pool:
-        return {"status": "offline_mode", "id": v.id or "local"}
+        raise HTTPException(503, "Sinais vitais indisponíveis; medição ainda não confirmada.")
 
     # Validacao de faixa clinica: valores absurdos (ex.: 99999 mmHg) eram
     # aceitos e geravam alertas sem sentido.
@@ -595,37 +595,60 @@ async def sync_vital_sign(
     if _state.rate_limiter:
         await _state.rate_limiter.check("sync_vitals_ip", client_ip, limit=30, window_seconds=60, ip=client_ip, pool=db_pool)
 
-    query = """
-    INSERT INTO vital_signs (user_id, systolic_pressure, diastolic_pressure, heart_rate, oxygen_saturation, glucose_level, glucose_type, hydration_ml, measured_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    RETURNING id;
-    """
+    if v.hydrationMl is not None and not 0 < v.hydrationMl <= 20000:
+        raise HTTPException(422, "Volume de água inválido.")
     try:
         m_at = datetime.fromisoformat(v.measuredAt.replace("Z", "+00:00"))
-    except Exception:
-        m_at = datetime.utcnow()
-
-    async with db_pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                query, uid, v.systolicPressure, v.diastolicPressure,
-                v.heartRate, v.oxygenSaturation, v.glucoseLevel, v.glucoseType, v.hydrationMl, m_at
-            )
-            inserted_id = str(row["id"])
-
-            # Gatilho clinico (doc 10 §3.2): extraido para dispatch_clinical_alert,
-            # compartilhado com a confirmacao vinda do bot do WhatsApp.
+        if m_at.tzinfo is None:
+            raise ValueError("missing timezone")
+    except ValueError:
+        raise HTTPException(422, "Data da medição inválida ou sem fuso horário.")
+    vital_id = v.id or uuid.uuid4()
+    async with db_pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow("""INSERT INTO vital_signs
+            (id,user_id,systolic_pressure,diastolic_pressure,heart_rate,oxygen_saturation,
+             glucose_level,glucose_type,hydration_ml,measured_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            ON CONFLICT (id) DO NOTHING RETURNING id""",
+            vital_id, uid, v.systolicPressure, v.diastolicPressure, v.heartRate,
+            v.oxygenSaturation, v.glucoseLevel, v.glucoseType, v.hydrationMl, m_at)
+        if row is None:
+            existing = await conn.fetchval("SELECT id FROM vital_signs WHERE id=$1 AND user_id=$2", vital_id, uid)
+            if existing is None:
+                raise HTTPException(409, "Identificador de medição indisponível.")
+        else:
             await _state.dispatch_clinical_alert(
-                db_pool,
-                v.userId,
-                systolic=v.systolicPressure,
-                diastolic=v.diastolicPressure,
-                glucose=v.glucoseLevel,
-                glucose_type=v.glucoseType,
-                background_tasks=background_tasks,
-            )
+                db_pool, uid, systolic=v.systolicPressure, diastolic=v.diastolicPressure,
+                glucose=v.glucoseLevel, glucose_type=v.glucoseType, background_tasks=background_tasks)
+    return {"status": "success", "id": str(vital_id)}
 
-    return {"status": "success", "id": inserted_id}
+
+@router.post("/api/vitals/{vital_id}/undo-hydration")
+async def undo_hydration(vital_id: uuid.UUID, uid: str = Depends(firebase_uid)):
+    if not _state.db_pool:
+        raise HTTPException(503, "Estorno aguardando sincronização.")
+    async with _state.db_pool.acquire() as conn, conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1,8042))", uid)
+        owner = await conn.fetchval("SELECT user_id FROM vital_signs WHERE id=$1", vital_id)
+        if owner is not None and owner != uid:
+            raise HTTPException(403, "Esta medição pertence a outra conta.")
+        # Persist even before the upload arrives: the BEFORE trigger prevents resurrection.
+        await conn.execute("INSERT INTO vital_hydration_undos(user_id,vital_id) VALUES($1,$2) ON CONFLICT DO NOTHING", uid, vital_id)
+        await conn.execute("UPDATE vital_signs SET hydration_ml=NULL WHERE id=$1 AND user_id=$2", vital_id, uid)
+    return {"status": "success", "id": str(vital_id)}
+
+
+@router.get("/api/vitals/{user_id}/changes")
+async def vital_changes(user_id: str, after: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=500),
+                        uid: str = Depends(firebase_uid)):
+    if not _state.db_pool:
+        raise HTTPException(503, "Histórico indisponível.")
+    async with _state.db_pool.acquire() as conn:
+        await require_family_access(conn, uid, user_id)
+        rows = await conn.fetch("SELECT revision,payload FROM vital_sign_changes WHERE user_id=$1 AND revision>$2 ORDER BY revision LIMIT $3", user_id, after, limit + 1)
+    selected = rows[:limit]
+    return {"changes": [{"revision": r["revision"], "vital": json.loads(r["payload"]) if isinstance(r["payload"], str) else dict(r["payload"])} for r in selected],
+            "nextCursor": selected[-1]["revision"] if selected else after, "hasMore": len(rows) > limit}
 
 
 @router.get("/api/vitals/{user_id}")
@@ -644,13 +667,13 @@ async def get_vitals(
         if before:
             try:
                 b_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
-                query = "SELECT * FROM vital_signs WHERE user_id = $1 AND measured_at < $2 ORDER BY measured_at DESC, id DESC LIMIT $3 OFFSET $4"
+                query = "SELECT * FROM vital_signs WHERE user_id = $1 AND deleted_at IS NULL AND measured_at < $2 ORDER BY measured_at DESC, id DESC LIMIT $3 OFFSET $4"
                 rows = await conn.fetch(query, user_id, b_dt, limit, offset)
             except Exception:
-                query = "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3"
+                query = "SELECT * FROM vital_signs WHERE user_id = $1 AND deleted_at IS NULL ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3"
                 rows = await conn.fetch(query, user_id, limit, offset)
         else:
-            query = "SELECT * FROM vital_signs WHERE user_id = $1 ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3"
+            query = "SELECT * FROM vital_signs WHERE user_id = $1 AND deleted_at IS NULL ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3"
             rows = await conn.fetch(query, user_id, limit, offset)
 
         result = []
