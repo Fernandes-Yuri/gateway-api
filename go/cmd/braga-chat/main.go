@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Fernandes-Yuri/gateway-api/go/internal/notificationdelivery"
 	"github.com/Fernandes-Yuri/gateway-api/go/internal/repository"
 	transporthttp "github.com/Fernandes-Yuri/gateway-api/go/internal/transport/http"
 	transportws "github.com/Fernandes-Yuri/gateway-api/go/internal/transport/ws"
@@ -32,7 +33,7 @@ func main() {
 
 	maxConns := 5
 	if mc := os.Getenv("POOL_MAX_CONNS"); mc != "" {
-		if parsed, err := strconv.Atoi(mc); err == nil && parsed > 0 {
+		if parsed, err := strconv.Atoi(mc); err == nil && parsed > 0 && parsed <= 5 {
 			maxConns = parsed
 		}
 	}
@@ -71,6 +72,27 @@ func main() {
 	// 2.5. Hub WebSocket em tempo real (SPEC-13 & D47)
 	hub := transportws.NewHub()
 	go hub.Run()
+
+	// A outbox compartilha o pool existente. Sem adaptador FCM configurado,
+	// a API segue disponível e a fila continua durável para o próximo início.
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
+	workerDone := make(chan struct{})
+	if pool != nil {
+		sender, err := notificationdelivery.NewConfiguredSender(workerCtx)
+		if err != nil {
+			log.Print("[NotificationOutbox] FCM_UNAVAILABLE")
+			close(workerDone)
+		} else {
+			worker := notificationdelivery.NewWorker(pool, sender)
+			go func() {
+				defer close(workerDone)
+				worker.Run(workerCtx)
+			}()
+		}
+	} else {
+		close(workerDone)
+	}
 
 	// 3. Montagem das rotas e servidor HTTP
 	router := transporthttp.NewRouter(repo, hub)
@@ -121,6 +143,7 @@ func main() {
 	<-sigChan
 
 	log.Println("[braga-chat] Sinal de interrupção recebido, iniciando encerramento gracioso...")
+	workerCancel()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
@@ -129,6 +152,11 @@ func main() {
 	}
 	if err := hub.Shutdown(shutdownCtx); err != nil {
 		log.Printf("[braga-chat] Erro ao encerrar conexões WebSocket: %v", err)
+	}
+	select {
+	case <-workerDone:
+	case <-shutdownCtx.Done():
+		log.Print("[NotificationOutbox] SHUTDOWN_TIMEOUT")
 	}
 	log.Println("[braga-chat] Processo encerrado com sucesso.")
 }

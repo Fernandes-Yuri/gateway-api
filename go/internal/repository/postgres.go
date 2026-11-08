@@ -28,6 +28,18 @@ func (r *PostgresRepository) SaveMessage(ctx context.Context, msg *domain.Family
 	if r.pool == nil {
 		return ErrDatabaseUnavailable
 	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("falha ao iniciar transação de mensagem: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	allowed, err := r.checkAccessWithTx(ctx, tx, msg.SenderID, msg.PatientID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrForbidden
+	}
 
 	query := `
 		INSERT INTO family_messages (
@@ -41,7 +53,7 @@ func (r *PostgresRepository) SaveMessage(ctx context.Context, msg *domain.Family
 	`
 
 	var returnedID string
-	err := r.pool.QueryRow(
+	err = tx.QueryRow(
 		ctx, query,
 		msg.ID, msg.PatientID, msg.SenderID, msg.SenderName, msg.MessageText,
 		msg.BodyEncrypted, msg.EncryptionVersion, msg.IconType, msg.IsRead,
@@ -52,20 +64,23 @@ func (r *PostgresRepository) SaveMessage(ctx context.Context, msg *domain.Family
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Conflito de chave: idempotência se id, sender_id e patient_id coincidirem
 			var exists bool
-			checkErr := r.pool.QueryRow(
+			checkErr := tx.QueryRow(
 				ctx,
 				`SELECT EXISTS(SELECT 1 FROM family_messages WHERE id=$1 AND sender_id=$2 AND patient_id=$3)`,
 				msg.ID, msg.SenderID, msg.PatientID,
 			).Scan(&exists)
 			if checkErr == nil && exists {
-				return nil
+				return tx.Commit(ctx)
 			}
 			return ErrConflict
 		}
 		return fmt.Errorf("falha ao salvar mensagem: %w", err)
 	}
 
-	return nil
+	if err := emitMessageNotifications(ctx, tx, msg); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // GetMessages busca mensagens não expiradas com limite, paginação e aplicação de tombstones
@@ -208,6 +223,9 @@ func (r *PostgresRepository) DeleteMessage(ctx context.Context, messageID string
 	if _, err := tx.Exec(ctx, updateQuery, messageID); err != nil {
 		return fmt.Errorf("falha ao atualizar tombstone da mensagem: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `SELECT notification_remove_event($1)`, messageEventKey(messageID)); err != nil {
+		return fmt.Errorf("falha ao remover aviso da mensagem excluída: %w", err)
+	}
 
 	return tx.Commit(ctx)
 }
@@ -222,6 +240,25 @@ func (r *PostgresRepository) MarkMessagesAsRead(ctx context.Context, patientID s
 	if len(messageIDs) > 0 {
 		ids = messageIDs[0]
 	}
+	if ids != nil {
+		canonical := make([]string, len(ids))
+		for i, id := range ids {
+			canonical[i] = canonicalNotificationUUID(id)
+		}
+		ids = canonical
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("falha ao iniciar transação de leitura: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	allowed, err := r.checkAccessWithTx(ctx, tx, readerID, patientID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrForbidden
+	}
 	query := `
 		UPDATE family_messages
 		SET is_read = true
@@ -229,10 +266,40 @@ func (r *PostgresRepository) MarkMessagesAsRead(ctx context.Context, patientID s
 		  AND deleted_at IS NULL AND expires_at > now()
 		  AND ($3::text[] IS NULL OR id::text = ANY($3::text[]));
 	`
-	if _, err := r.pool.Exec(ctx, query, patientID, readerID, ids); err != nil {
+	if _, err := tx.Exec(ctx, query, patientID, readerID, ids); err != nil {
 		return fmt.Errorf("falha ao marcar mensagens como lidas: %w", err)
 	}
-	return nil
+	// O legado sem IDs mantém o recibo antigo, mas não comprova quais mensagens
+	// estiveram legíveis. A central só reconcilia IDs confirmados explicitamente.
+	if ids != nil && len(ids) > 0 {
+		rows, err := tx.Query(ctx, `
+			SELECT id::text FROM family_messages
+			WHERE patient_id=$1 AND sender_id<>$2 AND id::text=ANY($3::text[])
+			  AND deleted_at IS NULL AND expires_at>now() ORDER BY id`, patientID, readerID, ids)
+		if err != nil {
+			return fmt.Errorf("falha ao consultar mensagens efetivamente lidas: %w", err)
+		}
+		var keys []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			keys = append(keys, "message:"+id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if len(keys) > 0 {
+			if _, err := tx.Exec(ctx, `SELECT notification_read_sources($1,$2::text[])`, readerID, keys); err != nil {
+				return fmt.Errorf("falha ao reconciliar avisos da leitura: %w", err)
+			}
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // CheckFamilyAccess verifica se o usuário é o próprio titular ou cuidador com vínculo ativo
@@ -257,13 +324,20 @@ func (r *PostgresRepository) checkAccessWithTx(ctx context.Context, tx pgx.Tx, u
 	if uid == patientID {
 		return true, nil
 	}
-	var allowed bool
-	query := `SELECT EXISTS(SELECT 1 FROM family_bindings WHERE patient_id=$1 AND caregiver_id=$2 AND status='ACTIVE');`
-	err := tx.QueryRow(ctx, query, patientID, uid).Scan(&allowed)
+	// Segura a concessão durante a operação. Uma revogação concorrente é
+	// serializada com a mensagem/recibo, em vez de caber entre check e commit.
+	var bindingID string
+	query := `SELECT id::text FROM family_bindings
+		WHERE patient_id=$1 AND caregiver_id=$2 AND status='ACTIVE'
+		ORDER BY id LIMIT 1 FOR SHARE;`
+	err := tx.QueryRow(ctx, query, patientID, uid).Scan(&bindingID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("falha ao verificar acesso familiar na transação: %w", err)
 	}
-	return allowed, nil
+	return true, nil
 }
 
 // FindByConnectionCode localiza vínculo pendente por código de 8 caracteres
@@ -422,6 +496,9 @@ func (r *PostgresRepository) AcceptInvitation(
 
 		created.Permissions = sanitizePermissions(created.Permissions)
 		created.PatientName = domain.JokerPatientName
+		if err := emitBindingNotification(ctx, tx, &created, caregiverID); err != nil {
+			return nil, err
+		}
 		return &created, tx.Commit(ctx)
 	}
 
@@ -494,6 +571,9 @@ func (r *PostgresRepository) AcceptInvitation(
 	}
 
 	updated.Permissions = sanitizePermissions(updated.Permissions)
+	if err := emitBindingNotification(ctx, tx, &updated, caregiverID); err != nil {
+		return nil, err
+	}
 	return &updated, tx.Commit(ctx)
 }
 
@@ -668,10 +748,11 @@ func (r *PostgresRepository) SyncBinding(
 	if req.Status == "REVOKED" {
 		var patientID string
 		var caregiverID *string
+		var previousStatus string
 		err := tx.QueryRow(ctx,
-			`SELECT patient_id, caregiver_id FROM family_bindings WHERE id=$1 FOR UPDATE;`,
+			`SELECT patient_id, caregiver_id, COALESCE(status,'PENDING') FROM family_bindings WHERE id=$1 FOR UPDATE;`,
 			req.ID,
-		).Scan(&patientID, &caregiverID)
+		).Scan(&patientID, &caregiverID, &previousStatus)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil, ErrNotFound
@@ -684,15 +765,16 @@ func (r *PostgresRepository) SyncBinding(
 		if _, err := tx.Exec(ctx, `UPDATE family_bindings SET status='REVOKED' WHERE id=$1;`, req.ID); err != nil {
 			return nil, fmt.Errorf("falha ao revogar vínculo: %w", err)
 		}
+		binding := &domain.FamilyBinding{
+			ID: req.ID, PatientID: patientID, CaregiverID: caregiverID, Status: "REVOKED",
+		}
+		if err := notifyBindingRevocation(ctx, tx, binding, requesterID, previousStatus != "REVOKED"); err != nil {
+			return nil, err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
-		return &domain.FamilyBinding{
-			ID:          req.ID,
-			PatientID:   patientID,
-			CaregiverID: caregiverID,
-			Status:      "REVOKED",
-		}, nil
+		return binding, nil
 	}
 
 	if requesterID != req.PatientID {

@@ -44,6 +44,7 @@ func NewRouter(repo repository.FamilyRepository, hub ...*ws.Hub) http.Handler {
 
 	msgHandler := NewMessageHandler(repo, wsHub)
 	bindingHandler := NewBindingHandler(repo)
+	notificationHandler := NewNotificationHandler(repo)
 	// Fase #7: rate limit por IP da criação/revogação de convite familiar
 	// (10/min no Python legado). Mantido no processo Go porque o limiter da
 	// borda Rust só aplica bloqueio global de IP, não janelas por rota.
@@ -79,6 +80,16 @@ func NewRouter(repo repository.FamilyRepository, hub ...*ws.Hub) http.Handler {
 			protected.Post("/api/family/accept", bindingHandler.HandleAcceptInvitation)
 			protected.Post("/api/family/e2ee/public-key", bindingHandler.HandlePublishPublicKey)
 			protected.Get("/api/family/bindings/{userId}", bindingHandler.HandleListBindings)
+
+			// Central de Notificações persistente por destinatário (RTL-07)
+			protected.Get("/api/notifications", notificationHandler.HandleListNotifications)
+			protected.Get("/api/notifications/changes", notificationHandler.HandleNotificationChanges)
+			protected.Get("/api/notifications/unread", notificationHandler.HandleNotificationUnread)
+			protected.Get("/api/notifications/unread-count", notificationHandler.HandleNotificationUnread)
+			protected.Post("/api/notifications/read", notificationHandler.HandleMarkNotifications)
+			protected.Post("/api/notifications/mark-read", notificationHandler.HandleMarkNotifications)
+			protected.Post("/api/notifications/mark-all-read", notificationHandler.HandleMarkAllNotificationsRead)
+			protected.Post("/api/notifications/archive", notificationHandler.HandleArchiveNotifications)
 		})
 	})
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from routers.care_os import router
+from routers.consultations import router as consultations_router
 
 
 PUBLIC_PATHS = {
@@ -20,6 +21,7 @@ PUBLIC_PATHS = {
 def build_spec():
     app = FastAPI(title="Braga Saúde Care OS Contracts", version="1.1.0")
     app.include_router(router)
+    app.include_router(consultations_router)
     spec = app.openapi()
     spec.setdefault("components", {}).setdefault("securitySchemes", {})["FirebaseBearer"] = {
         "type": "http", "scheme": "bearer", "bearerFormat": "Firebase ID token",

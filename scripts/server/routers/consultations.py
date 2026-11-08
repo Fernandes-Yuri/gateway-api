@@ -5,10 +5,9 @@ migraram em definitivo para o microserviço Go ``braga-chat`` (Fase #6).
 O domínio de consultas continua no backend Python porque pertence ao
 Care OS e ao agendamento por voz, não ao chat.
 
-O push para os cuidadores é best-effort: falha de FCM nunca quebra a
-operação de criar/responder a consulta.
+Eventos e intenção de entrega são gravados na mesma transação da consulta.
+A entrega FCM posterior pode falhar sem perder o evento da central.
 """
-import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -17,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from api_identity import firebase_uid, require_family_access
-from core.devices import load_devices_by_user
+from services.notification_center import emit_notification
 
 router = APIRouter()
 
@@ -42,6 +41,12 @@ class AcceptConsultation(BaseModel):
 
 class RejectConsultation(BaseModel):
     consultationId: uuid.UUID
+
+
+class UpdateConsultation(BaseModel):
+    consultationId: uuid.UUID
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    scheduledDate: Optional[str] = None
 
 
 class ConfirmVoiceDraft(BaseModel):
@@ -90,46 +95,29 @@ def _pool():
     return value
 
 
-async def _notify_consultation(row, uid, event_type, title, body):
-    """Push de consulta (doc 10 §2.2). Best-effort: falha nunca quebra a operação.
-
-    Regra de destinatário: o paciente (user_id) é notificado quando um cuidador
-    age; os cuidadores ativos são notificados quando o paciente age.
-    """
-    if not _state.dispatch_push or not _state.load_devices:
-        return
-    if row['user_id'] == uid:
-        async with _pool().acquire() as conn:
-            care_rows = await conn.fetch(
-                "SELECT caregiver_id FROM family_bindings WHERE patient_id=$1 AND status='ACTIVE'",
-                row['user_id'])
-        recipients = [r['caregiver_id'] for r in care_rows if r['caregiver_id']]
+async def emit_consultation_event(conn, row, actor_id, event_kind):
+    """Emite metadados mínimos usando a transação da operação de origem."""
+    if row['user_id'] == actor_id:
+        care_rows = await conn.fetch("""SELECT DISTINCT caregiver_id FROM family_bindings
+            WHERE patient_id=$1 AND status='ACTIVE' AND caregiver_id IS NOT NULL
+            ORDER BY caregiver_id""", row['user_id'])
+        recipients = {r['caregiver_id'] for r in care_rows if r['caregiver_id']}
     else:
-        recipients = [row['user_id']]
-    if not recipients:
-        return
-    devices = await load_devices_by_user(_state.db_pool, _state.load_devices)
-    for recipient_uid in recipients:
-        for dev in devices.get(recipient_uid) or []:
-            token = dev.get('token')
-            if not token:
-                continue
-            try:
-                await asyncio.to_thread(
-                    _state.dispatch_push,
-                    token=token,
-                    title=title,
-                    body=body,
-                    data={
-                        'type': event_type,
-                        'consultationId': str(row['id']),
-                        'patientId': row['user_id'],
-                        'title': title,
-                        'message': body,
-                    },
-                )
-            except Exception as push_err:
-                print(f'[Consultation] Falha no push para {recipient_uid}: {push_err}')
+        recipients = {row['user_id']}
+    occurred_at = row.get('updated_at') or row.get('created_at')
+    event_key = f"consultation:{row['id']}:{event_kind}"
+    if event_kind != 'CONSULTATION_CREATED':
+        if occurred_at is None:
+            raise ValueError('A alteração da consulta precisa de data persistida.')
+        event_key += ':' + occurred_at.isoformat()
+    for recipient in sorted(recipients - {actor_id}):
+        await emit_notification(
+            conn, recipient_id=recipient, event_key=event_key,
+            group_key=f"consultation:{row['id']}", kind=event_kind, category='AGENDA',
+            resource_type='consultation', resource_id=str(row['id']),
+            patient_id=row['user_id'], actor_id=actor_id, occurred_at=occurred_at,
+            payload={'status': row['status']},
+        )
 
 
 def consultation_json(row):
@@ -184,9 +172,8 @@ async def create_consultation(c: CreateConsultation, uid: str = Depends(firebase
             row = await conn.fetchrow('SELECT * FROM consultations WHERE id=$1 AND user_id=$2 AND created_by=$3', consultation_id, patient, uid)
             if row is None:
                 raise HTTPException(409, 'Identificador de consulta indisponível.')
-    if created:
-        await _notify_consultation(row, uid, 'CONSULTATION_CREATED', 'Consulta agendada',
-                                   f'Consulta "{row["title"]}" agendada. Toque para ver os detalhes.')
+        if created:
+            await emit_consultation_event(conn, row, uid, 'CONSULTATION_CREATED')
     return consultation_json(row)
 
 
@@ -204,12 +191,41 @@ async def transition_consultation(consultation_id, uid, target, name=None, relat
             return consultation_json(row)
         if target == 'ACCEPTED':
             updated = await conn.fetchrow("""UPDATE consultations SET status=$2,caregiver_id=$3,
-                caregiver_name=$4,caregiver_relation=$5,updated_at=now() WHERE id=$1 RETURNING *""",
+                caregiver_name=$4,caregiver_relation=$5,updated_at=clock_timestamp() WHERE id=$1 RETURNING *""",
                 row['id'], target, uid, name or '', relation or '')
         else:
-            updated = await conn.fetchrow('UPDATE consultations SET status=$2,updated_at=now() WHERE id=$1 RETURNING *', row['id'], target)
-    await _notify_consultation(updated, uid, f'CONSULTATION_{target}', 'Consulta atualizada',
-                               f'A consulta "{updated["title"]}" foi atualizada.')
+            updated = await conn.fetchrow('UPDATE consultations SET status=$2,updated_at=clock_timestamp() WHERE id=$1 RETURNING *', row['id'], target)
+        await emit_consultation_event(conn, updated, uid, f'CONSULTATION_{target}')
+    return consultation_json(updated)
+
+
+@router.post('/api/consultation/update')
+async def update_consultation(c: UpdateConsultation, uid: str = Depends(firebase_uid)):
+    """Altera título/data da mesma consulta, com retry sem novo evento."""
+    if c.title is None and c.scheduledDate is None:
+        raise HTTPException(422, 'Informe o título ou a nova data da consulta.')
+    title = c.title.strip() if c.title is not None else None
+    if title == '':
+        raise HTTPException(422, 'Informe o título da consulta.')
+    scheduled = None
+    if c.scheduledDate is not None:
+        try:
+            scheduled = datetime.fromisoformat(c.scheduledDate.replace('Z', '+00:00'))
+            if scheduled.tzinfo is None or scheduled <= datetime.now(timezone.utc):
+                raise ValueError('invalid')
+        except ValueError:
+            raise HTTPException(422, 'Informe uma data futura com fuso horário.')
+    async with _pool().acquire() as conn, conn.transaction():
+        row = await authorized_consultation(conn, c.consultationId, uid)
+        if row['status'] not in ('SUGGESTED', 'ACCEPTED'):
+            raise HTTPException(409, 'Esta consulta já foi encerrada.')
+        title = row['title'] if title is None else title
+        scheduled = row['scheduled_date'] if scheduled is None else scheduled
+        if title == row['title'] and scheduled == row['scheduled_date']:
+            return consultation_json(row)
+        updated = await conn.fetchrow('''UPDATE consultations SET title=$2,scheduled_date=$3,
+            updated_at=clock_timestamp() WHERE id=$1 RETURNING *''', row['id'], title, scheduled)
+        await emit_consultation_event(conn, updated, uid, 'CONSULTATION_UPDATED')
     return consultation_json(updated)
 
 
@@ -243,7 +259,7 @@ async def confirm_voice_draft(c: ConfirmVoiceDraft, uid: str = Depends(firebase_
     forjado ou de outra conta nao agenda nada.
     """
     from voice_scheduling import confirmar_rascunho_por_id
-    async with _pool().acquire() as conn, conn.transaction():
+    async with _pool().acquire() as conn:
         envelope = await confirmar_rascunho_por_id(conn, uid, c.patientId, c.draftId)
         if envelope.get('acao') != 'CONSULTA_AGENDADA':
             raise HTTPException(409, envelope.get('fala', 'Agendamento expirado.'))

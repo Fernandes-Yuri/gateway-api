@@ -31,6 +31,10 @@ class TestSocialPostMutations(unittest.IsolatedAsyncioTestCase):
         self.app.dependency_overrides[firebase_uid] = author
         self.state_patch = patch.object(sync, '_state', SimpleNamespace(db_pool=self.pool))
         self.state_patch.start()
+        self.notification_remove = AsyncMock()
+        notification_patch = patch.object(sync, 'remove_resource_notifications', self.notification_remove)
+        notification_patch.start()
+        self.addCleanup(notification_patch.stop)
         self.client = AsyncClient(transport=ASGITransport(app=self.app), base_url="http://test")
 
     async def asyncTearDown(self):
@@ -74,6 +78,7 @@ class TestSocialPostMutations(unittest.IsolatedAsyncioTestCase):
             response = await self.client.delete(f'/api/sync/social-post/{POST_ID}')
             self.assertEqual(response.status_code, 200)
         self.assertIn('is_visible = FALSE', self.conn.execute.call_args.args[0])
+        self.notification_remove.assert_awaited_once_with(self.conn, 'post', POST_ID)
 
     async def test_missing_post_patch(self):
         self.conn.fetchrow.return_value = None

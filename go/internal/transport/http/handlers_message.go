@@ -139,6 +139,10 @@ func (h *MessageHandler) HandleSendMessage(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := h.repo.SaveMessage(r.Context(), &msg); err != nil {
+		if errors.Is(err, repository.ErrForbidden) {
+			writeJSONError(w, http.StatusForbidden, "O acompanhamento deste familiar não está autorizado.")
+			return
+		}
 		if errors.Is(err, repository.ErrConflict) {
 			writeJSONError(w, http.StatusConflict, "Mensagem indisponível.")
 			return
@@ -328,6 +332,10 @@ func (h *MessageHandler) HandleMarkMessagesRead(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err := h.repo.MarkMessagesAsRead(r.Context(), patientID, uid, req.MessageIDs); err != nil {
+		if errors.Is(err, repository.ErrForbidden) {
+			writeJSONError(w, http.StatusForbidden, "Acesso não autorizado.")
+			return
+		}
 		if errors.Is(err, repository.ErrDatabaseUnavailable) {
 			writeJSONError(w, http.StatusServiceUnavailable, "Banco indisponível. Tente novamente.")
 			return

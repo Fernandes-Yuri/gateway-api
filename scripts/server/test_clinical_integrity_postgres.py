@@ -1,4 +1,5 @@
 """Contratos clínicos no PostgreSQL efêmero do Actions, sem contas reais."""
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -33,7 +34,8 @@ class ClinicalIntegrityPostgres(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as conn:
             await conn.execute((root / 'scripts/docker/init_schema.sql').read_text())
             await conn.execute('CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)')
-            for file in ('054_vital_signs_oxygen.sql', '080_clinical_sync_integrity.sql', '081_vital_signs_readings_contract.sql'):
+            for file in ('054_vital_signs_oxygen.sql', '080_clinical_sync_integrity.sql',
+                         '081_vital_signs_readings_contract.sql', '082_notification_center.sql'):
                 await conn.execute((root / 'migrations' / file).read_text())
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES('patient','Paciente'),('caregiver','Cuidador'),('stranger','Outro')")
             await conn.execute("INSERT INTO family_bindings(patient_id,caregiver_id,caregiver_name,caregiver_relation,connection_code,status,expires_at) VALUES('patient','caregiver','Ana','Filha','TEST1234','ACTIVE',now()+interval '1 day')")
@@ -131,12 +133,116 @@ class ClinicalIntegrityPostgres(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first['patientId'], 'patient')
         self.assertEqual(first['createdBy'], 'caregiver')
         self.assertEqual(first['status'], 'ACCEPTED')
+        async with self.pool.acquire() as conn:
+            self.assertEqual(await conn.fetchval('SELECT count(*) FROM notification_items'), 1)
+            self.assertEqual(await conn.fetchval('SELECT recipient_id FROM notification_items'), 'patient')
+            self.assertEqual(await conn.fetchval('SELECT count(*) FROM notification_sources'), 1)
+            self.assertEqual(await conn.fetchval('SELECT count(*) FROM notification_outbox'), 1)
         listing = await consultations.list_consultations('patient', uid='patient')
         self.assertEqual([item['id'] for item in listing], [first['id']])
         for target in ('CANCELLED', 'COMPLETED', 'ACCEPTED', 'REJECTED'):
             with self.assertRaises(HTTPException) as error:
                 await consultations.transition_consultation(uuid.UUID(first['id']), 'stranger', target)
             self.assertEqual(error.exception.status_code, 403)
+
+    async def test_patient_creation_targets_distinct_active_caregivers_and_never_self(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute("INSERT INTO profiles(id,full_name) VALUES('second','Segundo')")
+            await conn.execute("""INSERT INTO family_bindings
+                (patient_id,caregiver_id,caregiver_name,caregiver_relation,connection_code,status,expires_at)
+                VALUES('patient','caregiver','Ana','Filha','DUPLICATE','ACTIVE',now()+interval '1 day'),
+                      ('patient','second','Bia','Filha','SECOND','ACTIVE',now()+interval '1 day'),
+                      ('patient','stranger','Outra','Filha','REVOKED','REVOKED',now()+interval '1 day')""")
+        request = consultations.CreateConsultation(id=uuid.uuid4(), title='Cardiologia',
+            scheduledDate=(datetime.now(timezone.utc)+timedelta(days=2)).isoformat())
+        await consultations.create_consultation(request, uid='patient')
+        await consultations.create_consultation(request, uid='patient')
+        async with self.pool.acquire() as conn:
+            recipients = await conn.fetch('SELECT recipient_id FROM notification_items ORDER BY recipient_id')
+            self.assertEqual([row['recipient_id'] for row in recipients], ['caregiver', 'second'])
+            self.assertEqual(await conn.fetchval('SELECT count(*) FROM notification_outbox'), 2)
+
+    async def test_cancel_groups_with_creation_and_retry_does_not_duplicate_event(self):
+        request = consultations.CreateConsultation(id=uuid.uuid4(), patientId='patient', title='Cardiologia',
+            scheduledDate=(datetime.now(timezone.utc)+timedelta(days=2)).isoformat())
+        await consultations.create_consultation(request, uid='caregiver')
+        first = await consultations.transition_consultation(request.id, 'caregiver', 'CANCELLED')
+        self.assertEqual(first, await consultations.transition_consultation(request.id, 'caregiver', 'CANCELLED'))
+        async with self.pool.acquire() as conn:
+            snapshot = json.loads(await conn.fetchval('SELECT snapshot FROM notification_items'))
+            self.assertEqual(snapshot['kind'], 'CONSULTATION_CANCELLED')
+            self.assertEqual(snapshot['resourceId'], str(request.id))
+            self.assertEqual(snapshot['data'], {'status': 'CANCELLED'})
+            self.assertEqual(await conn.fetchval('SELECT count(*) FROM notification_items'), 1)
+            self.assertEqual(await conn.fetchval('SELECT count(*) FROM notification_sources'), 2)
+            self.assertEqual(await conn.fetchval('SELECT count(*) FROM notification_outbox'), 2)
+            self.assertNotIn('Cardiologia', json.dumps(snapshot))
+
+    async def test_reschedule_keeps_resource_identity_and_identical_retry_has_no_event(self):
+        future = datetime.now(timezone.utc)+timedelta(days=2)
+        request = consultations.CreateConsultation(id=uuid.uuid4(), patientId='patient',
+            title='Cardiologia', scheduledDate=future.isoformat())
+        await consultations.create_consultation(request, uid='caregiver')
+        change = consultations.UpdateConsultation(consultationId=request.id,
+            title='Especialidade atualizada', scheduledDate=(future+timedelta(days=1)).isoformat())
+        first = await consultations.update_consultation(change, uid='caregiver')
+        self.assertEqual(first, await consultations.update_consultation(change, uid='caregiver'))
+        self.assertEqual(first['id'], str(request.id))
+        self.assertEqual(first['scheduledDate'], change.scheduledDate)
+        async with self.pool.acquire() as conn:
+            self.assertEqual(await conn.fetchval('SELECT count(*) FROM consultations'), 1)
+            self.assertEqual(await conn.fetchval('SELECT count(*) FROM notification_items'), 1)
+            self.assertEqual(await conn.fetchval('SELECT count(*) FROM notification_outbox'), 2)
+            snapshot = json.loads(await conn.fetchval('SELECT snapshot FROM notification_items'))
+            self.assertEqual(snapshot['kind'], 'CONSULTATION_UPDATED')
+            self.assertNotIn(change.title, json.dumps(snapshot))
+        with self.assertRaises(HTTPException) as denied:
+            await consultations.update_consultation(change, uid='stranger')
+        self.assertEqual(denied.exception.status_code, 403)
+
+    async def test_failed_notification_insert_rolls_back_consultation(self):
+        request = consultations.CreateConsultation(id=uuid.uuid4(), patientId='patient', title='Cardiologia',
+            scheduledDate=(datetime.now(timezone.utc)+timedelta(days=2)).isoformat())
+        with patch.object(consultations, 'emit_notification', side_effect=RuntimeError('outbox indisponível')):
+            with self.assertRaises(RuntimeError):
+                await consultations.create_consultation(request, uid='caregiver')
+        async with self.pool.acquire() as conn:
+            for table in ('consultations', 'notification_items', 'notification_sources', 'notification_outbox'):
+                self.assertEqual(await conn.fetchval(f'SELECT count(*) FROM {table}'), 0)
+
+    async def test_voice_retry_after_lost_response_uses_draft_identity_and_one_outbox(self):
+        from voice_scheduling import _guardar_rascunho, descartar_rascunho
+        draft_id = str(uuid.uuid4())
+        _guardar_rascunho('caregiver', 'patient', {
+            'id': draft_id, 'title': 'Cardiologia',
+            'scheduledDate': (datetime.now(timezone.utc)+timedelta(days=2)).isoformat(),
+            'caregiver_name': 'Ana',
+        })
+        command = consultations.ConfirmVoiceDraft(patientId='patient', draftId=draft_id)
+        try:
+            first, concurrent = await asyncio.gather(
+                consultations.confirm_voice_draft(command, uid='caregiver'),
+                consultations.confirm_voice_draft(command, uid='caregiver'))
+            self.assertEqual(first, concurrent)
+            self.assertEqual(first, await consultations.confirm_voice_draft(command, uid='caregiver'))
+            self.assertEqual(first['consultationId'], draft_id)
+            async with self.pool.acquire() as conn:
+                self.assertEqual(await conn.fetchval('SELECT created_by FROM consultations'), 'caregiver')
+                self.assertEqual(await conn.fetchval('SELECT count(*) FROM consultations'), 1)
+                self.assertEqual(await conn.fetchval('SELECT count(*) FROM notification_outbox'), 1)
+                self.assertEqual(await conn.fetchval('SELECT recipient_id FROM notification_items'), 'patient')
+            with self.assertRaises(HTTPException) as denied:
+                await consultations.confirm_voice_draft(command, uid='stranger')
+            self.assertEqual(denied.exception.status_code, 403)
+            await consultations.transition_consultation(uuid.UUID(draft_id), 'caregiver', 'CANCELLED')
+            with self.assertRaises(HTTPException) as closed:
+                await consultations.confirm_voice_draft(command, uid='caregiver')
+            self.assertEqual(closed.exception.status_code, 409)
+            async with self.pool.acquire() as conn:
+                self.assertEqual(await conn.fetchval('SELECT status FROM consultations'), 'CANCELLED')
+                self.assertEqual(await conn.fetchval('SELECT count(*) FROM notification_outbox'), 2)
+        finally:
+            descartar_rascunho('caregiver', 'patient')
 
     async def test_changes_payload_contains_json_snapshot(self):
         await self.upload(self.vital())
