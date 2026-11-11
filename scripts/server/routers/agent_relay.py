@@ -22,6 +22,11 @@ from config import (
     GROQ_API_KEY,
     GROQ_API_URL,
 )
+from services.circuit_breaker import (
+    CircuitBreakerOpenException,
+    gemini_circuit_breaker,
+    groq_circuit_breaker,
+)
 
 logger = logging.getLogger("agent_relay")
 
@@ -151,12 +156,18 @@ async def _invoke_groq(req: AgentRelayRequest, token: str) -> Optional[AgentRela
             for t in req.tools
         ]
 
-    try:
+    async def _post_groq_relay():
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            if resp.status_code != 200:
-                logger.warning("[agent_relay] Falha na chamada Groq (%s): %s", resp.status_code, resp.text[:200])
-                return None
+            r = await client.post(url, json=payload, headers=headers)
+            if r.status_code >= 500 or r.status_code == 429:
+                r.raise_for_status()
+            return r
+
+    try:
+        resp = await groq_circuit_breaker.call(_post_groq_relay)
+        if resp.status_code != 200:
+            logger.warning("[agent_relay] Falha na chamada Groq (%s): %s", resp.status_code, resp.text[:200])
+            return None
 
             data = resp.json()
             choice = data["choices"][0]
@@ -277,12 +288,18 @@ async def _invoke_gemini(req: AgentRelayRequest, api_key: str) -> Optional[Agent
             })
         payload["tools"] = [{"function_declarations": declarations}]
 
-    try:
+    async def _post_gemini_relay():
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
-            if resp.status_code != 200:
-                logger.warning("[agent_relay] Falha na chamada Gemini (%s): %s", resp.status_code, resp.text[:200])
-                return None
+            r = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
+            if r.status_code >= 500 or r.status_code == 429:
+                r.raise_for_status()
+            return r
+
+    try:
+        resp = await gemini_circuit_breaker.call(_post_gemini_relay)
+        if resp.status_code != 200:
+            logger.warning("[agent_relay] Falha na chamada Gemini (%s): %s", resp.status_code, resp.text[:200])
+            return None
 
             data = resp.json()
             candidates = data.get("candidates", [])

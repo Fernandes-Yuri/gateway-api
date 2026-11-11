@@ -33,6 +33,11 @@ from config import (
     GROQ_MODEL_VISION,
 )
 from schemas.medications import AnalyzedMedicationItem
+from services.circuit_breaker import (
+    CircuitBreakerOpenException,
+    gemini_circuit_breaker,
+    groq_circuit_breaker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -278,22 +283,30 @@ async def _call_gemini_vision(image_bytes: bytes, prompt: str, content_type: str
         },
     }
     url = f"{GEMINI_API_URL}?key={GEMINI_API_KEY}"
-    try:
+    async def _post_gemini():
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
-            if resp.status_code == 200:
-                data = resp.json()
-                candidates = data.get("candidates", [])
-                if candidates and "content" in candidates[0]:
-                    parts = candidates[0]["content"].get("parts", [])
-                    if parts and "text" in parts[0]:
-                        return parts[0]["text"].strip()
-            logger.warning(
-                "[gemini_vision] Falha HTTP %s: %s (modelo: %s)",
-                resp.status_code,
-                resp.text,
-                GEMINI_MODEL_VISION,
-            )
+            r = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
+            if r.status_code >= 500 or r.status_code == 429:
+                r.raise_for_status()
+            return r
+
+    try:
+        resp = await gemini_circuit_breaker.call(_post_gemini)
+        if resp.status_code == 200:
+            data = resp.json()
+            candidates = data.get("candidates", [])
+            if candidates and "content" in candidates[0]:
+                parts = candidates[0]["content"].get("parts", [])
+                if parts and "text" in parts[0]:
+                    return parts[0]["text"].strip()
+        logger.warning(
+            "[gemini_vision] Falha HTTP %s: %s (modelo: %s)",
+            resp.status_code,
+            resp.text,
+            GEMINI_MODEL_VISION,
+        )
+    except CircuitBreakerOpenException as exc:
+        logger.warning("[gemini_vision] Circuit breaker aberto: %s", exc)
     except Exception as exc:
         logger.warning("[gemini_vision] Exceção ao chamar Gemini (%s): %s", GEMINI_MODEL_VISION, exc)
     return None
@@ -343,13 +356,21 @@ async def _call_vision_ocr(image_bytes: bytes) -> str:
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
-    try:
+    async def _post_groq_ocr():
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(GROQ_API_URL, json=payload, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data["choices"][0]["message"]["content"].strip()
-            logger.warning("[_call_vision_ocr] Falha HTTP %s: %s", resp.status_code, resp.text)
+            r = await client.post(GROQ_API_URL, json=payload, headers=headers)
+            if r.status_code >= 500 or r.status_code == 429:
+                r.raise_for_status()
+            return r
+
+    try:
+        resp = await groq_circuit_breaker.call(_post_groq_ocr)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data["choices"][0]["message"]["content"].strip()
+        logger.warning("[_call_vision_ocr] Falha HTTP %s: %s", resp.status_code, resp.text)
+    except CircuitBreakerOpenException as exc:
+        logger.warning("[_call_vision_ocr] Circuit breaker aberto: %s", exc)
     except Exception as exc:
         logger.warning("[_call_vision_ocr] Exceção ao chamar visão: %s", exc)
     return ""
@@ -452,13 +473,21 @@ async def _extract_single_image_structured(image_bytes: bytes, content_type: str
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
-    try:
+    async def _post_groq_structured():
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(GROQ_API_URL, json=payload, headers=headers)
-            if resp.status_code == 200:
-                raw_content = resp.json()["choices"][0]["message"]["content"]
-                return _parse_json_medications(raw_content)
-            logger.warning("[extract_structured_prescription] Falha HTTP %s: %s", resp.status_code, resp.text)
+            r = await client.post(GROQ_API_URL, json=payload, headers=headers)
+            if r.status_code >= 500 or r.status_code == 429:
+                r.raise_for_status()
+            return r
+
+    try:
+        resp = await groq_circuit_breaker.call(_post_groq_structured)
+        if resp.status_code == 200:
+            raw_content = resp.json()["choices"][0]["message"]["content"]
+            return _parse_json_medications(raw_content)
+        logger.warning("[extract_structured_prescription] Falha HTTP %s: %s", resp.status_code, resp.text)
+    except CircuitBreakerOpenException as exc:
+        logger.warning("[extract_structured_prescription] Circuit breaker aberto: %s", exc)
     except Exception as exc:
         logger.warning("[extract_structured_prescription] Exceção ao chamar visão: %s", exc)
     return []
@@ -851,11 +880,19 @@ async def analyze_pdf_prescription(pdf_bytes: bytes, db_conn, raw_ocr_text: str 
                     ],
                     "temperature": 0.0,
                 }
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(GROQ_API_URL, json=payload, headers=headers)
-                    if resp.status_code == 200:
-                        content = resp.json()["choices"][0]["message"]["content"]
-                        extracted_items = _parse_json_medications(content)
+                async def _post_groq_pdf_fallback():
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        r = await client.post(GROQ_API_URL, json=payload, headers=headers)
+                        if r.status_code >= 500 or r.status_code == 429:
+                            r.raise_for_status()
+                        return r
+
+                resp = await groq_circuit_breaker.call(_post_groq_pdf_fallback)
+                if resp.status_code == 200:
+                    content = resp.json()["choices"][0]["message"]["content"]
+                    extracted_items = _parse_json_medications(content)
+            except CircuitBreakerOpenException as exc:
+                logger.warning("[analyze_pdf_prescription] Circuit breaker aberto: %s", exc)
             except Exception as exc:
                 logger.warning("[analyze_pdf_prescription] Falha no fallback Groq: %s", exc)
 
