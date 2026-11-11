@@ -4,6 +4,23 @@ set -e
 APP_DIR="/home/ec2-user/braga-gateway"
 cd "$APP_DIR"
 
+# DT-005: Suporte a checkout de commit SHA ou tag imutavel e registro de auditoria
+TARGET_REF="${1:-${TARGET_REF:-}}"
+if [ -n "$TARGET_REF" ]; then
+    echo "=== [0/4] Fixando repositorio na referencia imutavel: $TARGET_REF ==="
+    git checkout "$TARGET_REF"
+fi
+
+CURRENT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "desconhecido")
+CURRENT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "sem-tag")
+DEPLOY_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+echo "================================================="
+echo "Braga Gateway Deploy: $DEPLOY_TIMESTAMP"
+echo "Commit SHA: $CURRENT_SHA"
+echo "Tag/Ref:    $CURRENT_TAG"
+echo "================================================="
+
 echo "=== [1/4] Sincronizando scripts do servidor ==="
 if [ -d "scripts/server" ] && [ -d "app" ]; then
     rsync -av --delete --exclude '__pycache__' --exclude '*.pyc' scripts/server/ app/
@@ -74,6 +91,12 @@ export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-2}"
 RUNTIME_ENV_DIR="/run/braga-saude"
 RUNTIME_ENV_FILE="/run/braga-saude/gateway.env"
 sudo install -d -m 0700 -o ec2-user -g ec2-user "$RUNTIME_ENV_DIR"
+cat << DEPLOY_META > /run/braga-saude/deploy.info
+DEPLOY_SHA=$CURRENT_SHA
+DEPLOY_TAG=$CURRENT_TAG
+DEPLOY_TIMESTAMP=$DEPLOY_TIMESTAMP
+DEPLOY_META
+chmod 0644 /run/braga-saude/deploy.info
 for LEGACY_ENV in "$APP_DIR/.env" "$APP_DIR/app/.env"; do
     if [ -f "$LEGACY_ENV" ]; then
         PYTHONPATH=scripts/server python3 -m secrets_loader --sync-from-dotenv "$LEGACY_ENV" || true
