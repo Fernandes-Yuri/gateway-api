@@ -1,0 +1,9 @@
+[Unit]
+Description=Timer para Expurgo Periodico LGPD do Braga Saude (a cada 1 hora)
+
+[Timer]
+OnCalendar=*-*-* *:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

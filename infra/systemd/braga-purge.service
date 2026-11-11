@@ -1,0 +1,22 @@
+[Unit]
+Description=Expurgo Fisico de Retencao de Dados LGPD do Braga Saude (Mensagens 24h e Telemetria 7d)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/braga-gateway/app
+EnvironmentFile=-/run/braga-saude/gateway.env
+EnvironmentFile=-/etc/braga-saude/gateway.env
+EnvironmentFile=-/home/ec2-user/braga-gateway/.env
+EnvironmentFile=-/home/ec2-user/braga-gateway/app/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=AWS_SSM_PREFIX=/braga-saude/production
+Environment=AWS_DEFAULT_REGION=us-east-2
+ExecStart=/home/ec2-user/braga-gateway/venv/bin/python3 purge_retention_data.py
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
