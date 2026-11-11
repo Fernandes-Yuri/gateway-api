@@ -435,11 +435,20 @@ async def upsert_emergency_contact(
     return decrypt_emergency_contact_row(row) or {}
 
 
+def verify_blind_index_match(target: str, candidate: str) -> bool:
+    """Valida se dois valores coincidem apos normalizacao canonica,
+    descartando colisoes teoricas de Blind Index em memoria (DT-066)."""
+    if not target or not candidate:
+        return False
+    return normalize_for_blind_index(target) == normalize_for_blind_index(candidate)
+
+
 async def find_emergency_contacts_by_phone(
     conn: Any,
     phone: str,
 ) -> list[dict[str, Any]]:
-    """Busca instantanea O(1) em `emergency_contacts` via `phone_bindex` (SPEC-12 §2.2)."""
+    """Busca instantanea O(1) em `emergency_contacts` via `phone_bindex` (SPEC-12 §2.2),
+    com validacao defensiva pos-busca em memoria para descarte de colisoes (DT-066)."""
     bindex = compute_blind_index(phone)
     if not bindex:
         return []
@@ -447,7 +456,25 @@ async def find_emergency_contacts_by_phone(
         "SELECT * FROM emergency_contacts WHERE phone_bindex = $1",
         bindex,
     )
-    return [decrypt_emergency_contact_row(r) for r in rows if r is not None]  # type: ignore[misc]
+    target_norm = normalize_for_blind_index(phone)
+    results = []
+    for r in rows:
+        if r is None:
+            continue
+        decrypted = decrypt_emergency_contact_row(r)
+        if not decrypted:
+            continue
+        candidate_phone = decrypted.get("phone")
+        if candidate_phone and normalize_for_blind_index(candidate_phone) == target_norm:
+            results.append(decrypted)
+        elif not candidate_phone:
+            continue
+        else:
+            logger.warning(
+                "[column_crypto] Colisao de Blind Index descartada para phone_bindex=%s",
+                bindex,
+            )
+    return results
 
 
 __all__ = [
@@ -470,4 +497,5 @@ __all__ = [
     "normalize_for_blind_index",
     "unwrap_dek_with_kms",
     "upsert_emergency_contact",
+    "verify_blind_index_match",
 ]

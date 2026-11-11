@@ -360,6 +360,23 @@ class TestBlindIndexingAndEnvelopeEncryption(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(param_bindex, stored_bindex)
 
+        # Validacao defensiva pos-busca: descarta colisoes teoricas (DT-066)
+        conn.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": uuid.uuid4(),
+                    "user_id": "patient-collision",
+                    "name": "Outro",
+                    "relation": "Vizinho",
+                    "phone": None,
+                    "phone_encrypted": encrypt_field("11999990000"),
+                    "phone_bindex": stored_bindex,  # Simula colisao teorica com mesmo bindex
+                }
+            ]
+        )
+        collision_found = await find_emergency_contacts_by_phone(conn, "11988887777")
+        self.assertEqual(len(collision_found), 0)
+
         # Fallback legado na leitura de emergency_contacts
         legacy_row = decrypt_emergency_contact_row(
             {"user_id": "patient-legacy", "phone": "11911112222", "phone_encrypted": None}
