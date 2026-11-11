@@ -22,7 +22,9 @@ from core.devices import (
     dispatch_push_broadcast,
     load_devices_by_user,
     register_device_token,
+    get_active_tokens_for_patient_caregivers,
 )
+from routers.admin import require_service_token
 
 router = APIRouter()
 
@@ -99,7 +101,7 @@ def dataset_stats(uid: str = Depends(firebase_uid)):
 
 
 @router.get("/dataset/sample")
-def dataset_sample(limit: int = Query(5, ge=1, le=50), uid: str = Depends(firebase_uid)):
+def dataset_sample(limit: int = Query(5, ge=1, le=50), _service=Depends(require_service_token)):
     """Retorna as amostras mais recentes do dataset higienizadas por LGPD para auditoria."""
     if not os.path.exists(DATASET_PATH):
         return {"samples": []}
@@ -192,21 +194,20 @@ async def send_alert(req: AlertNotificationRequest, uid: str = Depends(firebase_
 @router.post("/api/emergency/trigger")
 async def trigger_emergency(req: EmergencyTriggerRequest, uid: str = Depends(firebase_uid)):
     require_owner(uid, req.userId)
-    devices = await load_devices_by_user(_state.db_pool)
     sent_count = 0
-    for dev_uid, user_devices in devices.items():
-        for dev in user_devices:
-            if dev.get("role") == "CAREGIVER" or dev_uid != uid:
-                await asyncio.to_thread(
-                    dispatch_push,
-                    token=dev["token"],
-                    title="ALERTA DE EMERGENCIA FAMILIAR",
-                    body=f"{req.userName} acionou socorro: {req.details}",
-                    data={"type": "EMERGENCY", "userId": uid, "details": req.details},
-                    messaging=_state.messaging,
-                    has_fcm=_state.has_fcm,
-                )
-                sent_count += 1
+    if _state.db_pool:
+        caregiver_tokens = await get_active_tokens_for_patient_caregivers(_state.db_pool, uid)
+        for token in caregiver_tokens:
+            await asyncio.to_thread(
+                dispatch_push,
+                token=token,
+                title="ALERTA DE EMERGENCIA FAMILIAR",
+                body=f"{req.userName} acionou socorro: {req.details}",
+                data={"type": "EMERGENCY", "userId": uid, "details": req.details},
+                messaging=_state.messaging,
+                has_fcm=_state.has_fcm,
+            )
+            sent_count += 1
     return {"status": "emergency_broadcasted", "notified": sent_count}
 
 

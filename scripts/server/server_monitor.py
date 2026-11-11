@@ -22,8 +22,9 @@ from typing import Dict, List, Tuple
 # ==================== CONFIGURAÇÕES ====================
 
 RECIPIENTS = [
-    "workfjsyuri@gmail.com",
-    "welisacristina@gmail.com",
+    email.strip()
+    for email in os.getenv("MONITOR_ALERT_RECIPIENTS", "contato@bragasaude.online").split(",")
+    if email.strip()
 ]
 
 # Ler variáveis de ambiente do arquivo de configuração

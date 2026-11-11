@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from api_identity import firebase_uid
 from column_crypto import decrypt_field, encrypt_field
+from security_defense import get_client_ip
 from schemas.clinical import SymptomCheckInCreate
 from schemas.emergency import EmergencyTokenGrant
 from schemas.medical_access import MedicalAccessGenerateRequest, MedicalAccessGrant
@@ -851,7 +852,7 @@ async def medical_dashboard(access_token: str, request: Request):
         symptoms = await conn.fetch("SELECT reported_at,symptoms_text FROM symptoms_diary WHERE patient_id=$1 AND reported_at>=now()-interval '30 days' ORDER BY reported_at DESC LIMIT 5", grant["patient_id"])
         await conn.execute(
             "INSERT INTO medical_access_audit(token_id,ip_address,user_agent) VALUES ($1,$2,$3)",
-            grant["id"], request.client.host if request.client else None, request.headers.get("user-agent", "")[:500],
+            grant["id"], get_client_ip(request), request.headers.get("user-agent", "")[:500],
         )
         await conn.execute("UPDATE medical_access_tokens SET last_accessed_at=now() WHERE id=$1", grant["id"])
     med_html = "".join(f"<li>{html.escape(m['name'])} {m.get('dosage_mg') or ''}</li>" for m in meds) or "<li>Nenhum medicamento registrado</li>"
@@ -982,7 +983,7 @@ async def rescue_card(emergency_token: str, request: Request):
         grant = await conn.fetchrow("SELECT * FROM emergency_access_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()", token_hash(emergency_token))
         if not grant:
             raise HTTPException(404, "Ficha inexistente, expirada ou revogada.")
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip(request)
         user_agent = request.headers.get("user-agent", "")[:500]
         await conn.execute(
             "INSERT INTO emergency_access_audit(token_id,ip_address,user_agent) VALUES ($1,$2,$3)",

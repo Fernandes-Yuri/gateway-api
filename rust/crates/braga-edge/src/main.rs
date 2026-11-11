@@ -830,11 +830,17 @@ async fn proxy_to_backend(
         return Ok(resp);
     }
 
-    // 3. Sanitização: remove headers internos enviados pelo cliente
+    // 3. Sanitização: remove headers internos ou de personificação enviados pelo cliente
     let header_keys: Vec<HeaderName> = req
         .headers()
         .keys()
-        .filter(|k| k.as_str().starts_with("x-internal-"))
+        .filter(|k| {
+            let s = k.as_str();
+            s.starts_with("x-internal-")
+                || s == "x-user-id"
+                || s == "x-role"
+                || s == "x-auth-uid"
+        })
         .cloned()
         .collect();
     for k in header_keys {

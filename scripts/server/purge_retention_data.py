@@ -50,8 +50,8 @@ async def purge_security_telemetry(conn: Any, batch_size: int = 1000, max_batche
         DELETE FROM security_request_events
         WHERE id IN (
             SELECT id FROM security_request_events
-            WHERE created_at < NOW() - INTERVAL '7 days'
-            ORDER BY created_at ASC
+            WHERE occurred_at < NOW() - INTERVAL '7 days'
+            ORDER BY occurred_at ASC
             LIMIT $1
         )
     """

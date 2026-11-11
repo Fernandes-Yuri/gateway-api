@@ -389,7 +389,7 @@ async def scheduled_proactive_job(periodo: str):
 @app.on_event("shutdown")
 async def shutdown():
     global db_pool
-    telemetry = globals().get('security_telemetry')
+    telemetry = globals().get('security_telemetry_instance')
     if telemetry:
         await telemetry.stop()
     if globals().get("retention_scheduler"):
@@ -643,3 +643,7 @@ app.include_router(conteudo_router.router)
 # Última camada registrada: inclui respostas antecipadas de CORS e firewall.
 from response_security import ResponseSecurityHeaders
 app.add_middleware(ResponseSecurityHeaders)
+
+# Telemetria de segurança: monitoramento de requisições, detecção de anomalias e auditoria.
+import security_telemetry
+security_telemetry_instance = security_telemetry.install(app, lambda: db_pool)

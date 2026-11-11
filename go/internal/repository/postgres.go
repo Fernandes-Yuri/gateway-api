@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -344,8 +345,8 @@ func (r *PostgresRepository) checkAccessWithTx(ctx context.Context, tx pgx.Tx, u
 func (r *PostgresRepository) FindByConnectionCode(ctx context.Context, code string) (*domain.FamilyBinding, error) {
 	cleanCode := strings.ToUpper(strings.TrimSpace(code))
 
-	// Suporte ao código coringa especial de testes/demonstração TESTFAM1
-	if cleanCode == domain.JokerConnectionCode {
+	// Suporte ao código coringa especial de testes/demonstração TESTFAM1 (restrito a CI/testes)
+	if cleanCode == domain.JokerConnectionCode && (os.Getenv("ALLOW_TEST_JOKER_CODE") == "true" || os.Getenv("CI") != "") {
 		now := time.Now().UTC()
 		jokerID := uuid.NewSHA1(uuid.NameSpaceDNS, []byte("testfam1-joker")).String()
 		return &domain.FamilyBinding{
@@ -412,8 +413,8 @@ func (r *PostgresRepository) AcceptInvitation(
 
 	cleanCode := strings.ToUpper(strings.TrimSpace(code))
 
-	// Trata código coringa TESTFAM1
-	if cleanCode == domain.JokerConnectionCode {
+	// Trata código coringa TESTFAM1 (restrito a CI/testes)
+	if cleanCode == domain.JokerConnectionCode && (os.Getenv("ALLOW_TEST_JOKER_CODE") == "true" || os.Getenv("CI") != "") {
 		if caregiverID == domain.JokerPatientUID {
 			return nil, ErrConflict
 		}

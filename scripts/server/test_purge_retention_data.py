@@ -21,6 +21,9 @@ class TestRetentionPurge(unittest.IsolatedAsyncioTestCase):
         total = await purge_security_telemetry(conn, batch_size=1000)
         self.assertEqual(total, 42)
         conn.execute.assert_called_once()
+        query = conn.execute.call_args[0][0]
+        self.assertIn("occurred_at", query)
+        self.assertNotIn("created_at", query)
 
     async def test_run_retention_purge_summary(self):
         conn = AsyncMock()
