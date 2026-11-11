@@ -1,4 +1,5 @@
-"""Adaptador para consumo do Rate Limiter centralizado em Rust via Socket Unix IPC (Fase 1C)."""
+"""Adaptador para consumo do Rate Limiter centralizado em Rust via Socket Unix IPC (Fase 1C / DT-062)."""
+import asyncio
 import json
 import logging
 import socket
@@ -37,6 +38,32 @@ class RustLimiterClient:
             logger.warning("[RustLimiterClient] Falha ao comunicar com limiter via Unix socket: %s", e)
             return {"status": "error", "message": str(e)}
 
+    async def _send_ipc_async(self, payload: dict, timeout: float = 0.2) -> dict:
+        writer = None
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(self.socket_path),
+                timeout=timeout,
+            )
+            data = json.dumps(payload) + "\n"
+            writer.write(data.encode("utf-8"))
+            await writer.drain()
+
+            line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+            if not line:
+                return {"status": "error", "message": "Sem resposta do limiter"}
+            return json.loads(line.decode("utf-8").strip())
+        except Exception as e:
+            logger.warning("[RustLimiterClient] Falha ao comunicar com limiter via Unix socket (async): %s", e)
+            return {"status": "error", "message": str(e)}
+        finally:
+            if writer is not None:
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+
     def check(
         self,
         scope: str,
@@ -55,6 +82,25 @@ class RustLimiterClient:
         }
         return self._send_ipc(req)
 
+    async def check_async(
+        self,
+        scope: str,
+        key: str,
+        limit: int,
+        window_seconds: int,
+        ip: Optional[str] = None,
+        timeout: float = 0.2,
+    ) -> dict:
+        req = {
+            "action": "check",
+            "scope": scope,
+            "key": key,
+            "limit": limit,
+            "window_seconds": window_seconds,
+            "ip": ip,
+        }
+        return await self._send_ipc_async(req, timeout=timeout)
+
     def record_violation(self, ip: str, reason: str, severity: int = 1) -> None:
         req = {
             "action": "record_violation",
@@ -63,6 +109,21 @@ class RustLimiterClient:
             "severity": severity,
         }
         self._send_ipc(req)
+
+    async def record_violation_async(
+        self,
+        ip: str,
+        reason: str,
+        severity: int = 1,
+        timeout: float = 0.2,
+    ) -> None:
+        req = {
+            "action": "record_violation",
+            "ip": ip,
+            "reason": reason,
+            "severity": severity,
+        }
+        await self._send_ipc_async(req, timeout=timeout)
 
 
 # Instância global do adaptador
