@@ -1,6 +1,5 @@
 """Testes unitários para o Circuit Breaker de IA (DT-063)."""
 import asyncio
-import time
 import unittest
 from services.circuit_breaker import (
     CircuitBreaker,

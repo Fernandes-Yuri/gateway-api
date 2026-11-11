@@ -3,7 +3,7 @@ import asyncio
 import logging
 import time
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 logger = logging.getLogger("braga.circuit_breaker")
 

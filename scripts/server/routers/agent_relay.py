@@ -23,7 +23,6 @@ from config import (
     GROQ_API_URL,
 )
 from services.circuit_breaker import (
-    CircuitBreakerOpenException,
     gemini_circuit_breaker,
     groq_circuit_breaker,
 )
