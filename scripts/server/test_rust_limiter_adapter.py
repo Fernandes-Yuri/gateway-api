@@ -49,7 +49,6 @@ class TestRustLimiterAdapter(unittest.IsolatedAsyncioTestCase):
         # Inicia mock server síncrono em thread separada
         sync_sock_path = os.path.join(self.temp_dir.name, "sync_limiter.sock")
         server_ready = threading.Event()
-        shutdown = threading.Event()
 
         def sync_server():
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
