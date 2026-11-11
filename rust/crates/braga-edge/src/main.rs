@@ -126,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = if let Some(ref db_url) = args.database_url {
         match db_url.parse::<sqlx::postgres::PgConnectOptions>() {
             Ok(opts) => {
-                let connect_opts = opts.ssl_mode(sqlx::postgres::PgSslMode::Prefer);
+                let connect_opts = opts.ssl_mode(sqlx::postgres::PgSslMode::Require);
                 match sqlx::postgres::PgPoolOptions::new()
                     .max_connections(args.db_max_connections)
                     .min_connections(args.db_min_connections)
