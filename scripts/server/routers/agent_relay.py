@@ -22,6 +22,10 @@ from config import (
     GROQ_API_KEY,
     GROQ_API_URL,
 )
+from services.circuit_breaker import (
+    gemini_circuit_breaker,
+    groq_circuit_breaker,
+)
 
 logger = logging.getLogger("agent_relay")
 
@@ -151,51 +155,57 @@ async def _invoke_groq(req: AgentRelayRequest, token: str) -> Optional[AgentRela
             for t in req.tools
         ]
 
-    try:
+    async def _post_groq_relay():
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            if resp.status_code != 200:
-                logger.warning("[agent_relay] Falha na chamada Groq (%s): %s", resp.status_code, resp.text[:200])
-                return None
+            r = await client.post(url, json=payload, headers=headers)
+            if r.status_code >= 500 or r.status_code == 429:
+                r.raise_for_status()
+            return r
 
-            data = resp.json()
-            choice = data["choices"][0]
-            choice_msg = choice["message"]
+    try:
+        resp = await groq_circuit_breaker.call(_post_groq_relay)
+        if resp.status_code != 200:
+            logger.warning("[agent_relay] Falha na chamada Groq (%s): %s", resp.status_code, resp.text[:200])
+            return None
 
-            tool_calls = None
-            if "tool_calls" in choice_msg and choice_msg["tool_calls"]:
-                tool_calls = [
-                    ToolCall(
-                        id=tc.get("id") or str(uuid.uuid4()),
-                        type=tc.get("type", "function"),
-                        function=ToolCallFunction(
-                            name=tc["function"]["name"],
-                            arguments=tc["function"]["arguments"],
-                        ),
-                    )
-                    for tc in choice_msg["tool_calls"]
-                ]
+        data = resp.json()
+        choice = data["choices"][0]
+        choice_msg = choice["message"]
 
-            usage_data = data.get("usage", {})
-            usage = AgentUsage(
-                prompt_tokens=usage_data.get("prompt_tokens", 0),
-                completion_tokens=usage_data.get("completion_tokens", 0),
-                total_tokens=usage_data.get("total_tokens", 0),
-            )
+        tool_calls = None
+        if "tool_calls" in choice_msg and choice_msg["tool_calls"]:
+            tool_calls = [
+                ToolCall(
+                    id=tc.get("id") or str(uuid.uuid4()),
+                    type=tc.get("type", "function"),
+                    function=ToolCallFunction(
+                        name=tc["function"]["name"],
+                        arguments=tc["function"]["arguments"],
+                    ),
+                )
+                for tc in choice_msg["tool_calls"]
+            ]
 
-            msg = AgentMessage(
-                role=AgentRole.ASSISTANT,
-                content=choice_msg.get("content"),
-                tool_calls=tool_calls,
-            )
+        usage_data = data.get("usage", {})
+        usage = AgentUsage(
+            prompt_tokens=usage_data.get("prompt_tokens", 0),
+            completion_tokens=usage_data.get("completion_tokens", 0),
+            total_tokens=usage_data.get("total_tokens", 0),
+        )
 
-            return AgentRelayResponse(
-                status="ok",
-                message=msg,
-                finish_reason=choice.get("finish_reason"),
-                usage=usage,
-                provider="groq",
-            )
+        msg = AgentMessage(
+            role=AgentRole.ASSISTANT,
+            content=choice_msg.get("content"),
+            tool_calls=tool_calls,
+        )
+
+        return AgentRelayResponse(
+            status="ok",
+            message=msg,
+            finish_reason=choice.get("finish_reason"),
+            usage=usage,
+            provider="groq",
+        )
     except Exception as exc:
         logger.error("[agent_relay] Erro ao comunicar com Groq: %s", exc)
         return None
@@ -277,61 +287,67 @@ async def _invoke_gemini(req: AgentRelayRequest, api_key: str) -> Optional[Agent
             })
         payload["tools"] = [{"function_declarations": declarations}]
 
-    try:
+    async def _post_gemini_relay():
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
-            if resp.status_code != 200:
-                logger.warning("[agent_relay] Falha na chamada Gemini (%s): %s", resp.status_code, resp.text[:200])
-                return None
+            r = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
+            if r.status_code >= 500 or r.status_code == 429:
+                r.raise_for_status()
+            return r
 
-            data = resp.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                return None
+    try:
+        resp = await gemini_circuit_breaker.call(_post_gemini_relay)
+        if resp.status_code != 200:
+            logger.warning("[agent_relay] Falha na chamada Gemini (%s): %s", resp.status_code, resp.text[:200])
+            return None
 
-            cand = candidates[0]
-            content_obj = cand.get("content", {})
-            parts = content_obj.get("parts", [])
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return None
 
-            text_content = None
-            tool_calls: List[ToolCall] = []
+        cand = candidates[0]
+        content_obj = cand.get("content", {})
+        parts = content_obj.get("parts", [])
 
-            for part in parts:
-                if "text" in part:
-                    text_content = (text_content or "") + part["text"]
-                if "functionCall" in part:
-                    fc = part["functionCall"]
-                    tool_calls.append(
-                        ToolCall(
-                            id=f"call_{uuid.uuid4().hex[:8]}",
-                            type="function",
-                            function=ToolCallFunction(
-                                name=fc.get("name", ""),
-                                arguments=json.dumps(fc.get("args", {})),
-                            ),
-                        )
+        text_content = None
+        tool_calls: List[ToolCall] = []
+
+        for part in parts:
+            if "text" in part:
+                text_content = (text_content or "") + part["text"]
+            if "functionCall" in part:
+                fc = part["functionCall"]
+                tool_calls.append(
+                    ToolCall(
+                        id=f"call_{uuid.uuid4().hex[:8]}",
+                        type="function",
+                        function=ToolCallFunction(
+                            name=fc.get("name", ""),
+                            arguments=json.dumps(fc.get("args", {})),
+                        ),
                     )
+                )
 
-            meta = data.get("usageMetadata", {})
-            usage = AgentUsage(
-                prompt_tokens=meta.get("promptTokenCount", 0),
-                completion_tokens=meta.get("candidatesTokenCount", 0),
-                total_tokens=meta.get("totalTokenCount", 0),
-            )
+        meta = data.get("usageMetadata", {})
+        usage = AgentUsage(
+            prompt_tokens=meta.get("promptTokenCount", 0),
+            completion_tokens=meta.get("candidatesTokenCount", 0),
+            total_tokens=meta.get("totalTokenCount", 0),
+        )
 
-            msg = AgentMessage(
-                role=AgentRole.ASSISTANT,
-                content=text_content,
-                tool_calls=tool_calls if tool_calls else None,
-            )
+        msg = AgentMessage(
+            role=AgentRole.ASSISTANT,
+            content=text_content,
+            tool_calls=tool_calls if tool_calls else None,
+        )
 
-            return AgentRelayResponse(
-                status="ok",
-                message=msg,
-                finish_reason=cand.get("finishReason"),
-                usage=usage,
-                provider="gemini",
-            )
+        return AgentRelayResponse(
+            status="ok",
+            message=msg,
+            finish_reason=cand.get("finishReason"),
+            usage=usage,
+            provider="gemini",
+        )
     except Exception as exc:
         logger.error("[agent_relay] Erro ao comunicar com Gemini: %s", exc)
         return None

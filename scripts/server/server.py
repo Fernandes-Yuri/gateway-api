@@ -237,6 +237,9 @@ def _propagate_db_pool():
         _router._state.db_pool = db_pool
 
 
+DB_POOL_MIN_SIZE = int(os.getenv("DB_POOL_MIN_SIZE", "1"))
+DB_POOL_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "4"))
+
 conteudo_tasks = []
 
 
@@ -246,8 +249,14 @@ async def startup():
     if HAS_POSTGRES:
         for attempt in range(1, 6):
             try:
-                db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10, timeout=10)
-                print(f"[PostgreSQL] Pool de conexões assíncrono estabelecido com sucesso na tentativa {attempt}!")
+                db_pool = await asyncpg.create_pool(
+                    DATABASE_URL,
+                    min_size=DB_POOL_MIN_SIZE,
+                    max_size=DB_POOL_MAX_SIZE,
+                    timeout=5,
+                    command_timeout=15,
+                )
+                print(f"[PostgreSQL] Pool de conexões assíncrono estabelecido com sucesso na tentativa {attempt} (min={DB_POOL_MIN_SIZE}, max={DB_POOL_MAX_SIZE})!")
                 async with db_pool.acquire() as conn:
                     await conn.execute("SELECT 1;")
                 await migrate_legacy_json_devices(db_pool)
