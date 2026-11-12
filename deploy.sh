@@ -127,6 +127,18 @@ sudo install -m 0644 infra/systemd/braga-gateway.service.d/10-private-memory.con
 sudo install -m 0644 infra/systemd/coredump.conf.d/10-braga-privacy.conf /etc/systemd/coredump.conf.d/10-braga-privacy.conf
 # SPEC-04: a unidade agora vive no repositorio (gunicorn com 2 workers Uvicorn).
 sudo install -m 0644 infra/systemd/braga-gateway.service /etc/systemd/system/braga-gateway.service
+if [ -f "infra/systemd/braga-purge.service" ]; then
+    sudo install -m 0644 infra/systemd/braga-purge.service /etc/systemd/system/braga-purge.service
+    sudo install -m 0644 infra/systemd/braga-purge.timer /etc/systemd/system/braga-purge.timer
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now braga-purge.timer 2>/dev/null || true
+fi
+if [ -f "infra/systemd/braga-backup.service" ]; then
+    sudo install -m 0644 infra/systemd/braga-backup.service /etc/systemd/system/braga-backup.service
+    sudo install -m 0644 infra/systemd/braga-backup.timer /etc/systemd/system/braga-backup.timer
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now braga-backup.timer 2>/dev/null || true
+fi
 sudo systemctl daemon-reload
 
 echo "=== [4/4] Reiniciando Braga Gateway ==="
