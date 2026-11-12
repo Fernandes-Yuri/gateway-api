@@ -640,6 +640,43 @@ dataset_module.configure_state(
 from routers import conteudo as conteudo_router
 app.include_router(conteudo_router.router)
 
+# DT-040: Canal de distribuição própria de APK aposentado.
+# Responde 410 Gone uniformemente com a borda Rust para qualquer método HTTP.
+@app.api_route(
+    "/api/app/download",
+    methods=["GET", "POST", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+)
+@app.api_route(
+    "/api/app/latest",
+    methods=["GET", "POST", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+)
+@app.api_route(
+    "/api/app/version",
+    methods=["GET", "POST", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+)
+@app.api_route(
+    "/api/app/notify-update",
+    methods=["GET", "POST", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+)
+def apk_retired_endpoint():
+    return JSONResponse(
+        status_code=410,
+        content={
+            "status": "coming_soon",
+            "distribution_channel": "google_play",
+            "available": False,
+            "message": "Em breve na Google Play Store. A distribuição de APK pelo gateway foi encerrada.",
+        },
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
 # Última camada registrada: inclui respostas antecipadas de CORS e firewall.
 from response_security import ResponseSecurityHeaders
 app.add_middleware(ResponseSecurityHeaders)
