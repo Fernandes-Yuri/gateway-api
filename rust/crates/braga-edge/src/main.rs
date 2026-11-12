@@ -7,7 +7,7 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::header::{HeaderMap, HeaderName, HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::{any, get, patch, post, put};
+use axum::routing::{any, get, post};
 use axum::Router;
 use braga_contracts::{
     compute_imc, compute_occurrence_id, format_agent_closing, height_in_meters,
