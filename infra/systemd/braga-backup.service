@@ -10,7 +10,6 @@ WorkingDirectory=/home/ec2-user/braga-gateway
 EnvironmentFile=-/run/braga-saude/gateway.env
 EnvironmentFile=-/etc/braga-saude/gateway.env
 EnvironmentFile=-/etc/braga-saude/r2-backup.env
-EnvironmentFile=-/home/ec2-user/braga-gateway/.env
 ExecStart=/home/ec2-user/braga-gateway/scripts/maintenance/backup_soberano_r2.sh
 LimitCORE=0
 NoNewPrivileges=true
