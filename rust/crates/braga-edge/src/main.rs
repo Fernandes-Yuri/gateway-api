@@ -836,10 +836,7 @@ async fn proxy_to_backend(
         .keys()
         .filter(|k| {
             let s = k.as_str();
-            s.starts_with("x-internal-")
-                || s == "x-user-id"
-                || s == "x-role"
-                || s == "x-auth-uid"
+            s.starts_with("x-internal-") || s == "x-user-id" || s == "x-role" || s == "x-auth-uid"
         })
         .cloned()
         .collect();
