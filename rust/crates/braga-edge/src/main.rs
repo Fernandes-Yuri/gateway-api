@@ -204,22 +204,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/ready", get(readiness_handler))
         .route("/api/internal/stats", get(internal_stats_handler))
         .route("/", get(landing_handler))
-        .route(
-            "/api/app/latest",
-            get(apk_retired_handler).options(options_cors_handler),
-        )
-        .route(
-            "/api/app/download",
-            get(apk_retired_handler).options(options_cors_handler),
-        )
-        .route(
-            "/api/app/version",
-            get(apk_retired_handler).options(options_cors_handler),
-        )
-        .route(
-            "/api/app/notify-update",
-            post(apk_retired_handler).options(options_cors_handler),
-        )
+        .route("/api/app/latest", any(apk_retired_handler))
+        .route("/api/app/download", any(apk_retired_handler))
+        .route("/api/app/version", any(apk_retired_handler))
+        .route("/api/app/notify-update", any(apk_retired_handler))
         // Fase 4: Áudio Legado Aposentado (410 Gone)
         .route(
             "/synthesize_voice",
@@ -578,7 +566,7 @@ async fn apk_retired_handler() -> impl IntoResponse {
     );
     headers.insert(
         HeaderName::from_static("access-control-allow-methods"),
-        HeaderValue::from_static("GET, OPTIONS, POST"),
+        HeaderValue::from_static("GET, OPTIONS, POST, HEAD"),
     );
     (
         StatusCode::GONE,
@@ -595,7 +583,7 @@ async fn options_cors_handler() -> impl IntoResponse {
     );
     headers.insert(
         HeaderName::from_static("access-control-allow-methods"),
-        HeaderValue::from_static("GET, OPTIONS, POST"),
+        HeaderValue::from_static("GET, OPTIONS, POST, HEAD"),
     );
     headers.insert(
         HeaderName::from_static("access-control-allow-headers"),
@@ -617,7 +605,7 @@ async fn audio_retired_handler() -> impl IntoResponse {
     );
     headers.insert(
         HeaderName::from_static("access-control-allow-methods"),
-        HeaderValue::from_static("GET, OPTIONS, POST"),
+        HeaderValue::from_static("GET, OPTIONS, POST, HEAD"),
     );
     (
         StatusCode::GONE,
@@ -3022,6 +3010,27 @@ mod tests {
         assert!(!is_go_chat_route("/api/catalog/search"));
         assert!(!is_go_chat_route("/api/whatsapp"));
         assert!(!is_go_chat_route("/api/catalog/nutrition"));
+    }
+
+    #[tokio::test]
+    async fn test_apk_retired_handler_returns_410() {
+        let response = apk_retired_handler().await.into_response();
+        assert_eq!(response.status(), StatusCode::GONE);
+        assert_eq!(response.headers().get(CACHE_CONTROL).unwrap(), "no-store");
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap(),
+            "*"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: AppUnavailableResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.status, "coming_soon");
+        assert_eq!(parsed.distribution_channel, "google_play");
+        assert!(!parsed.available);
     }
 
     #[tokio::test]
