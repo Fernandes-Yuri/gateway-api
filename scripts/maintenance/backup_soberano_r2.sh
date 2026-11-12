@@ -14,6 +14,8 @@
 # ==============================================================================
 
 set -euo pipefail
+export LC_ALL=C
+export LC_NUMERIC=C
 
 # --- 1. Lock Exclusivo ---
 LOCK_DIR="/run/braga-saude"
@@ -28,19 +30,35 @@ if ! flock -n 200; then
     exit 0
 fi
 
-# --- 2. Carregamento de Variáveis de Ambiente ---
+# --- 2. Carregamento Seguro de Variáveis de Ambiente (Parser sem 'source') ---
+load_env_file() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+    while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+        local line
+        line="$(echo "$raw_line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            local k="${BASH_REMATCH[1]}"
+            local v="${BASH_REMATCH[2]}"
+            v="$(echo "$v" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            if [[ "$v" =~ ^\"(.*)\"$ ]]; then
+                v="${BASH_REMATCH[1]}"
+            elif [[ "$v" =~ ^\'(.*)\'$ ]]; then
+                v="${BASH_REMATCH[1]}"
+            fi
+            export "${k}=${v}"
+        fi
+    done < "$file"
+}
+
 for ENV_FILE in \
     "/run/braga-saude/gateway.env" \
     "/etc/braga-saude/gateway.env" \
     "/etc/braga-saude/r2-backup.env" \
     "/home/ec2-user/braga-gateway/.env" \
     "./r2-backup.env"; do
-    if [ -f "$ENV_FILE" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$ENV_FILE"
-        set +a
-    fi
+    load_env_file "$ENV_FILE"
 done
 
 # Parâmetros com defaults
