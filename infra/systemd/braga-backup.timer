@@ -1,0 +1,9 @@
+[Unit]
+Description=Timer Diario para Backup Soberano do Braga Saude (03:30 BRT / 06:30 UTC)
+
+[Timer]
+OnCalendar=*-*-* 06:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
