@@ -766,8 +766,12 @@ async def get_vitals(
         if before:
             try:
                 b_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
-                query = "SELECT * FROM vital_signs WHERE user_id = $1 AND deleted_at IS NULL AND measured_at < $2 ORDER BY measured_at DESC, id DESC LIMIT $3 OFFSET $4"
-                rows = await conn.fetch(query, user_id, b_dt, limit, offset)
+                if offset > 0:
+                    query = "SELECT * FROM vital_signs WHERE user_id = $1 AND deleted_at IS NULL AND measured_at < $2 ORDER BY measured_at DESC, id DESC LIMIT $3 OFFSET $4"
+                    rows = await conn.fetch(query, user_id, b_dt, limit, offset)
+                else:
+                    query = "SELECT * FROM vital_signs WHERE user_id = $1 AND deleted_at IS NULL AND measured_at < $2 ORDER BY measured_at DESC, id DESC LIMIT $3"
+                    rows = await conn.fetch(query, user_id, b_dt, limit)
             except Exception:
                 query = "SELECT * FROM vital_signs WHERE user_id = $1 AND deleted_at IS NULL ORDER BY measured_at DESC, id DESC LIMIT $2 OFFSET $3"
                 rows = await conn.fetch(query, user_id, limit, offset)
@@ -845,8 +849,12 @@ async def get_daily_metrics(
         if before_date:
             try:
                 b_d = datetime.strptime(before_date, "%Y-%m-%d").date()
-                query = "SELECT * FROM daily_metrics WHERE user_id = $1 AND date < $2 ORDER BY date DESC LIMIT $3 OFFSET $4"
-                rows = await conn.fetch(query, user_id, b_d, days, offset)
+                if offset > 0:
+                    query = "SELECT * FROM daily_metrics WHERE user_id = $1 AND date < $2 ORDER BY date DESC LIMIT $3 OFFSET $4"
+                    rows = await conn.fetch(query, user_id, b_d, days, offset)
+                else:
+                    query = "SELECT * FROM daily_metrics WHERE user_id = $1 AND date < $2 ORDER BY date DESC LIMIT $3"
+                    rows = await conn.fetch(query, user_id, b_d, days)
             except Exception:
                 query = "SELECT * FROM daily_metrics WHERE user_id = $1 ORDER BY date DESC LIMIT $2 OFFSET $3"
                 rows = await conn.fetch(query, user_id, days, offset)
@@ -990,13 +998,17 @@ async def get_social_feed(
     SELECT sp.id, sp.user_id, sp.post_type, sp.title, sp.description, sp.created_at, sp.edited_at,
            sp.visibility,
            p.full_name as user_name, p.community_nickname as user_nickname, p.avatar_identifier, p.photo_url,
-           (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = sp.id) as reaction_count,
-           EXISTS(SELECT 1 FROM post_reactions pr
-                  WHERE pr.post_id = sp.id AND pr.user_id = $3) as has_user_reacted,
-           (SELECT pr.reaction_type FROM post_reactions pr
-                  WHERE pr.post_id = sp.id AND pr.user_id = $3) as user_reaction_type
+           COALESCE(counts.reaction_count, 0) as reaction_count,
+           (user_react.reaction_type IS NOT NULL) as has_user_reacted,
+           user_react.reaction_type as user_reaction_type
     FROM social_posts sp
     JOIN profiles p ON sp.user_id = p.id
+    LEFT JOIN (
+        SELECT post_id, COUNT(*) as reaction_count
+        FROM post_reactions
+        GROUP BY post_id
+    ) counts ON counts.post_id = sp.id
+    LEFT JOIN post_reactions user_react ON user_react.post_id = sp.id AND user_react.user_id = $3
     WHERE sp.is_visible = TRUE
       AND NOT EXISTS (
           SELECT 1 FROM social_user_blocks sb
@@ -1345,7 +1357,7 @@ async def get_medications(user_id: str, uid: str = Depends(firebase_uid)):
     db_pool = _state.db_pool
     if not db_pool:
         return []
-    query = "SELECT * FROM medications WHERE user_id = $1 ORDER BY created_at DESC;"
+    query = "SELECT * FROM medications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100;"
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(query, user_id)
         result = []
