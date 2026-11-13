@@ -765,7 +765,9 @@ async def get_vitals(
         await require_family_access(conn, uid, user_id)
         if before:
             try:
-                b_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
+                # Trata decodificação de '+' que chega como espaço via URL query string
+                cleaned_before = before.replace(" ", "+").replace("Z", "+00:00")
+                b_dt = datetime.fromisoformat(cleaned_before)
                 if offset > 0:
                     query = "SELECT * FROM vital_signs WHERE user_id = $1 AND deleted_at IS NULL AND measured_at < $2 ORDER BY measured_at DESC, id DESC LIMIT $3 OFFSET $4"
                     rows = await conn.fetch(query, user_id, b_dt, limit, offset)
