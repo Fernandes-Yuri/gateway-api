@@ -13,9 +13,20 @@ O banco de dados relacional do Braga Saúde (PostgreSQL) opera sob o Amazon RDS 
 
 ---
 
-## 2. Comandos Operacionais (AWS CLI)
+## 2. Configuração de Backup e Janela de Retenção Ativa
 
-### 2.1 Identificar o Snapshot Automático mais Recente
+A política de retenção do Amazon RDS para o Braga Saúde foi configurada com:
+- **Identificador:** `braga-saude-database` (Região: `us-east-2`, AZ: `us-east-2c`)
+- **Janela de Retenção Automatizada:** **7 dias** (`BackupRetentionPeriod: 7`)
+- **Janela Diária de Snapshot:** 04:36–05:06 UTC (01:36–02:06 BRT)
+- **Point-in-Time Recovery (PITR):** Ativo continuamente para qualquer segundo dos últimos 7 dias (RPO de ~5 minutos)
+- **Custo Operacional:** **$0.00 / mês** (consumo de ~3,6 GB coberto integralmente pela franquia gratuita de 20 GB de storage do RDS)
+
+---
+
+## 3. Comandos Operacionais (AWS CLI)
+
+### 3.1 Identificar o Snapshot Automático mais Recente
 
 ```bash
 SNAPSHOT_ID=$(aws rds describe-db-snapshots \
@@ -27,7 +38,7 @@ SNAPSHOT_ID=$(aws rds describe-db-snapshots \
 echo "Snapshot identificado para ensaio: $SNAPSHOT_ID"
 ```
 
-### 2.2 Restaurar Snapshot para Instância Temporária de Validação
+### 3.2 Restaurar Snapshot para Instância Temporária de Validação
 
 Provisiona a réplica de teste sob o identificador `braga-db-restore-audit` dentro da mesma VPC e Subnet Group:
 
@@ -49,7 +60,7 @@ aws rds wait db-instance-available \
     --db-instance-identifier "braga-db-restore-audit"
 ```
 
-### 2.3 Obter Endpoint e Validar Integridade
+### 3.3 Obter Endpoint e Validar Integridade
 
 Recuperar o endpoint privado da instância restaurada:
 
@@ -73,7 +84,7 @@ PGPASSWORD="$DB_PASSWORD" psql -h "$RESTORE_ENDPOINT" -U postgres -d braga_produ
 
 ---
 
-## 3. Procedimento de Restauração Pontual (PITR)
+## 4. Procedimento de Restauração Pontual (PITR)
 
 Em caso de corrupção lógica de dados ou falha humana durante manutenção, o RDS permite restaurar o banco para qualquer segundo dentro da janela de retenção (RPO de ~5 minutos):
 
@@ -94,7 +105,7 @@ aws rds wait db-instance-available \
 
 ---
 
-## 4. Cutover e Chaveamento em Cenário Real de Desastre
+## 5. Cutover e Chaveamento em Cenário Real de Desastre
 
 Se a instância primária for irrecuperável e o banco restaurado for promovido para produção:
 
@@ -114,7 +125,7 @@ Se a instância primária for irrecuperável e o banco restaurado for promovido 
 
 ---
 
-## 5. Limpeza de Instâncias Temporárias de Ensaio
+## 6. Limpeza de Instâncias Temporárias de Ensaio
 
 Após a conclusão dos testes de auditoria, eliminar a instância temporária imediatamente sem gerar snapshot final para evitar custos:
 
