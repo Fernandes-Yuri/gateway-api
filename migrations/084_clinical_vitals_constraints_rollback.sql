@@ -1,0 +1,10 @@
+ALTER TABLE vital_signs DROP CONSTRAINT IF EXISTS vital_signs_systolic_range;
+ALTER TABLE vital_signs DROP CONSTRAINT IF EXISTS vital_signs_diastolic_range;
+ALTER TABLE vital_signs DROP CONSTRAINT IF EXISTS vital_signs_heart_rate_range;
+ALTER TABLE vital_signs DROP CONSTRAINT IF EXISTS vital_signs_oxygen_range;
+ALTER TABLE vital_signs DROP CONSTRAINT IF EXISTS vital_signs_glucose_range;
+ALTER TABLE vital_signs DROP CONSTRAINT IF EXISTS vital_signs_hydration_range;
+ALTER TABLE vital_signs DROP CONSTRAINT IF EXISTS vital_signs_at_least_one_metric;
+ALTER TABLE biometrics DROP CONSTRAINT IF EXISTS biometrics_weight_range;
+ALTER TABLE biometrics DROP CONSTRAINT IF EXISTS biometrics_height_range;
+ALTER TABLE biometrics DROP CONSTRAINT IF EXISTS biometrics_imc_range;
