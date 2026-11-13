@@ -6,7 +6,7 @@ O banco de dados relacional do Braga Saúde (PostgreSQL) opera sob o Amazon RDS 
 
 ## 1. Diretrizes de Segurança e Não-Interrupção
 
-1. **Princípio do Isolamento:** Nunca execute um procedimento de restauração de teste ou ensaio operacional sobre o identificador da instância produtiva mestre (`braga-db-production`).
+1. **Princípio do Isolamento:** Nunca execute um procedimento de restauração de teste ou ensaio operacional sobre o identificador da instância produtiva mestre (`braga-saude-database`).
 2. **Criptografia Preservada:** Toda restauração de snapshot ou PITR (Point-in-Time Recovery) deve manter a criptografia com a chave KMS original.
 3. **Contenção de Custos:** Instâncias provisionadas para ensaio de recuperação devem ser sumariamente destruídas após a emissão do parecer de integridade, impedindo faturamento ocioso no RDS.
 4. **Proteção de Dados Sensíveis:** O ensaio valida estrutura de esquema, integridade referencial e leitura de contagens sem exportar dados clínicos de pacientes para arquivos locais ou ambientes externos.
@@ -19,7 +19,7 @@ O banco de dados relacional do Braga Saúde (PostgreSQL) opera sob o Amazon RDS 
 
 ```bash
 SNAPSHOT_ID=$(aws rds describe-db-snapshots \
-    --db-instance-identifier "braga-db-production" \
+    --db-instance-identifier "braga-saude-database" \
     --snapshot-type automated \
     --query "reverse(sort_by(DBSnapshots, &SnapshotCreateTime))[0].DBSnapshotIdentifier" \
     --output text)
@@ -82,7 +82,7 @@ Em caso de corrupção lógica de dados ou falha humana durante manutenção, o 
 RESTORE_TIME="2026-11-11T14:30:00Z"
 
 aws rds restore-db-instance-to-point-in-time \
-    --source-db-instance-identifier "braga-db-production" \
+    --source-db-instance-identifier "braga-saude-database" \
     --target-db-instance-identifier "braga-db-pitr-recovery" \
     --restore-time "$RESTORE_TIME" \
     --db-instance-class "db.t4g.micro" \

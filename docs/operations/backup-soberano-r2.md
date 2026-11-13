@@ -18,7 +18,8 @@ Este documento estabelece a arquitetura técnica, isolamento de credenciais, aut
 
 ## 2. Componentes e Estrutura de Arquivos
 
-- **Script principal:** `scripts/maintenance/backup_soberano_r2.sh`
+- **Script principal de backup:** `scripts/maintenance/backup_soberano_r2.sh`
+- **Script de ensaio e validação de restauração:** `scripts/maintenance/test_restore_verification.sh`
 - **Unit Systemd Service:** `infra/systemd/braga-backup.service`
 - **Unit Systemd Timer:** `infra/systemd/braga-backup.timer` (agendado diariamente para 03:30 BRT / 06:30 UTC)
 - **Arquivo de segredos isolado na EC2:** `/etc/braga-saude/r2-backup.env` (`chmod 600`, proprietário `ec2-user:ec2-user`)
@@ -31,7 +32,9 @@ CF_R2_SECRET_ACCESS_KEY="<TOKEN_SECRET_ACCESS_KEY>"
 CF_R2_ENDPOINT_URL="https://<ACCOUNT_ID>.r2.cloudflarestorage.com"
 CF_R2_BUCKET_NAME="braga-saude"
 BACKUP_ENCRYPTION_PASSPHRASE="<CHAVE_MESTRA_AES256>"
-BACKUP_RETENTION_DAYS=7
+BACKUP_DAILY_RETENTION_DAYS=7
+BACKUP_WEEKLY_RETENTION_DAYS=28
+BACKUP_WEEKLY_DAY=7
 BACKUP_PREFIX="backups"
 ```
 
@@ -89,3 +92,25 @@ Para restaurar em uma nova instância ou container PostgreSQL:
 ```bash
 pg_restore -h <HOST_NOVO> -U <USUARIO_NOVO> -d <BANCO_NOVO> -v --clean --if-exists braga_restaurado.dump
 ```
+
+---
+
+## 4. Auditoria Automatizada e Ensaio Periódico de DR
+
+Para garantir que os backups gerados são 100% recuperáveis e que nenhuma regressão de schema ocorra sem ser detectada, utilize o utilitário de validação automatizada:
+
+```bash
+# Executado apontando estritamente para uma base de testes separada:
+TEST_RESTORE_DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/braga_audit_test" \
+BACKUP_ENCRYPTION_PASSPHRASE="sua_chave_aqui" \
+SOURCE_DATABASE_URL="postgresql://readonly:pass@.../braga_production" \
+./scripts/maintenance/test_restore_verification.sh
+```
+
+O script executa:
+1. Verificação da trava de segurança (recusa executar se o alvo for a produção).
+2. Download do último backup do Cloudflare R2 e verificação do SHA-256.
+3. Descriptografia e restauração no banco de teste.
+4. Auditoria de presença das tabelas do schema clínico (`profiles`, `vital_signs`, `care_plans`, `medications`, etc.).
+5. Comparação volumétrica de contagem de linhas entre a origem e o banco restaurado.
+6. Emissão de parecer de integridade e descarte imediato dos artefatos descriptografados em disco.
