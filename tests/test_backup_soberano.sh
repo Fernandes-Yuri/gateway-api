@@ -27,7 +27,8 @@ chmod +x "$MOCK_BIN/pg_dump"
 cat << "EOF" > "$MOCK_BIN/aws"
 #!/usr/bin/env bash
 if [ "$1" = "s3" ] && [ "$2" = "cp" ]; then
-    cp "$3" "$CP_DEST/"
+    DEST_NAME="$(basename "$4")"
+    cp "$3" "$CP_DEST/$DEST_NAME"
 elif [ "$1" = "s3" ] && [ "$2" = "ls" ]; then
     echo "2026-11-12 14:00:00 2048 braga_backup_20261112_140000.dump.enc"
 fi
@@ -59,8 +60,22 @@ openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 \
     -in "$ENC_FILE" -out "$TEST_DIR/decrypted.dump"
 
 if grep -q "PGDUMP_MAGIC_HEADER_BRAGA_SAUDE_VERIFIED" "$TEST_DIR/decrypted.dump"; then
-    echo "=== TESTE DE BACKUP SOBERANO: SUCESSO ABSOLUTO ==="
+    echo "=== TESTE DE BACKUP SOBERANO (DIÁRIO): SUCESSO ==="
 else
     echo "=== TESTE DE BACKUP SOBERANO: FALHA NA RECUPERAÇÃO ===" >&2
     exit 1
 fi
+
+# 3. Testa despacho da cópia semanal quando hoje coincide com BACKUP_WEEKLY_DAY
+export BACKUP_WEEKLY_DAY="$(date -u +%u)"
+"$SCRIPT_PATH"
+
+WEEKLY_FILE=$(ls "$TEST_DIR"/braga_backup_weekly_*.dump.enc | head -n 1 || true)
+if [ -n "$WEEKLY_FILE" ] && [ -f "$WEEKLY_FILE" ]; then
+    echo "=== TESTE DE BACKUP SOBERANO (SEMANAL GFS): SUCESSO ==="
+else
+    echo "=== TESTE DE BACKUP SOBERANO: FALHA AO GERAR CÓPIA SEMANAL GFS ===" >&2
+    exit 1
+fi
+
+echo "=== TESTE DE BACKUP SOBERANO: SUCESSO ABSOLUTO ==="

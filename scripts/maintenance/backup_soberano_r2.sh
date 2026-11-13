@@ -61,8 +61,10 @@ for ENV_FILE in \
     load_env_file "$ENV_FILE"
 done
 
-# Parâmetros com defaults
-BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
+# Parâmetros com defaults (GFS: 7 diárias + 4 semanais)
+BACKUP_DAILY_RETENTION_DAYS="${BACKUP_DAILY_RETENTION_DAYS:-${BACKUP_RETENTION_DAYS:-7}}"
+BACKUP_WEEKLY_RETENTION_DAYS="${BACKUP_WEEKLY_RETENTION_DAYS:-28}" # 4 semanas = 28 dias
+BACKUP_WEEKLY_DAY="${BACKUP_WEEKLY_DAY:-7}" # 7 = Domingo (ISO 8601: 1=Segunda, 7=Domingo)
 BACKUP_PREFIX="${BACKUP_PREFIX:-backups}"
 export PGSSLMODE="${PGSSLMODE:-require}"
 
@@ -181,26 +183,68 @@ aws s3 ls "s3://${CF_R2_BUCKET_NAME}/${BACKUP_PREFIX}/${ENC_FILENAME}" \
 
 echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] [INFO] Upload confirmado no Cloudflare R2."
 
-# --- 8. Política de Rotação Automática (Expurgo > RETENTION_DAYS) ---
-echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] [INFO] Executando rotação de retenção (${BACKUP_RETENTION_DAYS} dias)..."
-CUTOFF_STR=$(date -u -d "${BACKUP_RETENTION_DAYS} days ago" +"%Y%m%d%H%M%S" 2>/dev/null || date -u -v-"${BACKUP_RETENTION_DAYS}"d +"%Y%m%d%H%M%S" 2>/dev/null || echo "")
+# Se hoje for o dia de backup semanal (default: domingo/7), despacha cópia semanal com retenção estendida
+DAY_OF_WEEK=$(date -u +%u)
+WEEKLY_DISPATCHED="false"
+WEEKLY_FILENAME=""
 
-if [ -n "$CUTOFF_STR" ]; then
+if [ "$DAY_OF_WEEK" -eq "$BACKUP_WEEKLY_DAY" ]; then
+    WEEKLY_FILENAME="braga_backup_weekly_${TIMESTAMP}.dump.enc"
+    WEEKLY_SHA_FILENAME="${WEEKLY_FILENAME}.sha256"
+    echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] [INFO] Hoje é domingo (dia de ciclo semanal). Despachando cópia semanal (retenção ${BACKUP_WEEKLY_RETENTION_DAYS} dias)..."
+
+    AWS_ACCESS_KEY_ID="$CF_R2_ACCESS_KEY_ID" \
+    AWS_SECRET_ACCESS_KEY="$CF_R2_SECRET_ACCESS_KEY" \
+    aws s3 cp "$ENC_FILE_PATH" "s3://${CF_R2_BUCKET_NAME}/${BACKUP_PREFIX}/${WEEKLY_FILENAME}" \
+        --endpoint-url "$CF_R2_ENDPOINT_URL" \
+        --region auto \
+        --no-progress
+
+    AWS_ACCESS_KEY_ID="$CF_R2_ACCESS_KEY_ID" \
+    AWS_SECRET_ACCESS_KEY="$CF_R2_SECRET_ACCESS_KEY" \
+    aws s3 cp "$SHA_FILE_PATH" "s3://${CF_R2_BUCKET_NAME}/${BACKUP_PREFIX}/${WEEKLY_SHA_FILENAME}" \
+        --endpoint-url "$CF_R2_ENDPOINT_URL" \
+        --region auto \
+        --no-progress
+
+    WEEKLY_DISPATCHED="true"
+    echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] [INFO] Cópia semanal confirmada no Cloudflare R2: ${WEEKLY_FILENAME}."
+fi
+
+# --- 8. Política de Rotação Automática GFS (7 Diárias + 4 Semanais) ---
+echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] [INFO] Executando rotação GFS (Diárias: ${BACKUP_DAILY_RETENTION_DAYS} dias, Semanais: ${BACKUP_WEEKLY_RETENTION_DAYS} dias)..."
+CUTOFF_DAILY=$(date -u -d "${BACKUP_DAILY_RETENTION_DAYS} days ago" +"%Y%m%d%H%M%S" 2>/dev/null || date -u -v-"${BACKUP_DAILY_RETENTION_DAYS}"d +"%Y%m%d%H%M%S" 2>/dev/null || echo "")
+CUTOFF_WEEKLY=$(date -u -d "${BACKUP_WEEKLY_RETENTION_DAYS} days ago" +"%Y%m%d%H%M%S" 2>/dev/null || date -u -v-"${BACKUP_WEEKLY_RETENTION_DAYS}"d +"%Y%m%d%H%M%S" 2>/dev/null || echo "")
+
+if [ -n "$CUTOFF_DAILY" ] || [ -n "$CUTOFF_WEEKLY" ]; then
     REMOTE_FILES=$(AWS_ACCESS_KEY_ID="$CF_R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$CF_R2_SECRET_ACCESS_KEY" \
         aws s3 ls "s3://${CF_R2_BUCKET_NAME}/${BACKUP_PREFIX}/" \
             --endpoint-url "$CF_R2_ENDPOINT_URL" \
-            --region auto | awk '{print $4}' | grep -E '^braga_backup_[0-9]{8}_[0-9]{6}\.dump\.enc$' || true)
+            --region auto | awk '{print $4}' | grep -E '^braga_backup_(weekly_)?[0-9]{8}_[0-9]{6}\.dump\.enc$' || true)
 
     for item in $REMOTE_FILES; do
-        item_ts=$(echo "$item" | sed -E 's/^braga_backup_([0-9]{8})_([0-9]{6})\.dump\.enc$/\1\2/')
-        if [ -n "$item_ts" ] && [ "$item_ts" -lt "$CUTOFF_STR" ]; then
-            echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] [INFO] Expurgo de ciclo: removendo ${item} e ${item}.sha256 do Cloudflare R2..."
-            AWS_ACCESS_KEY_ID="$CF_R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$CF_R2_SECRET_ACCESS_KEY" \
-                aws s3 rm "s3://${CF_R2_BUCKET_NAME}/${BACKUP_PREFIX}/${item}" \
-                    --endpoint-url "$CF_R2_ENDPOINT_URL" --region auto --quiet || true
-            AWS_ACCESS_KEY_ID="$CF_R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$CF_R2_SECRET_ACCESS_KEY" \
-                aws s3 rm "s3://${CF_R2_BUCKET_NAME}/${BACKUP_PREFIX}/${item}.sha256" \
-                    --endpoint-url "$CF_R2_ENDPOINT_URL" --region auto --quiet || true
+        if [[ "$item" =~ ^braga_backup_weekly_([0-9]{8})_([0-9]{6})\.dump\.enc$ ]]; then
+            item_ts="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+            if [ -n "$CUTOFF_WEEKLY" ] && [ "$item_ts" -lt "$CUTOFF_WEEKLY" ]; then
+                echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] [INFO] Expurgo semanal GFS (> ${BACKUP_WEEKLY_RETENTION_DAYS} dias): removendo ${item}..."
+                AWS_ACCESS_KEY_ID="$CF_R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$CF_R2_SECRET_ACCESS_KEY" \
+                    aws s3 rm "s3://${CF_R2_BUCKET_NAME}/${BACKUP_PREFIX}/${item}" \
+                        --endpoint-url "$CF_R2_ENDPOINT_URL" --region auto --quiet || true
+                AWS_ACCESS_KEY_ID="$CF_R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$CF_R2_SECRET_ACCESS_KEY" \
+                    aws s3 rm "s3://${CF_R2_BUCKET_NAME}/${BACKUP_PREFIX}/${item}.sha256" \
+                        --endpoint-url "$CF_R2_ENDPOINT_URL" --region auto --quiet || true
+            fi
+        elif [[ "$item" =~ ^braga_backup_([0-9]{8})_([0-9]{6})\.dump\.enc$ ]]; then
+            item_ts="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+            if [ -n "$CUTOFF_DAILY" ] && [ "$item_ts" -lt "$CUTOFF_DAILY" ]; then
+                echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] [INFO] Expurgo diário GFS (> ${BACKUP_DAILY_RETENTION_DAYS} dias): removendo ${item}..."
+                AWS_ACCESS_KEY_ID="$CF_R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$CF_R2_SECRET_ACCESS_KEY" \
+                    aws s3 rm "s3://${CF_R2_BUCKET_NAME}/${BACKUP_PREFIX}/${item}" \
+                        --endpoint-url "$CF_R2_ENDPOINT_URL" --region auto --quiet || true
+                AWS_ACCESS_KEY_ID="$CF_R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$CF_R2_SECRET_ACCESS_KEY" \
+                    aws s3 rm "s3://${CF_R2_BUCKET_NAME}/${BACKUP_PREFIX}/${item}.sha256" \
+                        --endpoint-url "$CF_R2_ENDPOINT_URL" --region auto --quiet || true
+            fi
         fi
     done
 fi
@@ -211,6 +255,8 @@ cat << EOF > "${STATUS_FILE}.tmp"
 {
   "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
   "filename": "${ENC_FILENAME}",
+  "weekly_dispatched": ${WEEKLY_DISPATCHED},
+  "weekly_filename": "${WEEKLY_FILENAME}",
   "size_bytes": ${FILE_SIZE},
   "size_mb": ${FILE_SIZE_MB},
   "sha256": "${SHA256_HASH}",
