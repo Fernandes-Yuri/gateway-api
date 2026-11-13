@@ -3,8 +3,6 @@ Teste de Atomicidade Transacional: Força erro no meio da operação e comprova 
 Arquivo: scripts/server/test_transaction_atomicity.py
 """
 from contextlib import asynccontextmanager
-import json
-import os
 from pathlib import Path
 import sys
 import unittest
