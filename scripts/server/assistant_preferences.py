@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 from fastapi import Depends, HTTPException
 from api_identity import firebase_uid
+from services.circuit_breaker import post_openai_chat_with_failover
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assistant_preferences (
@@ -159,7 +160,12 @@ async def interpret(client, url, token, model, text, pending):
                    response_format={'type': 'json_object'}, messages=[
         dict(role='system', content=INTERPRET_SYSTEM),
         dict(role='user', content=json.dumps({'message': text, 'pending': pending}, ensure_ascii=False))])
-    response = await client.post(url, headers={'Authorization': f'Bearer {token}'}, json=payload)
+    response = await post_openai_chat_with_failover(
+        client,
+        groq_url=url,
+        groq_token=token,
+        payload=payload,
+    )
     response.raise_for_status()
     data = response.json()['choices'][0]
     if data.get('finish_reason') != 'stop':

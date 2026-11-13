@@ -16,6 +16,13 @@ from orb_router import (recall as _recall, remember as _remember,
                         SYMPTOM_KINDS as _SYMPTOM_KINDS,
                         ESCALATION_SUFFIX as _ESCALATION_SUFFIX)
 from orb_semantics import validated_label, is_current_emergency, original_text, conversation_only, validate_envelope
+from services.circuit_breaker import (
+    _cfg_float,
+    _cfg_str,
+    gemini_circuit_breaker,
+    post_openai_chat_with_failover,
+    sanitize_openai_payload_for_gemini,
+)
 from trace_llm import trace_llm as _trace
 
 ALLOWED_ACTIONS = {
@@ -65,7 +72,7 @@ async def _use(semaphore):
         yield
 
 
-async def stream_content(client, url, token, payload, usage=None):
+async def _stream_sse(client, url, token, payload, usage=None):
     """Read SSE deltas; an interrupted or truncated generation is never a success."""
     async with client.stream('POST', url, json={**payload, 'stream': True},
                              headers={'Authorization': f'Bearer {token}'}) as response:
@@ -96,12 +103,57 @@ async def stream_content(client, url, token, payload, usage=None):
             raise ValueError('Interrupted stream')
 
 
+async def stream_content(client, url, token, payload, usage=None):
+    """Tenta Gemini primário (corte 1.6s + cache global) e cai imediatamente para Groq no fallback."""
+    gemini_key = _cfg_str('GEMINI_API_KEY', 'GEMINI_API_KEY')
+    if gemini_key and not gemini_circuit_breaker.is_open:
+        gemini_url = _cfg_str(
+            'GEMINI_OPENAI_URL',
+            'GEMINI_OPENAI_URL',
+            'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+        )
+        gemini_model = _cfg_str('GEMINI_MODEL_CHAT', 'GEMINI_MODEL_CHAT', 'gemini-3.8-flash')
+        fast_timeout = _cfg_float('GEMINI_FAST_TIMEOUT', 'GEMINI_FAST_TIMEOUT', 1.6)
+        gemini_payload = sanitize_openai_payload_for_gemini(payload, gemini_model, stream=True)
+
+        async def _collect_gemini_stream():
+            deltas = []
+            gemini_usage = {}
+
+            async def _read_all():
+                async for delta in _stream_sse(client, gemini_url, gemini_key, gemini_payload, gemini_usage):
+                    deltas.append(delta)
+
+            await asyncio.wait_for(_read_all(), timeout=fast_timeout)
+            return deltas, gemini_usage
+
+        try:
+            gemini_deltas, gemini_usage = await gemini_circuit_breaker.call(_collect_gemini_stream)
+            if usage is not None and gemini_usage:
+                usage.update(gemini_usage)
+            for delta in gemini_deltas:
+                yield delta
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}".strip(": ")
+            logging.warning('[ws_orb] Gemini stream falhou (%s). Fallback imediato para Groq.', reason)
+
+    async for delta in _stream_sse(client, url, token, payload, usage):
+        yield delta
+
+
 async def _classify_label(client, url, token, model, prompt):
     """Passo 1 (Fase 3): 1 token de intenção. Falha segura = CONVERSA."""
     from orb_llm import build_classify_payload, parse_label
     try:
-        resp = await client.post(url, json=build_classify_payload(model, prompt),
-                                 headers={'Authorization': f'Bearer {token}'})
+        resp = await post_openai_chat_with_failover(
+            client,
+            groq_url=url,
+            groq_token=token,
+            payload=build_classify_payload(model, prompt),
+        )
         resp.raise_for_status()
         data = resp.json()
         return parse_label(data['choices'][0]['message']['content'])

@@ -13,6 +13,7 @@ Na geriatria, alucinação de IA ou erro de OCR em dosagem (ex: confundir 5mg co
      frequência, o campo retornado DEVE vir OBRIGATORIAMENTE VAZIO (""), com divergent: true
      e requires_human_fill: true. O backend NUNCA chuta um valor.
 """
+import asyncio
 import base64
 import inspect
 import json
@@ -28,6 +29,7 @@ from config import (
     GEMINI_API_KEY,
     GEMINI_API_URL,
     GEMINI_MODEL_VISION,
+    GEMINI_VISION_TIMEOUT,
     GROQ_API_KEY,
     GROQ_API_URL,
     GROQ_MODEL_VISION,
@@ -258,8 +260,8 @@ def _parse_json_medications(content: str) -> list[dict]:
 
 
 async def _call_gemini_vision(image_bytes: bytes, prompt: str, content_type: str = "image/jpeg") -> Optional[str]:
-    """Executa inferência de visão multimodal no Google Gemini 1.5 Flash via REST."""
-    if not GEMINI_API_KEY:
+    """Executa inferência de visão multimodal no Google Gemini via REST com timeout adaptativo (6.0s)."""
+    if not GEMINI_API_KEY or gemini_circuit_breaker.is_open:
         return None
     b64_data = base64.b64encode(image_bytes).decode("utf-8")
     valid_mimes = ["image/jpeg", "image/png", "image/webp", "application/pdf"]
@@ -283,26 +285,28 @@ async def _call_gemini_vision(image_bytes: bytes, prompt: str, content_type: str
         },
     }
     url = f"{GEMINI_API_URL}?key={GEMINI_API_KEY}"
+
     async def _post_gemini():
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
-            if r.status_code >= 500 or r.status_code == 429:
-                r.raise_for_status()
+        async with httpx.AsyncClient(timeout=GEMINI_VISION_TIMEOUT) as client:
+            r = await asyncio.wait_for(
+                client.post(url, json=payload, headers={"Content-Type": "application/json"}),
+                timeout=GEMINI_VISION_TIMEOUT,
+            )
+            if r.status_code != 200:
+                detail = getattr(r, "text", "")[:200]
+                raise RuntimeError(f"Gemini HTTP {r.status_code}: {detail}")
             return r
 
     try:
         resp = await gemini_circuit_breaker.call(_post_gemini)
-        if resp.status_code == 200:
-            data = resp.json()
-            candidates = data.get("candidates", [])
-            if candidates and "content" in candidates[0]:
-                parts = candidates[0]["content"].get("parts", [])
-                if parts and "text" in parts[0]:
-                    return parts[0]["text"].strip()
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if candidates and "content" in candidates[0]:
+            parts = candidates[0]["content"].get("parts", [])
+            if parts and "text" in parts[0]:
+                return parts[0]["text"].strip()
         logger.warning(
-            "[gemini_vision] Falha HTTP %s: %s (modelo: %s)",
-            resp.status_code,
-            resp.text,
+            "[gemini_vision] Resposta sem conteúdo válido (modelo: %s)",
             GEMINI_MODEL_VISION,
         )
     except CircuitBreakerOpenException as exc:
