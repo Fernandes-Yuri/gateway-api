@@ -308,19 +308,21 @@ async def delete_medication(
         if not med:
             raise HTTPException(404, "Medicamento não encontrado.")
 
-        # Remove logs em cascata e o medicamento
-        await conn.execute("DELETE FROM medication_logs WHERE medication_id = $1::uuid", medication_id)
-        await conn.execute("DELETE FROM medications WHERE id = $1::uuid AND user_id = $2", medication_id, patient_id)
-
         # Auditoria LGPD
         actor_name = await conn.fetchval("SELECT full_name FROM profiles WHERE id=$1", uid) or "Usuário autorizado"
         audit_details = {"medication_id": medication_id, "name": med["name"], "deleted_by": uid}
-        await conn.execute(
-            """INSERT INTO care_audit_trail(patient_id, actor_id, actor_name, action_type, details)
-               VALUES ($1, $2, $3, 'MEDICATION_DELETED', $4::jsonb)""",
-            patient_id, uid, actor_name, json.dumps(audit_details),
-        )
 
+        # Transação atômica: remoção de logs, do medicamento e persistência da trilha LGPD
+        async with conn.transaction():
+            await conn.execute("DELETE FROM medication_logs WHERE medication_id = $1::uuid", medication_id)
+            await conn.execute("DELETE FROM medications WHERE id = $1::uuid AND user_id = $2", medication_id, patient_id)
+            await conn.execute(
+                """INSERT INTO care_audit_trail(patient_id, actor_id, actor_name, action_type, details)
+                   VALUES ($1, $2, $3, 'MEDICATION_DELETED', $4::jsonb)""",
+                patient_id, uid, actor_name, json.dumps(audit_details),
+            )
+
+        # Operações com efeitos colaterais fora do banco ocorrem estritamente pós-commit
         photo_url = med.get("photo_reference_url")
         owned = False
         if photo_url:
