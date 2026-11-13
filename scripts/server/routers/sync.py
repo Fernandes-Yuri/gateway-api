@@ -999,8 +999,10 @@ async def get_social_feed(
            sp.visibility,
            p.full_name as user_name, p.community_nickname as user_nickname, p.avatar_identifier, p.photo_url,
            COALESCE(counts.reaction_count, 0) as reaction_count,
-           (user_react.reaction_type IS NOT NULL) as has_user_reacted,
-           user_react.reaction_type as user_reaction_type
+           EXISTS(SELECT 1 FROM post_reactions pr
+                  WHERE pr.post_id = sp.id AND pr.user_id = $3) as has_user_reacted,
+           (SELECT pr.reaction_type FROM post_reactions pr
+                  WHERE pr.post_id = sp.id AND pr.user_id = $3) as user_reaction_type
     FROM social_posts sp
     JOIN profiles p ON sp.user_id = p.id
     LEFT JOIN (
@@ -1008,7 +1010,6 @@ async def get_social_feed(
         FROM post_reactions
         GROUP BY post_id
     ) counts ON counts.post_id = sp.id
-    LEFT JOIN post_reactions user_react ON user_react.post_id = sp.id AND user_react.user_id = $3
     WHERE sp.is_visible = TRUE
       AND NOT EXISTS (
           SELECT 1 FROM social_user_blocks sb

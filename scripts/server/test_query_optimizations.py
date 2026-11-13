@@ -75,7 +75,7 @@ class TestQueryOptimizations(unittest.TestCase):
         client = _create_test_client(conn, uid=self.user_id)
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        response = client.get(f"/api/sync/vitals/{self.user_id}?before={now_iso}&limit=20&offset=0")
+        response = client.get(f"/api/vitals/{self.user_id}?before={now_iso}&limit=20&offset=0")
         self.assertEqual(response.status_code, 200)
         self.assertIsNotNone(executed_query)
         self.assertIn("measured_at < $2", executed_query)
@@ -96,7 +96,7 @@ class TestQueryOptimizations(unittest.TestCase):
         conn.fetchval = AsyncMock(return_value=True)  # require_owner_or_caregiver
         client = _create_test_client(conn, uid=self.user_id)
 
-        response = client.get(f"/api/sync/daily-metrics/{self.user_id}?before_date=2026-11-10&days=7&offset=0")
+        response = client.get(f"/api/metrics/daily/{self.user_id}?before_date=2026-11-10&days=7&offset=0")
         self.assertEqual(response.status_code, 200)
         self.assertIsNotNone(executed_query)
         self.assertIn("date < $2", executed_query)
