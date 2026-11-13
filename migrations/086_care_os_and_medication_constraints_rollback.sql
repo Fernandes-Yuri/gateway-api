@@ -1,0 +1,9 @@
+ALTER TABLE medications DROP CONSTRAINT IF EXISTS medications_dosage_mg_range;
+ALTER TABLE medications DROP CONSTRAINT IF EXISTS medications_frequency_hours_range;
+ALTER TABLE medications DROP CONSTRAINT IF EXISTS medications_duration_days_range;
+ALTER TABLE medications DROP CONSTRAINT IF EXISTS medications_ean_barcode_format;
+ALTER TABLE symptoms_diary DROP CONSTRAINT IF EXISTS symptoms_diary_sleep_quality_range;
+ALTER TABLE symptoms_diary DROP CONSTRAINT IF EXISTS symptoms_diary_disposition_range;
+ALTER TABLE symptoms_diary DROP CONSTRAINT IF EXISTS symptoms_diary_input_method_enum;
+ALTER TABLE symptoms_diary DROP CONSTRAINT IF EXISTS symptoms_diary_text_length;
+ALTER TABLE consultations DROP CONSTRAINT IF EXISTS consultations_status_enum;
