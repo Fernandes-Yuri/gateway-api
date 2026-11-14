@@ -23,6 +23,7 @@ from schemas.medications import (
     MedicationCreate,
     PrescriptionAnalysisResponse,
 )
+from services.circuit_breaker import gemini_circuit_breaker
 from services.prescription_analyzer import (
     _call_gemini_vision,
     analyze_pdf_prescription,
@@ -599,6 +600,12 @@ class TestPrescriptionAnalysisEndpoint(unittest.TestCase):
 
 class TestGeminiVisionPriorityAndFallback(unittest.IsolatedAsyncioTestCase):
     """Testes unitários de prioridade do Gemini 1.5 Flash e fallback resiliente para Groq Vision."""
+
+    def setUp(self):
+        gemini_circuit_breaker.reset()
+
+    def tearDown(self):
+        gemini_circuit_breaker.reset()
 
     async def test_gemini_prioritario_quando_chave_presente(self):
         """Gemini 1.5 Flash deve ser chamado com prioridade quando GEMINI_API_KEY estiver configurada."""

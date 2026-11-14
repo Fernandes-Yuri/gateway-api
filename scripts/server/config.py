@@ -94,12 +94,27 @@ GROQ_MODEL_VISION = os.getenv("GROQ_MODEL_VISION", "llama-3.2-11b-vision-instant
 GROQ_API_KEY_CHAT = os.getenv("GROQ_API_KEY_CHAT") or GROQ_API_KEY
 
 # ------------------------------------------------------------------
-# Google Gemini (Visão Multimodal para Receitas Médicas).
-# Endpoint REST oficial do Google AI Studio; usa Gemini 1.5 Flash.
+# Google Gemini (IA Primária com fallback rápido para Groq).
+# Endpoint REST oficial do Google AI Studio e endpoint compatível OpenAI.
+# Visão mantém default "gemini-1.5-flash" (overridable via env); Chat usa "gemini-3.8-flash".
 # ------------------------------------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL_VISION = os.getenv("GEMINI_MODEL_VISION", "gemini-1.5-flash")
+GEMINI_MODEL_CHAT = os.getenv("GEMINI_MODEL_CHAT", "gemini-3.8-flash")
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_VISION}:generateContent"
+GEMINI_OPENAI_URL = os.getenv(
+    "GEMINI_OPENAI_URL",
+    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+)
+GEMINI_FAST_TIMEOUT = float(os.getenv("GEMINI_FAST_TIMEOUT", "1.6"))
+GEMINI_VISION_TIMEOUT = float(os.getenv("GEMINI_VISION_TIMEOUT", "6.0"))
+GEMINI_PROBE_INTERVAL_S = float(os.getenv("GEMINI_PROBE_INTERVAL_S", "300.0"))
+
+# ------------------------------------------------------------------
+# Alertas operacionais (Sentinela Braga Bot via Telegram).
+# ------------------------------------------------------------------
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 
 # ------------------------------------------------------------------
@@ -158,6 +173,7 @@ def reload_secrets(*, force_reload: bool = True, override: bool = True) -> dict[
     global SERVICE_TOKEN, ADMIN_TOTP_SECRET, GROQ_API_KEY, GROQ_API_KEY_CHAT
     global GEMINI_API_KEY, SERVICE_ACCOUNT_PATH, PUBLIC_API_BASE_URL, RECAPTCHA_SECRET
     global USE_AWS_SECRETS, AWS_SSM_PREFIX, DATA_ENCRYPTION_KEY, BLIND_INDEX_PEPPER
+    global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
     loaded = load_secrets(force_reload=force_reload, override=override)
     import secrets_loader as _sl
@@ -174,6 +190,8 @@ def reload_secrets(*, force_reload: bool = True, override: bool = True) -> dict[
     GROQ_API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN")
     GROQ_API_KEY_CHAT = os.getenv("GROQ_API_KEY_CHAT") or GROQ_API_KEY
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
     SERVICE_ACCOUNT_PATH = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
     PUBLIC_API_BASE_URL = (os.getenv("PUBLIC_API_BASE_URL") or "").rstrip("/")
     RECAPTCHA_SECRET = os.getenv("RECAPTCHA_SECRET")
@@ -193,7 +211,12 @@ __all__ = [
     "DEVICES_PATH",
     "GEMINI_API_KEY",
     "GEMINI_API_URL",
+    "GEMINI_FAST_TIMEOUT",
+    "GEMINI_MODEL_CHAT",
     "GEMINI_MODEL_VISION",
+    "GEMINI_OPENAI_URL",
+    "GEMINI_PROBE_INTERVAL_S",
+    "GEMINI_VISION_TIMEOUT",
     "GROQ_API_KEY",
     "GROQ_API_KEY_CHAT",
     "GROQ_API_URL",
@@ -209,6 +232,8 @@ __all__ = [
     "SERVICE_ACCOUNT_PATH",
     "SERVICE_TOKEN",
     "STORAGE_DIR",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
     "USES_ORGANIZED_LAYOUT",
     "USE_AWS_SECRETS",
     "get_secret",

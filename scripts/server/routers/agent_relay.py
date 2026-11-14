@@ -5,6 +5,7 @@ Agêntico no Android. Protege segredos organizacionais (Gemini/Groq/OpenAI) e
 enforça limite rígido de tamanho (256 KB) para garantir Zero File Egress.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -19,6 +20,8 @@ from pydantic import BaseModel
 from api_identity import firebase_uid
 from config import (
     GEMINI_API_KEY,
+    GEMINI_FAST_TIMEOUT,
+    GEMINI_MODEL_CHAT,
     GROQ_API_KEY,
     GROQ_API_URL,
 )
@@ -212,8 +215,10 @@ async def _invoke_groq(req: AgentRelayRequest, token: str) -> Optional[AgentRela
 
 
 async def _invoke_gemini(req: AgentRelayRequest, api_key: str) -> Optional[AgentRelayResponse]:
-    """Encaminha para a API Google Gemini 1.5 Flash adaptando o schema Function Calling."""
-    model_name = req.model or os.getenv("GEMINI_MODEL_AGENT", "gemini-1.5-flash")
+    """Encaminha para a API Google Gemini adaptando o schema Function Calling."""
+    if gemini_circuit_breaker.is_open:
+        return None
+    model_name = req.model or os.getenv("GEMINI_MODEL_AGENT", GEMINI_MODEL_CHAT)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
 
     # Adapta mensagens para Gemini contents
@@ -288,17 +293,18 @@ async def _invoke_gemini(req: AgentRelayRequest, api_key: str) -> Optional[Agent
         payload["tools"] = [{"function_declarations": declarations}]
 
     async def _post_gemini_relay():
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
-            if r.status_code >= 500 or r.status_code == 429:
-                r.raise_for_status()
+        async with httpx.AsyncClient(timeout=GEMINI_FAST_TIMEOUT) as client:
+            r = await asyncio.wait_for(
+                client.post(url, json=payload, headers={"Content-Type": "application/json"}),
+                timeout=GEMINI_FAST_TIMEOUT,
+            )
+            if r.status_code != 200:
+                detail = getattr(r, "text", "")[:200]
+                raise RuntimeError(f"Gemini HTTP {r.status_code}: {detail}")
             return r
 
     try:
         resp = await gemini_circuit_breaker.call(_post_gemini_relay)
-        if resp.status_code != 200:
-            logger.warning("[agent_relay] Falha na chamada Gemini (%s): %s", resp.status_code, resp.text[:200])
-            return None
 
         data = resp.json()
         candidates = data.get("candidates", [])
@@ -375,8 +381,8 @@ async def agent_relay(
     if not body.messages:
         raise HTTPException(status_code=400, detail="A lista de mensagens não pode estar vazia.")
 
-    # 1. Tenta Gemini 1.5 Flash primeiro
-    if GEMINI_API_KEY:
+    # 1. Tenta Gemini primeiro (se chave configurada e cache global fechado)
+    if GEMINI_API_KEY and not gemini_circuit_breaker.is_open:
         gemini_resp = await _invoke_gemini(body, GEMINI_API_KEY)
         if gemini_resp is not None:
             return gemini_resp

@@ -26,6 +26,7 @@ from orb_router import (
 )
 from security_defense import is_prompt_injection
 from orb_semantics import validated_label, is_current_emergency, original_text, conversation_only, validate_envelope
+from services.circuit_breaker import post_openai_chat_with_failover
 from trace_llm import trace_llm
 from voice_scheduling import quer_agendar, agendar_por_voz
 
@@ -362,7 +363,6 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
         from orb_llm import (SPEAK_SYSTEM, build_classify_payload, build_speak_payload,
                              compose_envelope, metricas_fala, parse_label, FIXED_FALAS,
                              assistant_fala)
-        headers = {"Authorization": f"Bearer {_state.groq_api_key}", "Content-Type": "application/json"}
         history = [
             {"role": m.role, "content": f"<fala_usuario>{m.content}</fala_usuario>" if m.role == "user" else assistant_fala(m.content)}
             for m in req.messages[-8:] if m.role in ("user", "assistant")
@@ -373,7 +373,12 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                 _class_payload = build_classify_payload(_state.model_rest, user_prompt)
                 trace_llm('chat-rest', 'classify_request', tid, payload=_class_payload)
                 _ct0 = time.monotonic()
-                class_resp = await client.post(_state.groq_api_url, json=_class_payload, headers=headers)
+                class_resp = await post_openai_chat_with_failover(
+                    client,
+                    groq_url=_state.groq_api_url,
+                    groq_token=_state.groq_api_key,
+                    payload=_class_payload,
+                )
                 if class_resp.status_code != 200:
                     raise HTTPException(status_code=class_resp.status_code, detail=class_resp.text)
                 try:
@@ -396,7 +401,12 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                 else:
                     speak_payload = build_speak_payload(_state.model_rest, history, req.temperature or 0.1, min(req.max_tokens or 220, 220), preferences)
                     trace_llm('chat-rest', 'speak_request', tid, payload=speak_payload)
-                    speak_resp = await client.post(_state.groq_api_url, json=speak_payload, headers=headers)
+                    speak_resp = await post_openai_chat_with_failover(
+                        client,
+                        groq_url=_state.groq_api_url,
+                        groq_token=_state.groq_api_key,
+                        payload=speak_payload,
+                    )
                     if speak_resp.status_code != 200:
                         raise HTTPException(status_code=speak_resp.status_code, detail=speak_resp.text)
                     fala = (speak_resp.json()["choices"][0]["message"]["content"] or "").strip()

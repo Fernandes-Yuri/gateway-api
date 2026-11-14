@@ -12,9 +12,16 @@ from routers.agent_relay import (
     ToolDeclaration,
     ToolFunctionDef,
 )
+from services.circuit_breaker import gemini_circuit_breaker
 
 
 class TestAgentRelay(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        gemini_circuit_breaker.reset()
+
+    def tearDown(self):
+        gemini_circuit_breaker.reset()
+
     def test_schema_serialization(self):
         """Valida que o schema Pydantic serializa e deserializa conforme contrato agêntico."""
         req = AgentRelayRequest(

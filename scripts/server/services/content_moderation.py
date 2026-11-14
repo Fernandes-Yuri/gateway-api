@@ -15,6 +15,7 @@ bloqueio por indisponibilidade pontual.
 Padrao de chamada espelha services/prescription_analyzer.py (mesmos
 endpoints e payloads ja usados em producao).
 """
+import asyncio
 import base64
 import json
 import logging
@@ -27,8 +28,13 @@ import httpx
 from config import (
     GEMINI_API_KEY,
     GEMINI_API_URL,
+    GEMINI_VISION_TIMEOUT,
     GROQ_API_KEY,
     GROQ_API_URL,
+)
+from services.circuit_breaker import (
+    CircuitBreakerOpenException,
+    gemini_circuit_breaker,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,7 +99,7 @@ def _parse_verdict(raw: str) -> Optional[Tuple[bool, str]]:
 
 
 async def _gemini_verdict(image_bytes: bytes, content_type: str) -> Optional[str]:
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEY or gemini_circuit_breaker.is_open:
         return None
     payload = {
         "contents": [
@@ -111,25 +117,36 @@ async def _gemini_verdict(image_bytes: bytes, content_type: str) -> Optional[str
         ],
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 1024, "responseMimeType": "application/json"},
     }
+
+    async def _post_moderation():
+        async with httpx.AsyncClient(timeout=GEMINI_VISION_TIMEOUT) as client:
+            resp = await asyncio.wait_for(
+                client.post(
+                    AVATAR_GEMINI_URL,
+                    json=payload,
+                    headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
+                ),
+                timeout=GEMINI_VISION_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Gemini HTTP {resp.status_code} ({AVATAR_GEMINI_MODEL})")
+            return resp
+
     try:
-        async with httpx.AsyncClient(timeout=_MODERATION_TIMEOUT) as client:
-            resp = await client.post(
-                AVATAR_GEMINI_URL,
-                json=payload,
-                headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
-            )
-            if resp.status_code == 200:
-                candidates = resp.json().get("candidates", [])
-                if candidates and "content" in candidates[0]:
-                    parts = candidates[0]["content"].get("parts", [])
-                    texts = [part["text"] for part in parts
-                             if isinstance(part.get("text"), str) and not part.get("thought")]
-                    if texts:
-                        return "".join(texts).strip()
-            logger.warning(
-                "[moderation] Gemini HTTP %s (modelo: %s)",
-                resp.status_code, AVATAR_GEMINI_MODEL,
-            )
+        resp = await gemini_circuit_breaker.call(_post_moderation)
+        candidates = resp.json().get("candidates", [])
+        if candidates and "content" in candidates[0]:
+            parts = candidates[0]["content"].get("parts", [])
+            texts = [
+                part["text"]
+                for part in parts
+                if isinstance(part.get("text"), str) and not part.get("thought")
+            ]
+            if texts:
+                return "".join(texts).strip()
+        logger.warning("[moderation] Gemini retornou 200 sem texto válido (modelo: %s)", AVATAR_GEMINI_MODEL)
+    except CircuitBreakerOpenException as exc:
+        logger.warning("[moderation] Circuit breaker Gemini aberto: %s", exc)
     except Exception as exc:  # noqa: BLE001 — indisponibilidade vira fallback
         logger.warning("[moderation] Gemini falhou: %s", type(exc).__name__)
     return None
