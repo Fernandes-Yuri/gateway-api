@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import AsyncMock, patch
 import httpx
@@ -14,18 +15,31 @@ class AvatarModerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((False, 'Documento'), moderation._parse_verdict('{"aprovada":false,"motivo":"Documento"}'))
 
     async def test_unreadable_primary_tries_fallback(self):
-        with patch.object(moderation, 'GEMINI_API_KEY', 'fixture'), patch.object(moderation, 'GROQ_API_KEY', 'fixture'), \
+        with patch.dict(os.environ, {'AI_PRIMARY_PROVIDER': 'gemini'}), \
+             patch.object(moderation, 'GEMINI_API_KEY', 'fixture'), patch.object(moderation, 'GROQ_API_KEY', 'fixture'), \
              patch.object(moderation, '_gemini_verdict', AsyncMock(return_value='ilegível')), \
              patch.object(moderation, '_groq_verdict', AsyncMock(return_value='{"aprovada":true,"motivo":""}')):
             self.assertEqual((True, ''), await moderation.moderate_avatar(b'fixture', 'image/jpeg'))
 
     async def test_rejection_is_not_overridden_by_second_provider(self):
         fallback = AsyncMock(return_value='{"aprovada":true}')
-        with patch.object(moderation, 'GEMINI_API_KEY', 'fixture'), \
+        with patch.dict(os.environ, {'AI_PRIMARY_PROVIDER': 'gemini'}), \
+             patch.object(moderation, 'GEMINI_API_KEY', 'fixture'), \
              patch.object(moderation, '_gemini_verdict', AsyncMock(return_value='{"aprovada":false,"motivo":"Recusada"}')), \
              patch.object(moderation, '_groq_verdict', fallback):
             self.assertEqual((False, 'Recusada'), await moderation.moderate_avatar(b'fixture', 'image/jpeg'))
             fallback.assert_not_awaited()
+
+    async def test_groq_primary_default_uses_groq_first(self):
+        gemini_mock = AsyncMock(return_value='{"aprovada":false,"motivo":"Não deveria ser chamado"}')
+        with patch.dict(os.environ, {}, clear=False), \
+             patch.object(moderation, 'GEMINI_API_KEY', 'fixture'), \
+             patch.object(moderation, 'GROQ_API_KEY', 'fixture'), \
+             patch.object(moderation, '_groq_verdict', AsyncMock(return_value='{"aprovada":true,"motivo":""}')), \
+             patch.object(moderation, '_gemini_verdict', gemini_mock):
+            os.environ.pop('AI_PRIMARY_PROVIDER', None)
+            self.assertEqual((True, ''), await moderation.moderate_avatar(b'fixture', 'image/jpeg'))
+            gemini_mock.assert_not_awaited()
 
     async def test_no_valid_verdict_never_approves(self):
         with patch.object(moderation, 'GEMINI_API_KEY', 'fixture'), \

@@ -350,6 +350,17 @@ class CircuitBreaker:
             self._ensure_background_probe()
 
 
+def get_primary_ai_provider() -> str:
+    """Retorna o provedor primário de IA configurado ('groq' ou 'gemini')."""
+    env_val = os.getenv("AI_PRIMARY_PROVIDER", "").strip().lower()
+    if env_val in ("groq", "gemini"):
+        return env_val
+    cfg_val = getattr(_config, "AI_PRIMARY_PROVIDER", None) if _config is not None else None
+    if isinstance(cfg_val, str) and cfg_val.strip().lower() in ("groq", "gemini"):
+        return cfg_val.strip().lower()
+    return "groq"
+
+
 def sanitize_openai_payload_for_gemini(
     payload: dict[str, Any],
     gemini_model: str,
@@ -370,6 +381,41 @@ def sanitize_openai_payload_for_gemini(
     return cleaned
 
 
+async def _call_gemini_openai(
+    client: Any,
+    *,
+    gemini_key: str,
+    payload: dict[str, Any],
+    gemini_timeout: Optional[float],
+) -> Any:
+    """Executa chamada ao endpoint OpenAI-compatível do Gemini com timeout curto."""
+    gemini_url = _cfg_str(
+        "GEMINI_OPENAI_URL",
+        "GEMINI_OPENAI_URL",
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    )
+    gemini_model = _cfg_str("GEMINI_MODEL_CHAT", "GEMINI_MODEL_CHAT", "gemini-3.8-flash")
+    timeout = (
+        float(gemini_timeout)
+        if gemini_timeout is not None
+        else _cfg_float("GEMINI_FAST_TIMEOUT", "GEMINI_FAST_TIMEOUT", 1.6)
+    )
+    gemini_payload = sanitize_openai_payload_for_gemini(payload, gemini_model, stream=False)
+    gemini_headers = {
+        "Authorization": f"Bearer {gemini_key}",
+        "Content-Type": "application/json",
+    }
+    resp = await asyncio.wait_for(
+        client.post(gemini_url, json=gemini_payload, headers=gemini_headers),
+        timeout=timeout,
+    )
+    status = getattr(resp, "status_code", 200)
+    if status != 200:
+        detail = getattr(resp, "text", "")[:160]
+        raise RuntimeError(f"Gemini HTTP {status}: {detail}")
+    return resp
+
+
 async def post_openai_chat_with_failover(
     client: Any,
     *,
@@ -378,51 +424,59 @@ async def post_openai_chat_with_failover(
     payload: dict[str, Any],
     gemini_timeout: Optional[float] = None,
 ) -> Any:
-    """Executa chamada OpenAI-compatível tentando Gemini primeiro (corte 1.6s + cache global) e Groq no fallback."""
+    """Executa chamada OpenAI-compatível respeitando AI_PRIMARY_PROVIDER (default: groq)."""
+    primary = get_primary_ai_provider()
     gemini_key = _cfg_str("GEMINI_API_KEY", "GEMINI_API_KEY")
-    if gemini_key and not gemini_circuit_breaker.is_open:
-        gemini_url = _cfg_str(
-            "GEMINI_OPENAI_URL",
-            "GEMINI_OPENAI_URL",
-            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        )
-        gemini_model = _cfg_str("GEMINI_MODEL_CHAT", "GEMINI_MODEL_CHAT", "gemini-3.8-flash")
-        timeout = (
-            float(gemini_timeout)
-            if gemini_timeout is not None
-            else _cfg_float("GEMINI_FAST_TIMEOUT", "GEMINI_FAST_TIMEOUT", 1.6)
-        )
-        gemini_payload = sanitize_openai_payload_for_gemini(payload, gemini_model, stream=False)
-        gemini_headers = {
-            "Authorization": f"Bearer {gemini_key}",
-            "Content-Type": "application/json",
-        }
-
-        async def _post_gemini() -> Any:
-            resp = await asyncio.wait_for(
-                client.post(gemini_url, json=gemini_payload, headers=gemini_headers),
-                timeout=timeout,
-            )
-            status = getattr(resp, "status_code", 200)
-            if status != 200:
-                detail = getattr(resp, "text", "")[:160]
-                raise RuntimeError(f"Gemini HTTP {status}: {detail}")
-            return resp
-
-        try:
-            return await gemini_circuit_breaker.call(_post_gemini)
-        except Exception as exc:
-            reason = f"{type(exc).__name__}: {exc}".strip(": ")
-            logger.warning(
-                "[AI Failover] Gemini falhou (%s). Fallback imediato para Groq.",
-                reason,
-            )
-
     groq_headers = {
         "Authorization": f"Bearer {groq_token}",
         "Content-Type": "application/json",
     }
-    return await client.post(groq_url, json=payload, headers=groq_headers)
+
+    if primary == "gemini":
+        if gemini_key and not gemini_circuit_breaker.is_open:
+            try:
+                return await gemini_circuit_breaker.call(
+                    _call_gemini_openai,
+                    client,
+                    gemini_key=gemini_key,
+                    payload=payload,
+                    gemini_timeout=gemini_timeout,
+                )
+            except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}".strip(": ")
+                logger.warning(
+                    "[AI Failover] Gemini falhou (%s). Fallback imediato para Groq.",
+                    reason,
+                )
+        return await client.post(groq_url, json=payload, headers=groq_headers)
+
+    # Modo padrão: Groq como provedor primário (sem disparar alerta/sonda do Gemini).
+    groq_exc: Optional[Exception] = None
+    groq_resp: Any = None
+    try:
+        groq_resp = await client.post(groq_url, json=payload, headers=groq_headers)
+        status = getattr(groq_resp, "status_code", 200)
+        if status < 500 and status != 429:
+            return groq_resp
+        logger.warning("[AI Failover] Groq retornou HTTP %s; verificando fallback Gemini.", status)
+    except Exception as exc:
+        groq_exc = exc
+        logger.warning("[AI Failover] Groq falhou (%s); verificando fallback Gemini.", exc)
+
+    if gemini_key:
+        try:
+            return await _call_gemini_openai(
+                client,
+                gemini_key=gemini_key,
+                payload=payload,
+                gemini_timeout=gemini_timeout,
+            )
+        except Exception as exc:
+            logger.warning("[AI Failover] Fallback Gemini também falhou: %s", exc)
+
+    if groq_exc is not None:
+        raise groq_exc
+    return groq_resp
 
 
 # Instâncias globais reutilizáveis para provedores externos de IA

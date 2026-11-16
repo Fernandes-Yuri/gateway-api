@@ -38,6 +38,7 @@ from schemas.medications import AnalyzedMedicationItem
 from services.circuit_breaker import (
     CircuitBreakerOpenException,
     gemini_circuit_breaker,
+    get_primary_ai_provider,
     groq_circuit_breaker,
 )
 
@@ -261,7 +262,8 @@ def _parse_json_medications(content: str) -> list[dict]:
 
 async def _call_gemini_vision(image_bytes: bytes, prompt: str, content_type: str = "image/jpeg") -> Optional[str]:
     """Executa inferência de visão multimodal no Google Gemini via REST com timeout adaptativo (6.0s)."""
-    if not GEMINI_API_KEY or gemini_circuit_breaker.is_open:
+    use_cb = get_primary_ai_provider() == "gemini"
+    if not GEMINI_API_KEY or (use_cb and gemini_circuit_breaker.is_open):
         return None
     b64_data = base64.b64encode(image_bytes).decode("utf-8")
     valid_mimes = ["image/jpeg", "image/png", "image/webp", "application/pdf"]
@@ -298,7 +300,7 @@ async def _call_gemini_vision(image_bytes: bytes, prompt: str, content_type: str
             return r
 
     try:
-        resp = await gemini_circuit_breaker.call(_post_gemini)
+        resp = await (gemini_circuit_breaker.call(_post_gemini) if use_cb else _post_gemini())
         data = resp.json()
         candidates = data.get("candidates", [])
         if candidates and "content" in candidates[0]:
@@ -316,28 +318,18 @@ async def _call_gemini_vision(image_bytes: bytes, prompt: str, content_type: str
     return None
 
 
-async def _call_vision_ocr(image_bytes: bytes) -> str:
-    """Motor 1 OCR: transcrição literal estrita caractere a caractere."""
-    prompt = (
-        "Você é um motor de OCR médico estrito de altíssima precisão clínica. "
-        "Sua ÚNICA função é transcrever literalmente caractere a caractere todo o texto legível nesta receita médica. "
-        "Regras inegociáveis:\n"
-        "1. NÃO interprete, NÃO deduza e NÃO complete nomes ou dosagens ausentes.\n"
-        "2. Transcreva exatamente os nomes, números e unidades como escritos na receita.\n"
-        "3. Se uma palavra ou número estiver ilegível, rasurado ou borrado, marque exatamente como [ILEGÍVEL].\n"
-        "4. Retorne apenas o texto literal transcrito, sem introduções ou comentários."
-    )
-
-    # Tenta Gemini 1.5 Flash primeiro (melhor caligrafia em português)
-    if GEMINI_API_KEY:
-        gemini_res = await _call_gemini_vision(image_bytes, prompt, "image/jpeg")
-        if gemini_res:
-            return gemini_res
-
-    # Fallback para Groq Vision se Gemini ausente ou falhar
+async def _call_groq_vision_chat(
+    image_bytes: bytes,
+    prompt: str,
+    content_type: str,
+    *,
+    temperature: float,
+    tag: str,
+) -> Optional[str]:
+    """Executa chamada de visão no Groq usando groq_circuit_breaker."""
     if not GROQ_API_KEY:
-        logger.warning("[_call_vision_ocr] GROQ_API_KEY ausente.")
-        return ""
+        logger.warning("[%s] GROQ_API_KEY ausente.", tag)
+        return None
 
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     payload = {
@@ -349,18 +341,19 @@ async def _call_vision_ocr(image_bytes: bytes) -> str:
                     {"type": "text", "text": prompt},
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                        "image_url": {"url": f"data:{content_type};base64,{b64}"},
                     },
                 ],
             }
         ],
-        "temperature": 0.0,
+        "temperature": temperature,
     }
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
-    async def _post_groq_ocr():
+
+    async def _post_groq():
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(GROQ_API_URL, json=payload, headers=headers)
             if r.status_code >= 500 or r.status_code == 429:
@@ -368,15 +361,49 @@ async def _call_vision_ocr(image_bytes: bytes) -> str:
             return r
 
     try:
-        resp = await groq_circuit_breaker.call(_post_groq_ocr)
+        resp = await groq_circuit_breaker.call(_post_groq)
         if resp.status_code == 200:
-            data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
-        logger.warning("[_call_vision_ocr] Falha HTTP %s: %s", resp.status_code, resp.text)
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        logger.warning("[%s] Falha HTTP %s: %s", tag, resp.status_code, resp.text)
     except CircuitBreakerOpenException as exc:
-        logger.warning("[_call_vision_ocr] Circuit breaker aberto: %s", exc)
+        logger.warning("[%s] Circuit breaker aberto: %s", tag, exc)
     except Exception as exc:
-        logger.warning("[_call_vision_ocr] Exceção ao chamar visão: %s", exc)
+        logger.warning("[%s] Exceção ao chamar visão: %s", tag, exc)
+    return None
+
+
+async def _call_vision_ocr(image_bytes: bytes) -> str:
+    """Motor 1 OCR: transcrição literal estrita caractere a caractere (respeita AI_PRIMARY_PROVIDER)."""
+    prompt = (
+        "Você é um motor de OCR médico estrito de altíssima precisão clínica. "
+        "Sua ÚNICA função é transcrever literalmente caractere a caractere todo o texto legível nesta receita médica. "
+        "Regras inegociáveis:\n"
+        "1. NÃO interprete, NÃO deduza e NÃO complete nomes ou dosagens ausentes.\n"
+        "2. Transcreva exatamente os nomes, números e unidades como escritos na receita.\n"
+        "3. Se uma palavra ou número estiver ilegível, rasurado ou borrado, marque exatamente como [ILEGÍVEL].\n"
+        "4. Retorne apenas o texto literal transcrito, sem introduções ou comentários."
+    )
+
+    if get_primary_ai_provider() == "gemini":
+        if GEMINI_API_KEY:
+            gemini_res = await _call_gemini_vision(image_bytes, prompt, "image/jpeg")
+            if gemini_res:
+                return gemini_res
+        groq_res = await _call_groq_vision_chat(
+            image_bytes, prompt, "image/jpeg", temperature=0.0, tag="_call_vision_ocr"
+        )
+        return groq_res or ""
+
+    # Modo padrão: Groq Vision primário, Gemini como fallback
+    groq_res = await _call_groq_vision_chat(
+        image_bytes, prompt, "image/jpeg", temperature=0.0, tag="_call_vision_ocr"
+    )
+    if groq_res:
+        return groq_res
+    if GEMINI_API_KEY:
+        gemini_res = await _call_gemini_vision(image_bytes, prompt, "image/jpeg")
+        if gemini_res:
+            return gemini_res
     return ""
 
 
@@ -443,57 +470,32 @@ async def _extract_single_image_structured(image_bytes: bytes, content_type: str
         "}"
     )
 
-    # Tenta Gemini 1.5 Flash primeiro
+    if get_primary_ai_provider() == "gemini":
+        if GEMINI_API_KEY:
+            gemini_res = await _call_gemini_vision(image_bytes, prompt, content_type)
+            if gemini_res:
+                meds = _parse_json_medications(gemini_res)
+                if meds:
+                    return meds
+        groq_res = await _call_groq_vision_chat(
+            image_bytes, prompt, content_type, temperature=0.1, tag="extract_structured_prescription"
+        )
+        return _parse_json_medications(groq_res) if groq_res else []
+
+    # Modo padrão: Groq Vision primário, Gemini como fallback
+    groq_res = await _call_groq_vision_chat(
+        image_bytes, prompt, content_type, temperature=0.1, tag="extract_structured_prescription"
+    )
+    if groq_res:
+        meds = _parse_json_medications(groq_res)
+        if meds:
+            return meds
     if GEMINI_API_KEY:
         gemini_res = await _call_gemini_vision(image_bytes, prompt, content_type)
         if gemini_res:
             meds = _parse_json_medications(gemini_res)
             if meds:
                 return meds
-
-    # Fallback para Groq Vision se Gemini ausente ou falhar
-    if not GROQ_API_KEY:
-        logger.warning("[extract_structured_prescription] GROQ_API_KEY ausente.")
-        return []
-
-    b64 = base64.b64encode(image_bytes).decode("utf-8")
-    payload = {
-        "model": GROQ_MODEL_VISION,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{content_type};base64,{b64}"},
-                    },
-                ],
-            }
-        ],
-        "temperature": 0.1,
-    }
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    async def _post_groq_structured():
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(GROQ_API_URL, json=payload, headers=headers)
-            if r.status_code >= 500 or r.status_code == 429:
-                r.raise_for_status()
-            return r
-
-    try:
-        resp = await groq_circuit_breaker.call(_post_groq_structured)
-        if resp.status_code == 200:
-            raw_content = resp.json()["choices"][0]["message"]["content"]
-            return _parse_json_medications(raw_content)
-        logger.warning("[extract_structured_prescription] Falha HTTP %s: %s", resp.status_code, resp.text)
-    except CircuitBreakerOpenException as exc:
-        logger.warning("[extract_structured_prescription] Circuit breaker aberto: %s", exc)
-    except Exception as exc:
-        logger.warning("[extract_structured_prescription] Exceção ao chamar visão: %s", exc)
     return []
 
 
@@ -865,13 +867,14 @@ async def analyze_pdf_prescription(pdf_bytes: bytes, db_conn, raw_ocr_text: str 
     )
 
     extracted_items = []
-    if GEMINI_API_KEY:
+    primary = get_primary_ai_provider()
+    if primary == "gemini" and GEMINI_API_KEY:
         gemini_res = await _call_gemini_vision(pdf_bytes, prompt, content_type="application/pdf")
         if gemini_res:
             extracted_items = _parse_json_medications(gemini_res)
 
     if not extracted_items:
-        # Fallback resiliente: extrai texto direto com PyMuPDF e consulta modelo de texto
+        # Extrai texto direto com PyMuPDF e consulta Groq
         raw_text = await extract_raw_ocr_text(pdf_bytes, "receita.pdf")
         if GROQ_API_KEY and raw_text:
             try:
@@ -898,7 +901,12 @@ async def analyze_pdf_prescription(pdf_bytes: bytes, db_conn, raw_ocr_text: str 
             except CircuitBreakerOpenException as exc:
                 logger.warning("[analyze_pdf_prescription] Circuit breaker aberto: %s", exc)
             except Exception as exc:
-                logger.warning("[analyze_pdf_prescription] Falha no fallback Groq: %s", exc)
+                logger.warning("[analyze_pdf_prescription] Falha no Groq PDF: %s", exc)
+
+    if not extracted_items and primary != "gemini" and GEMINI_API_KEY:
+        gemini_res = await _call_gemini_vision(pdf_bytes, prompt, content_type="application/pdf")
+        if gemini_res:
+            extracted_items = _parse_json_medications(gemini_res)
 
     # Deduplicação de vias / cópias
     merged_items: list[dict] = []

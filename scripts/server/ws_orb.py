@@ -20,6 +20,7 @@ from services.circuit_breaker import (
     _cfg_float,
     _cfg_str,
     gemini_circuit_breaker,
+    get_primary_ai_provider,
     post_openai_chat_with_failover,
     sanitize_openai_payload_for_gemini,
 )
@@ -103,34 +104,39 @@ async def _stream_sse(client, url, token, payload, usage=None):
             raise ValueError('Interrupted stream')
 
 
+async def _collect_gemini_stream_deltas(client, gemini_key, payload, usage=None):
+    gemini_url = _cfg_str(
+        'GEMINI_OPENAI_URL',
+        'GEMINI_OPENAI_URL',
+        'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    )
+    gemini_model = _cfg_str('GEMINI_MODEL_CHAT', 'GEMINI_MODEL_CHAT', 'gemini-3.8-flash')
+    fast_timeout = _cfg_float('GEMINI_FAST_TIMEOUT', 'GEMINI_FAST_TIMEOUT', 1.6)
+    gemini_payload = sanitize_openai_payload_for_gemini(payload, gemini_model, stream=True)
+
+    deltas = []
+    gemini_usage = {}
+
+    async def _read_all():
+        async for delta in _stream_sse(client, gemini_url, gemini_key, gemini_payload, gemini_usage):
+            deltas.append(delta)
+
+    await asyncio.wait_for(_read_all(), timeout=fast_timeout)
+    if usage is not None and gemini_usage:
+        usage.update(gemini_usage)
+    return deltas
+
+
 async def stream_content(client, url, token, payload, usage=None):
-    """Tenta Gemini primário (corte 1.6s + cache global) e cai imediatamente para Groq no fallback."""
+    """Faz streaming respeitando AI_PRIMARY_PROVIDER (default: groq)."""
+    primary = get_primary_ai_provider()
     gemini_key = _cfg_str('GEMINI_API_KEY', 'GEMINI_API_KEY')
-    if gemini_key and not gemini_circuit_breaker.is_open:
-        gemini_url = _cfg_str(
-            'GEMINI_OPENAI_URL',
-            'GEMINI_OPENAI_URL',
-            'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-        )
-        gemini_model = _cfg_str('GEMINI_MODEL_CHAT', 'GEMINI_MODEL_CHAT', 'gemini-3.8-flash')
-        fast_timeout = _cfg_float('GEMINI_FAST_TIMEOUT', 'GEMINI_FAST_TIMEOUT', 1.6)
-        gemini_payload = sanitize_openai_payload_for_gemini(payload, gemini_model, stream=True)
 
-        async def _collect_gemini_stream():
-            deltas = []
-            gemini_usage = {}
-
-            async def _read_all():
-                async for delta in _stream_sse(client, gemini_url, gemini_key, gemini_payload, gemini_usage):
-                    deltas.append(delta)
-
-            await asyncio.wait_for(_read_all(), timeout=fast_timeout)
-            return deltas, gemini_usage
-
+    if primary == 'gemini' and gemini_key and not gemini_circuit_breaker.is_open:
         try:
-            gemini_deltas, gemini_usage = await gemini_circuit_breaker.call(_collect_gemini_stream)
-            if usage is not None and gemini_usage:
-                usage.update(gemini_usage)
+            gemini_deltas = await gemini_circuit_breaker.call(
+                _collect_gemini_stream_deltas, client, gemini_key, payload, usage
+            )
             for delta in gemini_deltas:
                 yield delta
             return
@@ -139,6 +145,24 @@ async def stream_content(client, url, token, payload, usage=None):
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}".strip(": ")
             logging.warning('[ws_orb] Gemini stream falhou (%s). Fallback imediato para Groq.', reason)
+
+    if primary == 'groq':
+        yielded = False
+        try:
+            async for delta in _stream_sse(client, url, token, payload, usage):
+                yielded = True
+                yield delta
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if yielded or not gemini_key:
+                raise
+            logging.warning('[ws_orb] Groq stream falhou (%s). Tentando fallback Gemini.', exc)
+            gemini_deltas = await _collect_gemini_stream_deltas(client, gemini_key, payload, usage)
+            for delta in gemini_deltas:
+                yield delta
+            return
 
     async for delta in _stream_sse(client, url, token, payload, usage):
         yield delta
