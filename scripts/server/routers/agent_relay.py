@@ -27,6 +27,7 @@ from config import (
 )
 from services.circuit_breaker import (
     gemini_circuit_breaker,
+    get_primary_ai_provider,
     groq_circuit_breaker,
 )
 
@@ -214,9 +215,14 @@ async def _invoke_groq(req: AgentRelayRequest, token: str) -> Optional[AgentRela
         return None
 
 
-async def _invoke_gemini(req: AgentRelayRequest, api_key: str) -> Optional[AgentRelayResponse]:
+async def _invoke_gemini(
+    req: AgentRelayRequest,
+    api_key: str,
+    *,
+    use_circuit_breaker: bool = True,
+) -> Optional[AgentRelayResponse]:
     """Encaminha para a API Google Gemini adaptando o schema Function Calling."""
-    if gemini_circuit_breaker.is_open:
+    if use_circuit_breaker and gemini_circuit_breaker.is_open:
         return None
     model_name = req.model or os.getenv("GEMINI_MODEL_AGENT", GEMINI_MODEL_CHAT)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
@@ -304,7 +310,10 @@ async def _invoke_gemini(req: AgentRelayRequest, api_key: str) -> Optional[Agent
             return r
 
     try:
-        resp = await gemini_circuit_breaker.call(_post_gemini_relay)
+        if use_circuit_breaker:
+            resp = await gemini_circuit_breaker.call(_post_gemini_relay)
+        else:
+            resp = await _post_gemini_relay()
 
         data = resp.json()
         candidates = data.get("candidates", [])
@@ -381,18 +390,27 @@ async def agent_relay(
     if not body.messages:
         raise HTTPException(status_code=400, detail="A lista de mensagens não pode estar vazia.")
 
-    # 1. Tenta Gemini primeiro (se chave configurada e cache global fechado)
-    if GEMINI_API_KEY and not gemini_circuit_breaker.is_open:
-        gemini_resp = await _invoke_gemini(body, GEMINI_API_KEY)
-        if gemini_resp is not None:
-            return gemini_resp
+    primary = get_primary_ai_provider()
 
-    # 2. Fallback resiliente para Groq
-    token = GROQ_API_KEY
-    if token:
-        groq_resp = await _invoke_groq(body, token)
-        if groq_resp is not None:
-            return groq_resp
+    if primary == "gemini":
+        if GEMINI_API_KEY and not gemini_circuit_breaker.is_open:
+            gemini_resp = await _invoke_gemini(body, GEMINI_API_KEY)
+            if gemini_resp is not None:
+                return gemini_resp
+        if GROQ_API_KEY:
+            groq_resp = await _invoke_groq(body, GROQ_API_KEY)
+            if groq_resp is not None:
+                return groq_resp
+    else:
+        # Modo padrão: Groq como provedor primário
+        if GROQ_API_KEY:
+            groq_resp = await _invoke_groq(body, GROQ_API_KEY)
+            if groq_resp is not None:
+                return groq_resp
+        if GEMINI_API_KEY:
+            gemini_resp = await _invoke_gemini(body, GEMINI_API_KEY, use_circuit_breaker=False)
+            if gemini_resp is not None:
+                return gemini_resp
 
     # 3. Caso nenhum provedor esteja acessível em produção
     logger.error("[agent_relay] Nenhum provedor de IA disponível para responder à requisição do usuário %s", uid)

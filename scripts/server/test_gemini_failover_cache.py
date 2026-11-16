@@ -63,7 +63,9 @@ class TestGeminiFailoverCacheAndSentinel(unittest.IsolatedAsyncioTestCase):
         client = _DummyClient(slow_gemini, fast_groq)
         payload = {"model": "qwen/qwen3.8-27b", "messages": [{"role": "user", "content": "oi"}]}
 
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "fake-gemini-key"}), patch.object(
+        with patch.dict(
+            os.environ, {"GEMINI_API_KEY": "fake-gemini-key", "AI_PRIMARY_PROVIDER": "gemini"}
+        ), patch.object(
             cb_mod, "_send_sentinel_telegram_alert", return_value=True
         ):
             t0 = time.monotonic()
@@ -95,7 +97,9 @@ class TestGeminiFailoverCacheAndSentinel(unittest.IsolatedAsyncioTestCase):
         client = _DummyClient(broken_gemini, fast_groq)
         payload = {"model": "qwen/qwen3.8-27b", "messages": [{"role": "user", "content": "olá"}]}
 
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "fake-gemini-key"}), patch.object(
+        with patch.dict(
+            os.environ, {"GEMINI_API_KEY": "fake-gemini-key", "AI_PRIMARY_PROVIDER": "gemini"}
+        ), patch.object(
             cb_mod, "_send_sentinel_telegram_alert", return_value=True
         ):
             # Usuário #1: tenta Gemini, toma 429, abre cache global e cai no Groq
@@ -241,6 +245,33 @@ class TestGeminiFailoverCacheAndSentinel(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cb.is_open)
         open_alerts = [m for _u, m in sent_messages if "ALERTA CRÍTICO" in m["text"]]
         self.assertEqual(len(open_alerts), 1)
+
+    async def test_groq_primary_default_skips_gemini_even_with_key(self):
+        """Por padrão (AI_PRIMARY_PROVIDER=groq), Groq é chamado diretamente sem acionar Gemini."""
+
+        async def fail_if_called(_url, **_kwargs):
+            raise AssertionError("Gemini não deveria ser chamado como primário")
+
+        async def fast_groq(_url, **_kwargs):
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok-groq-primary"}}]})
+
+        client = _DummyClient(fail_if_called, fast_groq)
+        payload = {"model": "qwen/qwen3.8-27b", "messages": [{"role": "user", "content": "oi"}]}
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "fake-gemini-key"}, clear=False):
+            os.environ.pop("AI_PRIMARY_PROVIDER", None)
+            resp = await post_openai_chat_with_failover(
+                client,
+                groq_url="https://api.groq.com/openai/v1/chat/completions",
+                groq_token="fake-groq-token",
+                payload=payload,
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["choices"][0]["message"]["content"], "ok-groq-primary")
+        self.assertEqual(client.gemini_calls, 0)
+        self.assertEqual(client.groq_calls, 1)
+        self.assertFalse(gemini_circuit_breaker.is_open)
 
 
 if __name__ == "__main__":

@@ -622,7 +622,9 @@ class TestGeminiVisionPriorityAndFallback(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        with patch("services.prescription_analyzer.GEMINI_API_KEY", "test-gemini-key"), patch(
+        with patch.dict("os.environ", {"AI_PRIMARY_PROVIDER": "gemini"}), patch(
+            "services.prescription_analyzer.GEMINI_API_KEY", "test-gemini-key"
+        ), patch(
             "services.prescription_analyzer._call_gemini_vision",
             new_callable=AsyncMock,
             side_effect=[gemini_ocr_text, gemini_structured_json],
@@ -674,7 +676,9 @@ class TestGeminiVisionPriorityAndFallback(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        with patch("services.prescription_analyzer.GEMINI_API_KEY", "test-gemini-key"), patch(
+        with patch.dict("os.environ", {"AI_PRIMARY_PROVIDER": "gemini"}), patch(
+            "services.prescription_analyzer.GEMINI_API_KEY", "test-gemini-key"
+        ), patch(
             "services.prescription_analyzer._call_gemini_vision",
             new_callable=AsyncMock,
             return_value=None,  # Simula erro ou timeout do Gemini

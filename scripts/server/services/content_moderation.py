@@ -35,6 +35,7 @@ from config import (
 from services.circuit_breaker import (
     CircuitBreakerOpenException,
     gemini_circuit_breaker,
+    get_primary_ai_provider,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,8 @@ def _parse_verdict(raw: str) -> Optional[Tuple[bool, str]]:
 
 
 async def _gemini_verdict(image_bytes: bytes, content_type: str) -> Optional[str]:
-    if not GEMINI_API_KEY or gemini_circuit_breaker.is_open:
+    use_cb = get_primary_ai_provider() == "gemini"
+    if not GEMINI_API_KEY or (use_cb and gemini_circuit_breaker.is_open):
         return None
     payload = {
         "contents": [
@@ -133,7 +135,7 @@ async def _gemini_verdict(image_bytes: bytes, content_type: str) -> Optional[str
             return resp
 
     try:
-        resp = await gemini_circuit_breaker.call(_post_moderation)
+        resp = await (gemini_circuit_breaker.call(_post_moderation) if use_cb else _post_moderation())
         candidates = resp.json().get("candidates", [])
         if candidates and "content" in candidates[0]:
             parts = candidates[0]["content"].get("parts", [])
@@ -204,7 +206,12 @@ async def moderate_avatar(content: bytes, content_type: str) -> Tuple[bool, str]
         logger.error("[moderation] Nenhuma chave de visao configurada.")
         raise ModerationUnavailable("nenhuma chave de visao")
 
-    for provider_name, provider in (("gemini", _gemini_verdict), ("groq", _groq_verdict)):
+    providers = (
+        (("gemini", _gemini_verdict), ("groq", _groq_verdict))
+        if get_primary_ai_provider() == "gemini"
+        else (("groq", _groq_verdict), ("gemini", _gemini_verdict))
+    )
+    for provider_name, provider in providers:
         raw = await provider(content, content_type)
         verdict = _parse_verdict(raw) if raw is not None else None
         if verdict is not None:

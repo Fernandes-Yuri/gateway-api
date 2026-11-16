@@ -80,8 +80,15 @@ DATA_ENCRYPTION_KEY = os.getenv("DATA_ENCRYPTION_KEY")
 BLIND_INDEX_PEPPER = os.getenv("BLIND_INDEX_PEPPER")
 
 # ------------------------------------------------------------------
-# Groq (geração + transcrição whisper + speak). Modelos/chaves por
-# serviço (cota é por modelo). Espelha server.py linhas 93-102.
+# Provedor primário de IA ("groq" ou "gemini"). Default: "groq".
+# ------------------------------------------------------------------
+AI_PRIMARY_PROVIDER = os.getenv("AI_PRIMARY_PROVIDER", "groq").strip().lower()
+if AI_PRIMARY_PROVIDER not in ("groq", "gemini"):
+    AI_PRIMARY_PROVIDER = "groq"
+
+# ------------------------------------------------------------------
+# Groq (IA Primária: geração + transcrição whisper + speak + visão).
+# Modelos/chaves por serviço (cota é por modelo). Espelha server.py linhas 93-102.
 # ------------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
