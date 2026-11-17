@@ -70,7 +70,13 @@ func main() {
 	}
 
 	// 2.5. Hub WebSocket em tempo real (SPEC-13 & D47)
-	hub := transportws.NewHub()
+	maxWSConns := transportws.DefaultMaxWSConns
+	if mw := os.Getenv("MAX_WS_CONNS"); mw != "" {
+		if parsed, err := strconv.Atoi(mw); err == nil && parsed > 0 {
+			maxWSConns = parsed
+		}
+	}
+	hub := transportws.NewHub(maxWSConns)
 	go hub.Run()
 
 	// A outbox compartilha o pool existente. Sem adaptador FCM configurado,

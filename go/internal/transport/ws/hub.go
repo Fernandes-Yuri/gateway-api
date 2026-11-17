@@ -31,21 +31,69 @@ type MessagesReadData struct {
 	MessageIDs     []string `json:"messageIds,omitempty"`
 }
 
+// DefaultMaxWSConns define o teto padrão de conexões WebSocket simultâneas no Hub
+const DefaultMaxWSConns = 500
+
 // Hub gerencia as conexões WebSocket ativas, indexadas por patientId e userId de forma thread-safe
 type Hub struct {
 	mu sync.RWMutex
 	// patientID -> userID -> set de *Client
-	clients  map[string]map[string]map[*Client]bool
-	done     chan struct{}
-	stopOnce sync.Once
+	clients    map[string]map[string]map[*Client]bool
+	totalConns int
+	maxConns   int
+	done       chan struct{}
+	stopOnce   sync.Once
 }
 
 // NewHub instancia um novo Hub para controle de tempo real
-func NewHub() *Hub {
-	return &Hub{
-		clients: make(map[string]map[string]map[*Client]bool),
-		done:    make(chan struct{}),
+func NewHub(maxConns ...int) *Hub {
+	limit := DefaultMaxWSConns
+	if len(maxConns) > 0 && maxConns[0] > 0 {
+		limit = maxConns[0]
 	}
+	return &Hub{
+		clients:  make(map[string]map[string]map[*Client]bool),
+		maxConns: limit,
+		done:     make(chan struct{}),
+	}
+}
+
+// CanAccept informa se o Hub ainda possui capacidade para novas conexões WebSocket
+func (h *Hub) CanAccept() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.totalConns < h.maxConns
+}
+
+// TryRegister registra o cliente apenas se o limite máximo de conexões não tiver sido atingido
+func (h *Hub) TryRegister(c *Client) bool {
+	if c == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.totalConns >= h.maxConns {
+		return false
+	}
+
+	patientClients, ok := h.clients[c.patientID]
+	if !ok {
+		patientClients = make(map[string]map[*Client]bool)
+		h.clients[c.patientID] = patientClients
+	}
+
+	userClients, ok := patientClients[c.userID]
+	if !ok {
+		userClients = make(map[*Client]bool)
+		patientClients[c.userID] = userClients
+	}
+
+	if !userClients[c] {
+		userClients[c] = true
+		h.totalConns++
+	}
+	return true
 }
 
 // Register adiciona um cliente ao Hub sob o respectivo patientID e userID
@@ -68,7 +116,10 @@ func (h *Hub) Register(c *Client) {
 		patientClients[c.userID] = userClients
 	}
 
-	userClients[c] = true
+	if !userClients[c] {
+		userClients[c] = true
+		h.totalConns++
+	}
 }
 
 // Unregister remove um cliente do Hub e limpa entradas vazias do mapa
@@ -89,7 +140,12 @@ func (h *Hub) Unregister(c *Client) {
 		return
 	}
 
-	delete(userClients, c)
+	if userClients[c] {
+		delete(userClients, c)
+		if h.totalConns > 0 {
+			h.totalConns--
+		}
+	}
 	if len(userClients) == 0 {
 		delete(patientClients, c.userID)
 	}

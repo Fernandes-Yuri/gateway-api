@@ -20,11 +20,17 @@ ExecStart=/home/ec2-user/braga-gateway/venv/bin/gunicorn server:app \
     -k uvicorn.workers.UvicornWorker \
     --bind unix:/run/braga-saude/backend.sock \
     --umask 0117 \
+    --limit-concurrency 64 \
+    --max-requests 2000 \
+    --max-requests-jitter 200 \
     --timeout 30
 KillSignal=SIGTERM
 TimeoutStopSec=15
 Restart=on-failure
 RestartSec=3
+MemoryHigh=700M
+MemoryMax=900M
+LimitNOFILE=65536
 LimitCORE=0
 NoNewPrivileges=true
 PrivateTmp=true

@@ -4,8 +4,11 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::header::{HeaderMap, HeaderName, HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::header::{
+    HeaderMap, HeaderName, HeaderValue, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER,
+};
 use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{any, get, post};
 use axum::Router;
@@ -93,6 +96,15 @@ pub struct CliArgs {
 
     #[arg(long, env = "DATABASE_IDLE_TIMEOUT_SECS", default_value_t = 600)]
     pub db_idle_timeout_secs: u64,
+
+    #[arg(long, env = "MAX_CONCURRENT_REQUESTS", default_value_t = 256)]
+    pub max_concurrent_requests: usize,
+
+    #[arg(long, env = "PROXY_TIMEOUT_SECS", default_value_t = 30)]
+    pub proxy_timeout_secs: u64,
+
+    #[arg(long, env = "EDGE_RATE_LIMIT_PER_MIN", default_value_t = 180)]
+    pub edge_rate_limit_per_min: usize,
 }
 
 #[derive(Clone)]
@@ -113,6 +125,9 @@ pub struct AppState {
     pub start_time: std::time::Instant,
     pub db_max_connections: u32,
     pub db_min_connections: u32,
+    pub concurrency_limiter: Arc<tokio::sync::Semaphore>,
+    pub proxy_timeout_secs: u64,
+    pub edge_rate_limit_per_min: usize,
 }
 
 #[tokio::main]
@@ -195,6 +210,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         start_time,
         db_max_connections: args.db_max_connections,
         db_min_connections: args.db_min_connections,
+        concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(
+            args.max_concurrent_requests.max(1),
+        )),
+        proxy_timeout_secs: args.proxy_timeout_secs.max(1),
+        edge_rate_limit_per_min: args.edge_rate_limit_per_min,
     });
 
     let mut app = Router::new()
@@ -277,6 +297,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = app
         // Fallback: proxy reverso transparente para o socket Unix do Python
         .fallback(any(proxy_to_backend))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            edge_resilience_middleware,
+        ))
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
@@ -288,6 +312,95 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     info!("braga-edge encerrado com sucesso.");
     Ok(())
+}
+
+/// Middleware de resiliência na borda: fail-fast (503) por saturação de concorrência
+/// e rate limit global por IP (429), preservando sondas de saúde e métricas internas.
+async fn edge_resilience_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let path = req.uri().path();
+    if matches!(
+        path,
+        "/health" | "/ready" | "/api/ready" | "/api/internal/stats"
+    ) {
+        return next.run(req).await;
+    }
+
+    let _permit = match state.concurrency_limiter.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            let mut resp = Response::new(Body::from(
+                "{\"detail\":\"Serviço temporariamente sobrecarregado. Tente novamente em instantes.\"}",
+            ));
+            *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+            resp.headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            resp.headers_mut()
+                .insert(RETRY_AFTER, HeaderValue::from_static("5"));
+            return resp;
+        }
+    };
+
+    if state.edge_rate_limit_per_min > 0 {
+        let client_ip = req
+            .headers()
+            .get("cf-connecting-ip")
+            .or_else(|| req.headers().get("x-forwarded-for"))
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+
+        if !matches!(
+            client_ip.as_str(),
+            "" | "127.0.0.1" | "::1" | "localhost" | "unknown"
+        ) {
+            match state
+                .limiter
+                .check(
+                    "edge_global",
+                    &client_ip,
+                    state.edge_rate_limit_per_min,
+                    60,
+                    None,
+                    None,
+                )
+                .await
+            {
+                Ok(()) => {}
+                Err(braga_limiter::LimiterError::IpBlocked { remaining_seconds }) => {
+                    let mut resp = Response::new(Body::from(format!(
+                        "{{\"detail\":\"Acesso bloqueado por 24 horas para este IP.\",\"retry_after\":{remaining_seconds}}}"
+                    )));
+                    *resp.status_mut() = StatusCode::FORBIDDEN;
+                    resp.headers_mut()
+                        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                    if let Ok(val) = HeaderValue::from_str(&remaining_seconds.to_string()) {
+                        resp.headers_mut().insert(RETRY_AFTER, val);
+                    }
+                    return resp;
+                }
+                Err(braga_limiter::LimiterError::RateLimitExceeded { retry_after }) => {
+                    let mut resp = Response::new(Body::from(format!(
+                        "{{\"detail\":\"Muitas requisições. Aguarde {retry_after}s.\",\"retry_after\":{retry_after}}}"
+                    )));
+                    *resp.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+                    resp.headers_mut()
+                        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                    if let Ok(val) = HeaderValue::from_str(&retry_after.to_string()) {
+                        resp.headers_mut().insert(RETRY_AFTER, val);
+                    }
+                    return resp;
+                }
+                Err(_) => {}
+            }
+        }
+    }
+
+    next.run(req).await
 }
 
 async fn shutdown_signal() {
@@ -817,38 +930,53 @@ async fn proxy_to_backend(
     let client_upgrade = hyper::upgrade::on(&mut req);
 
     // 5. Encaminha para o serviço apropriado (Go para chat, com fallback resiliente para Python)
-    let path = req.uri().path();
-    let is_chat_route = state.chat_routes_enabled && is_go_chat_route(path);
+    let path = req.uri().path().to_string();
+    let is_chat_route = state.chat_routes_enabled && is_go_chat_route(&path);
+    let timeout_dur = std::time::Duration::from_secs(state.proxy_timeout_secs.max(1));
 
-    let (mut sender, _conn_task) = if is_chat_route && state.chat_sock.exists() {
-        match UnixStream::connect(&state.chat_sock).await {
-            Ok(s) => {
-                let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(s))
-                    .await
-                    .map_err(|_| StatusCode::BAD_GATEWAY)?;
-                let h = tokio::spawn(async move {
-                    if let Err(err) = conn.with_upgrades().await {
-                        warn!("Conexao com chat Go encerrou com erro: {err:?}");
-                    }
-                });
-                (sender, h)
+    let forward_res = tokio::time::timeout(timeout_dur, async {
+        let (mut sender, _conn_task) = if is_chat_route && state.chat_sock.exists() {
+            match UnixStream::connect(&state.chat_sock).await {
+                Ok(s) => {
+                    let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(s))
+                        .await
+                        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+                    let h = tokio::spawn(async move {
+                        if let Err(err) = conn.with_upgrades().await {
+                            warn!("Conexao com chat Go encerrou com erro: {err:?}");
+                        }
+                    });
+                    (sender, h)
+                }
+                Err(e) => {
+                    warn!(
+                        "Falha ao conectar no socket Go do chat {:?}: {e}. Acionando fallback para backend Python",
+                        state.chat_sock
+                    );
+                    connect_backend_stream(&state).await?
+                }
             }
-            Err(e) => {
-                warn!(
-                    "Falha ao conectar no socket Go do chat {:?}: {e}. Acionando fallback para backend Python",
-                    state.chat_sock
-                );
-                connect_backend_stream(&state).await?
-            }
+        } else {
+            connect_backend_stream(&state).await?
+        };
+
+        sender
+            .send_request(req)
+            .await
+            .map_err(|_| StatusCode::BAD_GATEWAY)
+    })
+    .await;
+
+    let mut resp = match forward_res {
+        Ok(res) => res?,
+        Err(_) => {
+            warn!(
+                "Timeout de {}s ao encaminhar {} para backend",
+                state.proxy_timeout_secs, path
+            );
+            return Err(StatusCode::GATEWAY_TIMEOUT);
         }
-    } else {
-        connect_backend_stream(&state).await?
     };
-
-    let mut resp = sender
-        .send_request(req)
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
 
     if resp.status() == StatusCode::SWITCHING_PROTOCOLS {
         let backend_upgrade = hyper::upgrade::on(&mut resp);
@@ -2983,5 +3111,107 @@ mod tests {
         );
         assert_eq!(args.port, 8080);
         assert_eq!(args.host, "127.0.0.1");
+        assert_eq!(args.max_concurrent_requests, 256);
+        assert_eq!(args.proxy_timeout_secs, 30);
+        assert_eq!(args.edge_rate_limit_per_min, 180);
+    }
+
+    #[tokio::test]
+    async fn test_edge_resilience_middleware_503_and_429() {
+        use tower::ServiceExt;
+
+        let state = Arc::new(AppState {
+            backend_sock: PathBuf::from("/tmp/nonexistent-backend.sock"),
+            backend_tcp_addr: "127.0.0.1:1".to_string(),
+            chat_sock: PathBuf::from("/tmp/nonexistent-chat.sock"),
+            chat_routes_enabled: false,
+            cert_cache: FirebaseCertCache::new(),
+            limiter: StrictRateLimiter::new(),
+            pool: None,
+            firebase_project_id: "braga-saude".to_string(),
+            catalog_cache: moka::future::Cache::builder().max_capacity(10).build(),
+            read_routes_enabled: false,
+            write_routes_enabled: false,
+            vitals_write_enabled: false,
+            orb_ws_enabled: false,
+            start_time: std::time::Instant::now(),
+            db_max_connections: 5,
+            db_min_connections: 1,
+            concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(1)),
+            proxy_timeout_secs: 5,
+            edge_rate_limit_per_min: 2,
+        });
+
+        let app = Router::new()
+            .route("/health", get(health_handler))
+            .route("/api/app/latest", get(apk_retired_handler))
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                edge_resilience_middleware,
+            ))
+            .with_state(state.clone());
+
+        // 1. Ocupa o único permit de concorrência e verifica fail-fast 503
+        let _held = state
+            .concurrency_limiter
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        let resp_503 = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/app/latest")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp_503.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp_503.headers().get(RETRY_AFTER).unwrap(), "5");
+
+        // /health deve continuar respondendo 200 mesmo sob saturação
+        let resp_health = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp_health.status(), StatusCode::OK);
+        drop(_held);
+
+        // 2. Verifica rate limit global por IP (limite = 2/min)
+        for _ in 0..2 {
+            let ok_resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/app/latest")
+                        .header("cf-connecting-ip", "203.0.113.10")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(ok_resp.status(), StatusCode::GONE);
+        }
+
+        let resp_429 = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/app/latest")
+                    .header("cf-connecting-ip", "203.0.113.10")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp_429.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(resp_429.headers().get(RETRY_AFTER).is_some());
     }
 }
