@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::header::{HeaderMap, HeaderName, HeaderValue, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
+use axum::http::header::{
+    HeaderMap, HeaderName, HeaderValue, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER,
+};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
@@ -968,7 +970,10 @@ async fn proxy_to_backend(
     let mut resp = match forward_res {
         Ok(res) => res?,
         Err(_) => {
-            warn!("Timeout de {}s ao encaminhar {} para backend", state.proxy_timeout_secs, path);
+            warn!(
+                "Timeout de {}s ao encaminhar {} para backend",
+                state.proxy_timeout_secs, path
+            );
             return Err(StatusCode::GATEWAY_TIMEOUT);
         }
     };
@@ -3147,7 +3152,12 @@ mod tests {
             .with_state(state.clone());
 
         // 1. Ocupa o único permit de concorrência e verifica fail-fast 503
-        let _held = state.concurrency_limiter.clone().acquire_owned().await.unwrap();
+        let _held = state
+            .concurrency_limiter
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
         let resp_503 = app
             .clone()
             .oneshot(
