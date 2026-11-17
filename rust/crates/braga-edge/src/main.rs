@@ -107,6 +107,41 @@ pub struct CliArgs {
     pub edge_rate_limit_per_min: usize,
 }
 
+#[derive(Default)]
+pub struct BackendConnPool {
+    idle: tokio::sync::Mutex<Vec<hyper::client::conn::http1::SendRequest<Body>>>,
+    max_idle: usize,
+}
+
+impl BackendConnPool {
+    pub fn new(max_idle: usize) -> Self {
+        Self {
+            idle: tokio::sync::Mutex::new(Vec::with_capacity(max_idle)),
+            max_idle,
+        }
+    }
+
+    pub async fn acquire_idle(&self) -> Option<hyper::client::conn::http1::SendRequest<Body>> {
+        let mut guard = self.idle.lock().await;
+        while let Some(sender) = guard.pop() {
+            if sender.is_ready() {
+                return Some(sender);
+            }
+        }
+        None
+    }
+
+    pub async fn release(&self, sender: hyper::client::conn::http1::SendRequest<Body>) {
+        if !sender.is_ready() {
+            return;
+        }
+        let mut guard = self.idle.lock().await;
+        if guard.len() < self.max_idle {
+            guard.push(sender);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub backend_sock: PathBuf,
@@ -118,6 +153,9 @@ pub struct AppState {
     pub pool: Option<PgPool>,
     pub firebase_project_id: String,
     pub catalog_cache: moka::future::Cache<String, braga_contracts::BarcodeMedication>,
+    pub moderation_cache: moka::future::Cache<String, ()>,
+    pub backend_pool: Arc<BackendConnPool>,
+    pub chat_pool: Arc<BackendConnPool>,
     pub read_routes_enabled: bool,
     pub write_routes_enabled: bool,
     pub vitals_write_enabled: bool,
@@ -193,6 +231,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .time_to_live(std::time::Duration::from_secs(300))
             .build();
 
+    let moderation_cache: moka::future::Cache<String, ()> = moka::future::Cache::builder()
+        .max_capacity(5_000)
+        .time_to_live(std::time::Duration::from_secs(30))
+        .build();
+
     let state = Arc::new(AppState {
         backend_sock: args.backend_sock,
         backend_tcp_addr: args.backend_tcp_addr,
@@ -203,6 +246,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool,
         firebase_project_id: args.firebase_project_id,
         catalog_cache,
+        moderation_cache,
+        backend_pool: Arc::new(BackendConnPool::new(16)),
+        chat_pool: Arc::new(BackendConnPool::new(16)),
         read_routes_enabled: args.read_routes_enabled,
         write_routes_enabled: args.write_routes_enabled,
         vitals_write_enabled: args.vitals_write_enabled,
@@ -877,11 +923,12 @@ async fn proxy_to_backend(
                 .await
                 {
                     Ok(identity) => {
-                        // Se houver banco, aplica moderação autoritativa
+                        // Se houver banco, aplica moderação autoritativa (com cache Moka 30s)
                         if let Some(ref pool) = state.pool {
                             let method = req.method().as_str();
                             let path = req.uri().path();
-                            if let Err(e) = check_user_moderation(
+                            if let Err(e) = check_user_moderation_cached(
+                                &state,
                                 pool,
                                 &identity.uid,
                                 method,
@@ -935,39 +982,45 @@ async fn proxy_to_backend(
     let timeout_dur = std::time::Duration::from_secs(state.proxy_timeout_secs.max(1));
 
     let forward_res = tokio::time::timeout(timeout_dur, async {
-        let (mut sender, _conn_task) = if is_chat_route && state.chat_sock.exists() {
-            match UnixStream::connect(&state.chat_sock).await {
-                Ok(s) => {
-                    let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(s))
-                        .await
-                        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-                    let h = tokio::spawn(async move {
-                        if let Err(err) = conn.with_upgrades().await {
-                            warn!("Conexao com chat Go encerrou com erro: {err:?}");
-                        }
-                    });
-                    (sender, h)
-                }
-                Err(e) => {
-                    warn!(
-                        "Falha ao conectar no socket Go do chat {:?}: {e}. Acionando fallback para backend Python",
-                        state.chat_sock
-                    );
-                    connect_backend_stream(&state).await?
+        let (mut sender, used_chat_pool) = if is_chat_route && state.chat_sock.exists() {
+            if let Some(pooled) = state.chat_pool.acquire_idle().await {
+                (pooled, true)
+            } else {
+                match UnixStream::connect(&state.chat_sock).await {
+                    Ok(s) => {
+                        let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(s))
+                            .await
+                            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+                        tokio::spawn(async move {
+                            if let Err(err) = conn.with_upgrades().await {
+                                warn!("Conexao com chat Go encerrou com erro: {err:?}");
+                            }
+                        });
+                        (sender, true)
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Falha ao conectar no socket Go do chat {:?}: {e}. Acionando fallback para backend Python",
+                            state.chat_sock
+                        );
+                        (connect_backend_stream(&state).await?, false)
+                    }
                 }
             }
         } else {
-            connect_backend_stream(&state).await?
+            (connect_backend_stream(&state).await?, false)
         };
 
-        sender
+        let resp = sender
             .send_request(req)
             .await
-            .map_err(|_| StatusCode::BAD_GATEWAY)
+            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+        Ok::<_, StatusCode>((resp, sender, used_chat_pool))
     })
     .await;
 
-    let mut resp = match forward_res {
+    let (mut resp, sender, used_chat_pool) = match forward_res {
         Ok(res) => res?,
         Err(_) => {
             warn!(
@@ -996,6 +1049,10 @@ async fn proxy_to_backend(
                 }
             }
         });
+    } else if used_chat_pool {
+        state.chat_pool.release(sender).await;
+    } else {
+        state.backend_pool.release(sender).await;
     }
 
     Ok(resp.into_response())
@@ -1003,23 +1060,21 @@ async fn proxy_to_backend(
 
 async fn connect_backend_stream(
     state: &AppState,
-) -> Result<
-    (
-        hyper::client::conn::http1::SendRequest<Body>,
-        tokio::task::JoinHandle<()>,
-    ),
-    StatusCode,
-> {
+) -> Result<hyper::client::conn::http1::SendRequest<Body>, StatusCode> {
+    if let Some(pooled) = state.backend_pool.acquire_idle().await {
+        return Ok(pooled);
+    }
+
     if let Ok(s) = UnixStream::connect(&state.backend_sock).await {
         let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(s))
             .await
             .map_err(|_| StatusCode::BAD_GATEWAY)?;
-        let h = tokio::spawn(async move {
+        tokio::spawn(async move {
             if let Err(err) = conn.with_upgrades().await {
                 warn!("Conexao com backend (unix) encerrou com erro: {err:?}");
             }
         });
-        return Ok((sender, h));
+        return Ok(sender);
     }
 
     warn!(
@@ -1031,12 +1086,12 @@ async fn connect_backend_stream(
             let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(s))
                 .await
                 .map_err(|_| StatusCode::BAD_GATEWAY)?;
-            let h = tokio::spawn(async move {
+            tokio::spawn(async move {
                 if let Err(err) = conn.with_upgrades().await {
                     warn!("Conexao com backend (tcp) encerrou com erro: {err:?}");
                 }
             });
-            Ok((sender, h))
+            Ok(sender)
         }
         Err(e) => {
             error!(
@@ -1075,6 +1130,36 @@ pub struct MedicationLogsQuery {
 #[derive(Debug, Deserialize)]
 pub struct ActivityFeedQuery {
     pub limit: Option<i64>,
+}
+
+#[allow(clippy::result_large_err)]
+async fn check_user_moderation_cached(
+    state: &AppState,
+    pool: &PgPool,
+    uid: &str,
+    method: &str,
+    path: &str,
+    auth_time: Option<i64>,
+) -> Result<(), String> {
+    if path.starts_with("/api/admin/") || (path == "/api/app/latest" && method == "GET") {
+        return Ok(());
+    }
+
+    let is_write = !matches!(method, "GET" | "HEAD" | "OPTIONS");
+    let is_sync = path.starts_with("/api/sync/");
+    let cache_key = format!("{uid}:{is_write}:{is_sync}:{auth_time:?}");
+
+    if state.moderation_cache.get(&cache_key).await.is_some() {
+        return Ok(());
+    }
+
+    match check_user_moderation(pool, uid, method, path, auth_time).await {
+        Ok(()) => {
+            state.moderation_cache.insert(cache_key, ()).await;
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[allow(clippy::result_large_err)]
@@ -1121,8 +1206,15 @@ async fn authenticate_request(
         })?;
 
     if let Some(ref pool) = state.pool {
-        if let Err(e) =
-            check_user_moderation(pool, &identity.uid, method, path, Some(identity.auth_time)).await
+        if let Err(e) = check_user_moderation_cached(
+            state,
+            pool,
+            &identity.uid,
+            method,
+            path,
+            Some(identity.auth_time),
+        )
+        .await
         {
             let mut resp = Response::new(Body::from(format!("{{\"detail\":\"{e}\"}}")));
             *resp.status_mut() = StatusCode::FORBIDDEN;
@@ -3130,6 +3222,9 @@ mod tests {
             pool: None,
             firebase_project_id: "braga-saude".to_string(),
             catalog_cache: moka::future::Cache::builder().max_capacity(10).build(),
+            moderation_cache: moka::future::Cache::builder().max_capacity(10).build(),
+            backend_pool: Arc::new(BackendConnPool::new(4)),
+            chat_pool: Arc::new(BackendConnPool::new(4)),
             read_routes_enabled: false,
             write_routes_enabled: false,
             vitals_write_enabled: false,
