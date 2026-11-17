@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -164,6 +165,9 @@ pub struct AppState {
     pub db_max_connections: u32,
     pub db_min_connections: u32,
     pub concurrency_limiter: Arc<tokio::sync::Semaphore>,
+    pub max_concurrent_requests: usize,
+    pub rejected_503_count: Arc<AtomicU64>,
+    pub rate_limited_429_count: Arc<AtomicU64>,
     pub proxy_timeout_secs: u64,
     pub edge_rate_limit_per_min: usize,
 }
@@ -259,6 +263,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(
             args.max_concurrent_requests.max(1),
         )),
+        max_concurrent_requests: args.max_concurrent_requests.max(1),
+        rejected_503_count: Arc::new(AtomicU64::new(0)),
+        rate_limited_429_count: Arc::new(AtomicU64::new(0)),
         proxy_timeout_secs: args.proxy_timeout_secs.max(1),
         edge_rate_limit_per_min: args.edge_rate_limit_per_min,
     });
@@ -360,6 +367,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn read_process_rss_bytes() -> Option<u64> {
+    let content = std::fs::read_to_string("/proc/self/statm").ok()?;
+    let rss_pages: u64 = content.split_whitespace().nth(1)?.parse().ok()?;
+    Some(rss_pages.saturating_mul(4096))
+}
+
+fn classify_user_agent(ua: &str) -> &'static str {
+    let lower = ua.to_ascii_lowercase();
+    if lower.is_empty() {
+        "empty"
+    } else if lower.contains("okhttp") || lower.contains("android") {
+        "android"
+    } else if lower.contains("bot")
+        || lower.contains("crawler")
+        || lower.contains("spider")
+        || lower.contains("headless")
+        || lower.contains("python-requests")
+        || lower.contains("httpx")
+    {
+        "bot"
+    } else if lower.contains("curl") || lower.contains("wget") {
+        "cli"
+    } else if lower.contains("mozilla") || lower.contains("chrome") || lower.contains("safari") {
+        "browser"
+    } else {
+        "other"
+    }
+}
+
 /// Middleware de resiliência na borda: fail-fast (503) por saturação de concorrência
 /// e rate limit global por IP (429), preservando sondas de saúde e métricas internas.
 async fn edge_resilience_middleware(
@@ -367,17 +403,41 @@ async fn edge_resilience_middleware(
     req: Request,
     next: Next,
 ) -> Response {
-    let path = req.uri().path();
+    let path = req.uri().path().to_string();
     if matches!(
-        path,
+        path.as_str(),
         "/health" | "/ready" | "/api/ready" | "/api/internal/stats"
     ) {
         return next.run(req).await;
     }
 
+    let started = std::time::Instant::now();
+    let method = req.method().to_string();
+    let client_ip = req
+        .headers()
+        .get("cf-connecting-ip")
+        .or_else(|| req.headers().get("x-forwarded-for"))
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let ua_class = req
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(classify_user_agent)
+        .unwrap_or("empty");
+    let cf_ray = req
+        .headers()
+        .get("cf-ray")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string();
+
     let _permit = match state.concurrency_limiter.clone().try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => {
+            state.rejected_503_count.fetch_add(1, Ordering::Relaxed);
             let mut resp = Response::new(Body::from(
                 "{\"detail\":\"Serviço temporariamente sobrecarregado. Tente novamente em instantes.\"}",
             ));
@@ -386,67 +446,93 @@ async fn edge_resilience_middleware(
                 .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
             resp.headers_mut()
                 .insert(RETRY_AFTER, HeaderValue::from_static("5"));
+            info!(
+                target: "edge_access",
+                method = %method,
+                path = %path,
+                status = 503u16,
+                duration_ms = started.elapsed().as_millis() as u64,
+                client_ip = %client_ip,
+                ua_class = %ua_class,
+                cf_ray = %cf_ray,
+                "edge_load_shed"
+            );
             return resp;
         }
     };
 
-    if state.edge_rate_limit_per_min > 0 {
-        let client_ip = req
-            .headers()
-            .get("cf-connecting-ip")
-            .or_else(|| req.headers().get("x-forwarded-for"))
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.split(',').next())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| "127.0.0.1".to_string());
-
-        if !matches!(
+    if state.edge_rate_limit_per_min > 0
+        && !matches!(
             client_ip.as_str(),
             "" | "127.0.0.1" | "::1" | "localhost" | "unknown"
-        ) {
-            match state
-                .limiter
-                .check(
-                    "edge_global",
-                    &client_ip,
-                    state.edge_rate_limit_per_min,
-                    60,
-                    None,
-                    None,
-                )
-                .await
-            {
-                Ok(()) => {}
-                Err(braga_limiter::LimiterError::IpBlocked { remaining_seconds }) => {
-                    let mut resp = Response::new(Body::from(format!(
-                        "{{\"detail\":\"Acesso bloqueado por 24 horas para este IP.\",\"retry_after\":{remaining_seconds}}}"
-                    )));
-                    *resp.status_mut() = StatusCode::FORBIDDEN;
-                    resp.headers_mut()
-                        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-                    if let Ok(val) = HeaderValue::from_str(&remaining_seconds.to_string()) {
-                        resp.headers_mut().insert(RETRY_AFTER, val);
-                    }
-                    return resp;
+        )
+    {
+        match state
+            .limiter
+            .check(
+                "edge_global",
+                &client_ip,
+                state.edge_rate_limit_per_min,
+                60,
+                None,
+                None,
+            )
+            .await
+        {
+            Ok(()) => {}
+            Err(braga_limiter::LimiterError::IpBlocked { remaining_seconds }) => {
+                let mut resp = Response::new(Body::from(format!(
+                    "{{\"detail\":\"Acesso bloqueado por 24 horas para este IP.\",\"retry_after\":{remaining_seconds}}}"
+                )));
+                *resp.status_mut() = StatusCode::FORBIDDEN;
+                resp.headers_mut()
+                    .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                if let Ok(val) = HeaderValue::from_str(&remaining_seconds.to_string()) {
+                    resp.headers_mut().insert(RETRY_AFTER, val);
                 }
-                Err(braga_limiter::LimiterError::RateLimitExceeded { retry_after }) => {
-                    let mut resp = Response::new(Body::from(format!(
-                        "{{\"detail\":\"Muitas requisições. Aguarde {retry_after}s.\",\"retry_after\":{retry_after}}}"
-                    )));
-                    *resp.status_mut() = StatusCode::TOO_MANY_REQUESTS;
-                    resp.headers_mut()
-                        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-                    if let Ok(val) = HeaderValue::from_str(&retry_after.to_string()) {
-                        resp.headers_mut().insert(RETRY_AFTER, val);
-                    }
-                    return resp;
-                }
-                Err(_) => {}
+                return resp;
             }
+            Err(braga_limiter::LimiterError::RateLimitExceeded { retry_after }) => {
+                state.rate_limited_429_count.fetch_add(1, Ordering::Relaxed);
+                let mut resp = Response::new(Body::from(format!(
+                    "{{\"detail\":\"Muitas requisições. Aguarde {retry_after}s.\",\"retry_after\":{retry_after}}}"
+                )));
+                *resp.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+                resp.headers_mut()
+                    .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                if let Ok(val) = HeaderValue::from_str(&retry_after.to_string()) {
+                    resp.headers_mut().insert(RETRY_AFTER, val);
+                }
+                info!(
+                    target: "edge_access",
+                    method = %method,
+                    path = %path,
+                    status = 429u16,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    client_ip = %client_ip,
+                    ua_class = %ua_class,
+                    cf_ray = %cf_ray,
+                    "edge_rate_limited"
+                );
+                return resp;
+            }
+            Err(_) => {}
         }
     }
 
-    next.run(req).await
+    let resp = next.run(req).await;
+    info!(
+        target: "edge_access",
+        method = %method,
+        path = %path,
+        status = resp.status().as_u16(),
+        duration_ms = started.elapsed().as_millis() as u64,
+        client_ip = %client_ip,
+        ua_class = %ua_class,
+        cf_ray = %cf_ray,
+        "edge_request"
+    );
+    resp
 }
 
 async fn shutdown_signal() {
@@ -610,6 +696,10 @@ async fn internal_stats_handler(
         min_connections: state.db_min_connections,
     });
 
+    let active_http_connections = state
+        .max_concurrent_requests
+        .saturating_sub(state.concurrency_limiter.available_permits());
+
     let stats = InternalStatsResponse {
         status: "online".to_string(),
         version,
@@ -623,6 +713,11 @@ async fn internal_stats_handler(
             chat_routes: Some(state.chat_routes_enabled),
         },
         db_pool,
+        active_http_connections: Some(active_http_connections),
+        max_concurrent_requests: Some(state.max_concurrent_requests),
+        rejected_503_count: Some(state.rejected_503_count.load(Ordering::Relaxed)),
+        rate_limited_429_count: Some(state.rate_limited_429_count.load(Ordering::Relaxed)),
+        process_rss_bytes: read_process_rss_bytes(),
     };
 
     let mut resp = Response::new(Body::from(
@@ -3233,12 +3328,16 @@ mod tests {
             db_max_connections: 5,
             db_min_connections: 1,
             concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(1)),
+            max_concurrent_requests: 1,
+            rejected_503_count: Arc::new(AtomicU64::new(0)),
+            rate_limited_429_count: Arc::new(AtomicU64::new(0)),
             proxy_timeout_secs: 5,
             edge_rate_limit_per_min: 2,
         });
 
         let app = Router::new()
             .route("/health", get(health_handler))
+            .route("/api/internal/stats", get(internal_stats_handler))
             .route("/api/app/latest", get(apk_retired_handler))
             .layer(middleware::from_fn_with_state(
                 state.clone(),
@@ -3308,5 +3407,9 @@ mod tests {
             .unwrap();
         assert_eq!(resp_429.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!(resp_429.headers().get(RETRY_AFTER).is_some());
+
+        // 3. Verifica que /api/internal/stats expõe contadores de resiliência e RSS
+        assert_eq!(state.rejected_503_count.load(Ordering::Relaxed), 1);
+        assert_eq!(state.rate_limited_429_count.load(Ordering::Relaxed), 1);
     }
 }

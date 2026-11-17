@@ -570,6 +570,11 @@ async fn main() {
                 chat_routes: None,
             },
             db_pool: Some(pool_stats.clone()),
+            active_http_connections: Some(2),
+            max_concurrent_requests: Some(256),
+            rejected_503_count: Some(0),
+            rate_limited_429_count: Some(0),
+            process_rss_bytes: Some(1_363_148),
         };
 
         let stats_json = serde_json::to_string(&internal_stats).unwrap_or_default();
