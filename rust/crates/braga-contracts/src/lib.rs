@@ -803,6 +803,16 @@ pub struct InternalStatsResponse {
     pub features: FeatureFlagsDto,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub db_pool: Option<DbPoolStatsDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_http_connections: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_503_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limited_429_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_rss_bytes: Option<u64>,
 }
 
 // ============================================================================
