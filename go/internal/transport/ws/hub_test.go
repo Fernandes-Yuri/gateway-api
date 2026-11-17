@@ -755,3 +755,37 @@ func TestConcurrentRegisterUnregisterBroadcast(t *testing.T) {
 		t.Fatalf("Esperava 0 conexões ao final do teste de concorrência, obteve %d", total)
 	}
 }
+
+func TestHubMaxConnsReturns503(t *testing.T) {
+	hub := ws.NewHub(1)
+	go hub.Run()
+
+	repo := newMockFamilyRepo()
+	repo.allow("u1", "p1")
+	repo.allow("u2", "p1")
+
+	c1 := ws.NewClient(hub, nil, "u1", "p1")
+	if !hub.TryRegister(c1) {
+		t.Fatal("Esperava que a primeira conexão fosse aceita")
+	}
+	defer hub.Unregister(c1)
+
+	if hub.CanAccept() {
+		t.Fatal("Esperava CanAccept() == false ao atingir maxConns=1")
+	}
+
+	c2 := ws.NewClient(hub, nil, "u2", "p1")
+	if hub.TryRegister(c2) {
+		t.Fatal("Esperava que TryRegister rejeitasse além de maxConns=1")
+	}
+
+	handler := ws.NewHandler(hub, repo)
+	req := httptest.NewRequest(http.MethodGet, "/ws/family?patientId=p1", nil)
+	req.Header.Set("X-User-Id", "u2")
+	rec := httptest.NewRecorder()
+	handler.ServeWS(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Esperava HTTP 503 ao exceder maxConns, obteve %d", rec.Code)
+	}
+}

@@ -20,12 +20,18 @@ ExecStart=/home/ec2-user/braga-gateway/venv/bin/gunicorn server:app \
     -k uvicorn.workers.UvicornWorker \
     --bind 127.0.0.1:8083 \
     --bind unix:/run/braga-saude/backend.sock \
+    --limit-concurrency 64 \
+    --max-requests 2000 \
+    --max-requests-jitter 200 \
     --timeout 30
 # Graceful shutdown: segue o padrao do systemd de servicos web.
 KillSignal=SIGTERM
 TimeoutStopSec=15
 Restart=on-failure
 RestartSec=3
+MemoryHigh=700M
+MemoryMax=900M
+LimitNOFILE=65536
 # Privacidade: cultural heranca do drop-in 10-private-memory.conf
 # (LimitCORE=0 impede dumps com memoria do processo).
 LimitCORE=0

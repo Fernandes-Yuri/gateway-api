@@ -15,6 +15,9 @@ Environment=LISTEN_ADDR=127.0.0.1:8082
 ExecStart=/usr/local/bin/braga-chat
 Restart=always
 RestartSec=3
+MemoryHigh=200M
+MemoryMax=300M
+LimitNOFILE=65536
 LimitCORE=0
 
 [Install]

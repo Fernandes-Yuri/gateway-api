@@ -67,6 +67,12 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 3.5. Fail-fast se o Hub atingir o limite de conexões simultâneas
+	if !h.hub.CanAccept() {
+		writeJSONError(w, http.StatusServiceUnavailable, "Serviço temporariamente sobrecarregado. Tente novamente.")
+		return
+	}
+
 	// 4. Handshake RFC 6455 via coder/websocket
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
@@ -84,7 +90,10 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		client = NewClient(h.hub, conn, uid, patientID)
 	}
 
-	h.hub.Register(client)
+	if !h.hub.TryRegister(client) {
+		_ = conn.Close(websocket.StatusTryAgainLater, "capacidade maxima atingida")
+		return
+	}
 
 	// Inicia bombas de escrita e leitura
 	go client.writePump()
