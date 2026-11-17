@@ -1162,6 +1162,7 @@ async fn check_user_moderation_cached(
     }
 }
 
+#[allow(clippy::result_large_err)]
 async fn authenticate_request(
     headers: &HeaderMap,
     state: &AppState,
