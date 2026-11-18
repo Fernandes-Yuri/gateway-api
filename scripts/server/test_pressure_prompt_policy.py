@@ -20,3 +20,12 @@ class PressureReferencePolicyTest(unittest.TestCase):
     def test_conversation_policy_uses_the_same_reference(self):
         self.assertIn("SBC/SBH/SBN 2025", APP_SYSTEM)
         self.assertNotIn("pressão: Ótima", APP_SYSTEM)
+
+    def test_reference_does_not_require_classifying_the_patient(self):
+        for prompt in (SYSTEM_PROMPT, APP_SYSTEM):
+            with self.subTest(prompt=prompt[:30]):
+                self.assertIn("a pedido do usuário", prompt)
+                self.assertIn("informação educativa geral", prompt)
+                self.assertIn("Não classifique a pessoa em um estágio clínico", prompt)
+                self.assertNotIn("em qual estágio ou faixa clínica oficial o usuário se encontra", prompt)
+                self.assertNotIn("Ao comentar pressão/glicemia, informe a faixa", prompt)
