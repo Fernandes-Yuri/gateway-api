@@ -180,13 +180,13 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-fn require_service_token(headers: &HeaderMap) -> Result<(), Response> {
+fn require_service_token(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {
     let expected = std::env::var("SERVICE_TOKEN")
         .unwrap_or_default()
         .trim()
         .to_string();
     if expected.is_empty() {
-        return Err(json_error(
+        return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             "Autenticação administrativa não configurada.",
         ));
@@ -200,7 +200,7 @@ fn require_service_token(headers: &HeaderMap) -> Result<(), Response> {
         .map(str::trim)
         .unwrap_or("");
     if provided.is_empty() || !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
-        return Err(json_error(
+        return Err((
             StatusCode::UNAUTHORIZED,
             "Token administrativo inválido ou ausente.",
         ));
@@ -353,13 +353,11 @@ pub fn validate_review_transition(
     }
 }
 
-fn require_pool(state: &AppState) -> Result<&PgPool, Response> {
-    state.pool.as_ref().ok_or_else(|| {
-        json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Banco de dados não disponível.",
-        )
-    })
+fn require_pool(state: &AppState) -> Result<&PgPool, (StatusCode, &'static str)> {
+    state.pool.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Banco de dados não disponível.",
+    ))
 }
 
 fn parse_categories_json(raw: &Value) -> Vec<String> {
@@ -418,7 +416,7 @@ pub async fn get_contexts_handler(
     };
     let pool = match require_pool(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err((code, msg)) => return json_error(code, msg),
     };
 
     let mut contexts = vec![personal_context(&identity.uid)];
@@ -538,7 +536,7 @@ pub async fn select_context_handler(
     };
     let pool = match require_pool(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err((code, msg)) => return json_error(code, msg),
     };
 
     let resolved: Option<ContextDescriptor> = if mode == "PARTNER_OWNER" {
@@ -680,7 +678,7 @@ pub async fn get_my_program_handler(
     };
     let pool = match require_pool(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err((code, msg)) => return json_error(code, msg),
     };
 
     let row = match sqlx::query(
@@ -754,7 +752,7 @@ pub async fn save_my_program_handler(
 
     let pool = match require_pool(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err((code, msg)) => return json_error(code, msg),
     };
 
     let existing = match sqlx::query(
@@ -869,7 +867,7 @@ pub async fn submit_my_program_handler(
         };
     let pool = match require_pool(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err((code, msg)) => return json_error(code, msg),
     };
 
     let existing = match sqlx::query(
@@ -964,7 +962,7 @@ pub async fn lookup_invite_handler(
     }
     let pool = match require_pool(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err((code, msg)) => return json_error(code, msg),
     };
 
     let row = match sqlx::query(
@@ -1029,8 +1027,8 @@ pub async fn admin_list_programs_handler(
     headers: HeaderMap,
     Query(query): Query<AdminProgramsQuery>,
 ) -> Response {
-    if let Err(resp) = require_service_token(&headers) {
-        return resp;
+    if let Err((code, msg)) = require_service_token(&headers) {
+        return json_error(code, msg);
     }
     let filter_status: Option<String> = match query.status.as_deref() {
         Some(raw) if !raw.trim().is_empty() => match ApprovalStatus::parse(raw) {
@@ -1044,7 +1042,7 @@ pub async fn admin_list_programs_handler(
 
     let pool = match require_pool(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err((code, msg)) => return json_error(code, msg),
     };
 
     let rows = match sqlx::query(
@@ -1096,8 +1094,8 @@ pub async fn admin_review_program_handler(
     Path(program_id): Path<String>,
     Json(req): Json<AdminReviewRequest>,
 ) -> Response {
-    if let Err(resp) = require_service_token(&headers) {
-        return resp;
+    if let Err((code, msg)) = require_service_token(&headers) {
+        return json_error(code, msg);
     }
     let prog_uuid = match Uuid::parse_str(program_id.trim()) {
         Ok(u) => u,
@@ -1124,7 +1122,7 @@ pub async fn admin_review_program_handler(
 
     let pool = match require_pool(&state) {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err((code, msg)) => return json_error(code, msg),
     };
 
     let mut tx = match pool.begin().await {
