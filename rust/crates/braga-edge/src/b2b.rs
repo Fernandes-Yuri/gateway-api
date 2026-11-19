@@ -195,7 +195,10 @@ fn require_service_token(headers: &HeaderMap) -> Result<(), Response> {
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    let provided = auth_hdr.strip_prefix("Bearer ").map(str::trim).unwrap_or("");
+    let provided = auth_hdr
+        .strip_prefix("Bearer ")
+        .map(str::trim)
+        .unwrap_or("");
     if provided.is_empty() || !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
         return Err(json_error(
             StatusCode::UNAUTHORIZED,
@@ -206,12 +209,12 @@ fn require_service_token(headers: &HeaderMap) -> Result<(), Response> {
 }
 
 pub fn normalize_primary_color(raw: Option<&str>) -> Result<String, &'static str> {
-    let value = raw.unwrap_or(DEFAULT_PRIMARY_COLOR).trim().to_ascii_uppercase();
+    let value = raw
+        .unwrap_or(DEFAULT_PRIMARY_COLOR)
+        .trim()
+        .to_ascii_uppercase();
     let bytes = value.as_bytes();
-    if bytes.len() != 7
-        || bytes[0] != b'#'
-        || !bytes[1..].iter().all(|b| b.is_ascii_hexdigit())
-    {
+    if bytes.len() != 7 || bytes[0] != b'#' || !bytes[1..].iter().all(|b| b.is_ascii_hexdigit()) {
         return Err("Cor principal inválida. Use o formato hexadecimal #RRGGBB.");
     }
     Ok(value)
@@ -333,7 +336,10 @@ pub fn validate_review_transition(
                     "Informe uma justificativa (mínimo 5 caracteres) ao solicitar ajustes ou recusar.",
                 ));
             }
-            Ok((ApprovalStatus::ChangesRequested, "PROGRAM_CHANGES_REQUESTED"))
+            Ok((
+                ApprovalStatus::ChangesRequested,
+                "PROGRAM_CHANGES_REQUESTED",
+            ))
         }
         ReviewAction::Reject => {
             if note.len() < 5 {
@@ -523,7 +529,12 @@ pub async fn select_context_handler(
     let raw_id = req.program_id.unwrap_or_default();
     let program_uuid = match Uuid::parse_str(raw_id.trim()) {
         Ok(id) => id,
-        Err(_) => return json_error(StatusCode::BAD_REQUEST, "Identificador do programa inválido."),
+        Err(_) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Identificador do programa inválido.",
+            )
+        }
     };
     let pool = match require_pool(&state) {
         Ok(p) => p,
@@ -662,11 +673,11 @@ pub async fn get_my_program_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Response {
-    let identity =
-        match authenticate_request(&headers, &state, "GET", "/api/b2b/program/me").await {
-            Ok(id) => id,
-            Err(resp) => return resp,
-        };
+    let identity = match authenticate_request(&headers, &state, "GET", "/api/b2b/program/me").await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let pool = match require_pool(&state) {
         Ok(p) => p,
         Err(resp) => return resp,
@@ -708,11 +719,11 @@ pub async fn save_my_program_handler(
     headers: HeaderMap,
     Json(req): Json<UpsertPartnerProgramRequest>,
 ) -> Response {
-    let identity =
-        match authenticate_request(&headers, &state, "POST", "/api/b2b/program/me").await {
-            Ok(id) => id,
-            Err(resp) => return resp,
-        };
+    let identity = match authenticate_request(&headers, &state, "POST", "/api/b2b/program/me").await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
 
     let clean_company = req.company_name.trim();
     let clean_program = req.program_name.trim();
@@ -1150,7 +1161,8 @@ pub async fn admin_review_program_handler(
     };
 
     let current_status_str: String = existing.get("approval_status");
-    let current_status = ApprovalStatus::parse(&current_status_str).unwrap_or(ApprovalStatus::Draft);
+    let current_status =
+        ApprovalStatus::parse(&current_status_str).unwrap_or(ApprovalStatus::Draft);
     let (next_status, audit_action) =
         match validate_review_transition(current_status, action, clean_note, req.seat_limit) {
             Ok(v) => v,
@@ -1169,14 +1181,13 @@ pub async fn admin_review_program_handler(
         let program_name: String = existing.get("program_name");
         for _ in 0..5 {
             let candidate = generate_invite_code(&program_name);
-            let collision: Option<i32> = sqlx::query_scalar(
-                "SELECT 1 FROM partner_programs WHERE UPPER(invite_code) = $1",
-            )
-            .bind(&candidate)
-            .fetch_optional(&mut *tx)
-            .await
-            .ok()
-            .flatten();
+            let collision: Option<i32> =
+                sqlx::query_scalar("SELECT 1 FROM partner_programs WHERE UPPER(invite_code) = $1")
+                    .bind(&candidate)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .ok()
+                    .flatten();
             if collision.is_none() {
                 next_invite_code = Some(candidate);
                 break;
@@ -1244,7 +1255,9 @@ pub async fn admin_review_program_handler(
         );
     }
 
-    let active = count_active_participants(pool, prog_uuid).await.unwrap_or(0);
+    let active = count_active_participants(pool, prog_uuid)
+        .await
+        .unwrap_or(0);
     let dto = map_program_row(&updated, active, true);
     (
         StatusCode::OK,

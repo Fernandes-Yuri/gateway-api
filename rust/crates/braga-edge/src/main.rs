@@ -353,7 +353,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if state.pool.is_some() {
         app = app
             .route("/api/b2b/contexts", get(b2b::get_contexts_handler))
-            .route("/api/b2b/contexts/select", post(b2b::select_context_handler))
+            .route(
+                "/api/b2b/contexts/select",
+                post(b2b::select_context_handler),
+            )
             .route(
                 "/api/b2b/program/me",
                 get(b2b::get_my_program_handler)
