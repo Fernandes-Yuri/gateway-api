@@ -546,9 +546,14 @@ pub struct UpdateInvitePolicyRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ParticipantsQuery {
     pub limit: Option<i64>,
     pub cursor: Option<String>,
+    pub q: Option<String>,
+    pub category: Option<String>,
+    #[serde(alias = "attention_only")]
+    pub attention_only: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -562,6 +567,15 @@ pub struct PartnerParticipantItemDto {
     pub patient_user_id: String,
     pub display_name: String,
     pub shared_categories: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effective_categories: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_program_categories: Vec<String>,
+    pub family_support_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family_support_summary: Option<String>,
+    pub pending_appointments_count: i64,
+    pub unread_direct_messages_count: i64,
     pub consented_at: Option<String>,
 }
 
@@ -632,10 +646,21 @@ pub struct SharedVitalEntryDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SharedBiometryEntryDto {
+    pub measured_at: String,
+    pub weight_kg: f64,
+    pub height_m: Option<f64>,
+    pub imc: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SharedAuthorizedRecordsSectionDto {
     pub source: String,
     pub zero_file_egress_notice: String,
     pub records: Vec<SharedVitalEntryDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub biometries: Vec<SharedBiometryEntryDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -648,6 +673,9 @@ pub struct ParticipantRoutineSummaryDto {
     pub participant_name: String,
     pub period_days: i32,
     pub shared_categories: Vec<String>,
+    pub family_support_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family_support_summary: Option<String>,
     pub steps_section: Option<SharedStepsSectionDto>,
     pub hydration_section: Option<SharedHydrationSectionDto>,
     pub medications_section: Option<SharedMedicationsSectionDto>,
@@ -968,17 +996,64 @@ pub fn check_enrollment_eligibility(
     Ok(())
 }
 
+pub fn parse_composite_cursor_and_limit(
+    cursor: Option<&str>,
+    limit: Option<i64>,
+) -> (Option<DateTime<Utc>>, Option<String>, i64) {
+    let clamped_limit = limit.unwrap_or(20).clamp(1, 50);
+    let clean = cursor.map(str::trim).filter(|s| !s.is_empty());
+    let Some(raw) = clean else {
+        return (None, None, clamped_limit);
+    };
+    if let Some((dt_part, id_part)) = raw.split_once('|') {
+        let dt_opt = DateTime::parse_from_rfc3339(dt_part.trim())
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc));
+        let clean_id = id_part.trim();
+        let id_opt = if dt_opt.is_some() && !clean_id.is_empty() && clean_id.len() <= 128 {
+            Some(clean_id.to_string())
+        } else {
+            None
+        };
+        return (dt_opt, id_opt, clamped_limit);
+    }
+    let dt_opt = DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc));
+    (dt_opt, None, clamped_limit)
+}
+
 pub fn parse_cursor_and_limit(
     cursor: Option<&str>,
     limit: Option<i64>,
 ) -> (Option<DateTime<Utc>>, i64) {
-    let clamped_limit = limit.unwrap_or(20).clamp(1, 50);
-    let parsed_cursor = cursor
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&Utc));
-    (parsed_cursor, clamped_limit)
+    let (dt, _, clamped) = parse_composite_cursor_and_limit(cursor, limit);
+    (dt, clamped)
+}
+
+pub fn escape_like_pattern(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 4);
+    for ch in raw.chars() {
+        match ch {
+            '!' | '%' | '_' => {
+                out.push('!');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    format!("%{out}%")
+}
+
+pub fn compute_missing_program_categories(
+    program_enabled_metrics: &[String],
+    patient_consented_categories: &[String],
+) -> Vec<String> {
+    program_enabled_metrics
+        .iter()
+        .filter(|cat| !patient_consented_categories.iter().any(|c| c == *cat))
+        .cloned()
+        .collect()
 }
 
 pub fn clamp_summary_days(days: Option<i32>) -> i32 {
@@ -4265,24 +4340,81 @@ pub async fn list_program_participants_handler(
         );
     };
 
-    let (cursor_dt, limit) = parse_cursor_and_limit(query.cursor.as_deref(), query.limit);
+    let raw_tk: Option<String> = program_row.try_get("template_key").ok();
+    let raw_cfg: Option<Value> = program_row.try_get("experience_config").ok();
+    let (_, program_config) = parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
+
+    let clean_q = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| escape_like_pattern(&s.chars().take(80).collect::<String>()));
+
+    let filter_category_json: Option<Value> = match query
+        .category
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        None => None,
+        Some(raw) => {
+            let lower = raw.to_ascii_lowercase();
+            if ALLOWED_SHARED_CATEGORIES.contains(&lower.as_str()) {
+                Some(json!([lower]))
+            } else {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    "Categoria de filtro de carteira inválida.",
+                );
+            }
+        }
+    };
+    let attention_only = query.attention_only.unwrap_or(false);
+
+    let (cursor_dt, cursor_id, limit) =
+        parse_composite_cursor_and_limit(query.cursor.as_deref(), query.limit);
     let fetch_limit = limit + 1;
 
     let rows = match sqlx::query(
         "SELECT e.patient_user_id, \
                 COALESCE(NULLIF(BTRIM(pr.full_name), ''), 'Participante') AS display_name, \
                 e.shared_categories, \
+                COALESCE(e.family_share_enabled, false) AS family_share_enabled, \
+                EXISTS( \
+                    SELECT 1 FROM family_bindings fb \
+                     WHERE fb.patient_id = e.patient_user_id AND fb.status = 'ACTIVE' \
+                ) AS has_family_binding, \
                 e.consented_at \
            FROM program_enrollments e \
            JOIN profiles pr ON pr.id = e.patient_user_id \
           WHERE e.program_id = $1 \
             AND e.status = 'ACTIVE' \
-            AND ($2::timestamptz IS NULL OR e.consented_at < $2) \
+            AND ( \
+                $2::timestamptz IS NULL \
+                OR e.consented_at < $2 \
+                OR ($3::text IS NOT NULL AND e.consented_at = $2 AND e.patient_user_id > $3) \
+            ) \
+            AND ($4::text IS NULL OR pr.full_name ILIKE $4 ESCAPE '!') \
+            AND ($5::jsonb IS NULL OR e.shared_categories @> $5::jsonb) \
+            AND ( \
+                NOT $6::boolean \
+                OR jsonb_array_length(e.shared_categories) = 0 \
+                OR EXISTS ( \
+                    SELECT 1 FROM unnest($7::text[]) AS req(cat) \
+                     WHERE NOT (e.shared_categories @> jsonb_build_array(req.cat)) \
+                ) \
+            ) \
           ORDER BY e.consented_at DESC, e.patient_user_id ASC \
-          LIMIT $3",
+          LIMIT $8",
     )
     .bind(prog_uuid)
     .bind(cursor_dt)
+    .bind(cursor_id)
+    .bind(clean_q)
+    .bind(filter_category_json)
+    .bind(attention_only)
+    .bind(&program_config.enabled_metrics)
     .bind(fetch_limit)
     .fetch_all(pool)
     .await
@@ -4302,16 +4434,40 @@ pub async fn list_program_participants_handler(
     let mut next_cursor: Option<String> = None;
 
     for row in rows.into_iter().take(slice_len) {
+        let patient_uid: String = row.get("patient_user_id");
         let consented: Option<DateTime<Utc>> = row.try_get("consented_at").ok();
         let consented_iso = consented.map(|dt| dt.to_rfc3339());
         if has_more {
-            next_cursor = consented_iso.clone();
+            if let Some(ref iso) = consented_iso {
+                next_cursor = Some(format!("{iso}|{patient_uid}"));
+            }
         }
         let cats: Value = row.get("shared_categories");
+        let consented_list = parse_categories_json(&cats);
+        let effective =
+            intersect_effective_categories(&program_config.enabled_metrics, &consented_list);
+        let missing =
+            compute_missing_program_categories(&program_config.enabled_metrics, &consented_list);
+        let fam_share: bool = row.try_get("family_share_enabled").unwrap_or(false);
+        let has_binding: bool = row.try_get("has_family_binding").unwrap_or(false);
+        let family_support_active =
+            program_config.features.family_link_enabled && fam_share && has_binding;
+        let family_support_summary = if family_support_active {
+            Some("Familiar autorizado ativo".to_string())
+        } else {
+            None
+        };
+
         participants.push(PartnerParticipantItemDto {
-            patient_user_id: row.get("patient_user_id"),
+            patient_user_id: patient_uid,
             display_name: row.get("display_name"),
-            shared_categories: parse_categories_json(&cats),
+            shared_categories: consented_list,
+            effective_categories: effective,
+            missing_program_categories: missing,
+            family_support_active,
+            family_support_summary,
+            pending_appointments_count: 0,
+            unread_direct_messages_count: 0,
             consented_at: consented_iso,
         });
     }
@@ -4553,12 +4709,49 @@ async fn load_authorized_records_section(
         })
         .collect();
 
+    let bio_rows = sqlx::query(
+        "SELECT measured_at, weight_kg, height_m, imc \
+           FROM biometrics \
+          WHERE user_id = $1 \
+            AND measured_at >= NOW() - make_interval(days => $2) \
+          ORDER BY measured_at DESC \
+          LIMIT 20",
+    )
+    .bind(patient_id)
+    .bind(days)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let biometries: Vec<SharedBiometryEntryDto> = bio_rows
+        .into_iter()
+        .filter_map(|r| {
+            let weight_kg: f64 = r.try_get("weight_kg").ok()?;
+            let height_m: Option<f64> = r
+                .try_get("height_m")
+                .ok()
+                .map(|v: f64| (v * 100.0).round() / 100.0);
+            let imc: Option<f64> = r
+                .try_get("imc")
+                .ok()
+                .map(|v: f64| (v * 10.0).round() / 10.0);
+            let measured_at: Option<DateTime<Utc>> = r.try_get("measured_at").ok();
+            Some(SharedBiometryEntryDto {
+                measured_at: measured_at.map(|dt| dt.to_rfc3339()).unwrap_or_default(),
+                weight_kg: (weight_kg * 10.0).round() / 10.0,
+                height_m,
+                imc,
+            })
+        })
+        .collect();
+
     SharedAuthorizedRecordsSectionDto {
         source: "Braga Saúde • Registros autorizados".to_string(),
         zero_file_egress_notice:
             "Arquivos e exames do organizador pessoal permanecem privados neste fluxo (Zero File Egress)."
                 .to_string(),
         records,
+        biometries,
     }
 }
 
@@ -4592,6 +4785,11 @@ pub async fn get_participant_summary_handler(
         "SELECT p.id AS program_id, p.owner_user_id, p.approval_status, p.program_name, \
                 p.company_name, p.template_key, p.experience_config, \
                 e.status AS enrollment_status, e.shared_categories, \
+                COALESCE(e.family_share_enabled, false) AS family_share_enabled, \
+                EXISTS( \
+                    SELECT 1 FROM family_bindings fb \
+                     WHERE fb.patient_id = $2 AND fb.status = 'ACTIVE' \
+                ) AS has_family_binding, \
                 COALESCE(NULLIF(BTRIM(pr.full_name), ''), 'Participante') AS participant_name \
            FROM partner_programs p \
            LEFT JOIN program_enrollments e \
@@ -4686,6 +4884,16 @@ pub async fn get_participant_summary_handler(
     )
     .await;
 
+    let fam_share: bool = row.try_get("family_share_enabled").unwrap_or(false);
+    let has_binding: bool = row.try_get("has_family_binding").unwrap_or(false);
+    let family_support_active =
+        program_config.features.family_link_enabled && fam_share && has_binding;
+    let family_support_summary = if family_support_active {
+        Some("Familiar autorizado ativo".to_string())
+    } else {
+        None
+    };
+
     let summary = ParticipantRoutineSummaryDto {
         program_id: prog_uuid.to_string(),
         program_name: row.get("program_name"),
@@ -4694,6 +4902,8 @@ pub async fn get_participant_summary_handler(
         participant_name: row.get("participant_name"),
         period_days,
         shared_categories,
+        family_support_active,
+        family_support_summary,
         steps_section,
         hydration_section,
         medications_section,
@@ -5852,6 +6062,25 @@ mod tests {
         let (c_ok, l_clamped) = parse_cursor_and_limit(Some("2026-11-18T20:00:00Z"), Some(500));
         assert!(c_ok.is_some());
         assert_eq!(l_clamped, 50);
+
+        let (comp_dt, comp_id, comp_lim) =
+            parse_composite_cursor_and_limit(Some("2026-11-18T20:00:00Z|patient-7"), Some(15));
+        assert!(comp_dt.is_some());
+        assert_eq!(comp_id.as_deref(), Some("patient-7"));
+        assert_eq!(comp_lim, 15);
+
+        assert_eq!(escape_like_pattern("Ana_Silva%100!"), "%Ana!_Silva!%100!!%");
+        assert_eq!(
+            compute_missing_program_categories(
+                &[
+                    "steps".to_string(),
+                    "hydration".to_string(),
+                    "medications".to_string()
+                ],
+                &["steps".to_string()],
+            ),
+            vec!["hydration".to_string(), "medications".to_string()]
+        );
 
         assert_eq!(
             format_confirmed_via_label(Some("braga.voice")),
