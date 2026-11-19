@@ -1,4 +1,5 @@
 mod b2b;
+mod b2b_storage;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -3215,6 +3216,15 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 .post(b2b::save_my_program_handler),
         )
         .route(
+            "/api/b2b/program/me/logo",
+            post(b2b::upload_my_program_logo_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(3 * 1024 * 1024)),
+        )
+        .route(
+            "/api/files/b2b-logos/:program_id/:file",
+            get(b2b::get_b2b_logo_file_handler),
+        )
+        .route(
             "/api/b2b/program/me/experience",
             axum::routing::put(b2b::update_program_experience_handler)
                 .post(b2b::update_program_experience_handler),
@@ -3568,6 +3578,12 @@ mod tests {
                 "POST",
                 "/api/b2b/program/me",
                 Some("{\"companyName\":\"Clinica\",\"programName\":\"Programa\"}"),
+            ),
+            ("POST", "/api/b2b/program/me/logo", None),
+            (
+                "GET",
+                "/api/files/b2b-logos/00000000-0000-0000-0000-000000000000/logo-test.png",
+                None,
             ),
             (
                 "PUT",
