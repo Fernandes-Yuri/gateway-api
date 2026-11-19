@@ -5,7 +5,7 @@ import unittest
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from urllib.parse import urlparse
 
 try:

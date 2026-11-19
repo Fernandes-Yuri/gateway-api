@@ -130,11 +130,31 @@ impl ReceitaCnpjRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KybLookupOutcome {
     Found {
-        record: ReceitaCnpjRecord,
+        record: Box<ReceitaCnpjRecord>,
         from_cache: bool,
     },
     NotFound,
     Unavailable(String),
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct NormalizedCouncilFields {
+    pub council_type: Option<String>,
+    pub council_number: Option<String>,
+    pub council_uf: Option<String>,
+}
+
+pub struct AutoKybInput<'a> {
+    pub template: TemplateKey,
+    pub company_name: &'a str,
+    pub program_name: &'a str,
+    pub responsible_name: &'a str,
+    pub cpf: &'a NormalizedCpf,
+    pub has_council: bool,
+    pub terms_accepted: bool,
+    pub auto_approve_enabled: bool,
+    pub infra_ok: bool,
+    pub today: NaiveDate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,13 +372,13 @@ pub fn normalize_council_fields(
     council_type: Option<&str>,
     council_number: Option<&str>,
     council_uf: Option<&str>,
-) -> Result<(Option<String>, Option<String>, Option<String>), &'static str> {
+) -> Result<NormalizedCouncilFields, &'static str> {
     let ct = council_type.unwrap_or("").trim().to_ascii_uppercase();
     let cn = council_number.unwrap_or("").trim().to_ascii_uppercase();
     let uf_opt = normalize_uf(council_uf, "UF do conselho profissional inválida.")?;
 
     if ct.is_empty() && cn.is_empty() && uf_opt.is_none() {
-        return Ok((None, None, None));
+        return Ok(NormalizedCouncilFields::default());
     }
     if ct.is_empty() || cn.is_empty() || uf_opt.is_none() {
         return Err("Informe tipo, número e UF do conselho profissional.");
@@ -377,7 +397,11 @@ pub fn normalize_council_fields(
     {
         return Err("Número do registro profissional inválido.");
     }
-    Ok((Some(ct), Some(cn), uf_opt))
+    Ok(NormalizedCouncilFields {
+        council_type: Some(ct),
+        council_number: Some(cn),
+        council_uf: uf_opt,
+    })
 }
 
 pub fn fold_ascii_lower(input: &str) -> String {
@@ -536,20 +560,8 @@ pub fn matches_responsible_in_receita(
     false
 }
 
-pub fn evaluate_auto_kyb(
-    template: TemplateKey,
-    company_name: &str,
-    program_name: &str,
-    responsible_name: &str,
-    cpf: &NormalizedCpf,
-    has_council: bool,
-    terms_accepted: bool,
-    auto_approve_enabled: bool,
-    infra_ok: bool,
-    today: NaiveDate,
-    lookup: &KybLookupOutcome,
-) -> KybEvaluation {
-    if !terms_accepted {
+pub fn evaluate_auto_kyb(input: &AutoKybInput<'_>, lookup: &KybLookupOutcome) -> KybEvaluation {
+    if !input.terms_accepted {
         return KybEvaluation::Red {
             status: StatusCode::BAD_REQUEST,
             detail: "Aceite os Termos B2B, o DPA LGPD e a Declaração Não-SaMD antes de enviar."
@@ -583,15 +595,16 @@ pub fn evaluate_auto_kyb(
         }
     }
 
-    let mut flags: Vec<String> = check_protected_brand_terms(company_name, program_name);
+    let mut flags: Vec<String> =
+        check_protected_brand_terms(input.company_name, input.program_name);
 
-    if is_assistencial_template(template) && !has_council {
+    if is_assistencial_template(input.template) && !input.has_council {
         flags.push("COUNCIL_NOT_INFORMED".to_string());
     }
-    if !auto_approve_enabled {
+    if !input.auto_approve_enabled {
         flags.push("AUTO_APPROVE_DISABLED".to_string());
     }
-    if !infra_ok {
+    if !input.infra_ok {
         flags.push("INFRA_DEGRADED".to_string());
     }
 
@@ -605,14 +618,15 @@ pub fn evaluate_auto_kyb(
             })
         }
         KybLookupOutcome::Found { record, from_cache } => {
-            let age_days = record.age_days(today);
+            let age_days = record.age_days(input.today);
             if age_days.is_none_or(|d| d < 30) {
                 flags.push("RECENT_CNPJ".to_string());
             }
-            if !is_cnae_compatible(template, record) {
+            if !is_cnae_compatible(input.template, record) {
                 flags.push("CNAE_INCOMPATIBLE".to_string());
             }
-            if !matches_responsible_in_receita(responsible_name, &cpf.central_6, record) {
+            if !matches_responsible_in_receita(input.responsible_name, &input.cpf.central_6, record)
+            {
                 if record.is_mei() {
                     flags.push("MEI_UNVERIFIED_CPF".to_string());
                 } else {
@@ -971,7 +985,7 @@ pub async fn fetch_receita_with_fallback(
             if let Ok(val) = resp.json::<Value>().await {
                 if let Some(rec) = parse_brasilapi_json(cnpj_digits, &val) {
                     return KybLookupOutcome::Found {
-                        record: rec,
+                        record: Box::new(rec),
                         from_cache: false,
                     };
                 }
@@ -992,7 +1006,7 @@ pub async fn fetch_receita_with_fallback(
             if let Ok(val) = resp.json::<Value>().await {
                 if let Some(rec) = parse_cnpjws_json(cnpj_digits, &val) {
                     return KybLookupOutcome::Found {
-                        record: rec,
+                        record: Box::new(rec),
                         from_cache: false,
                     };
                 }
@@ -1010,7 +1024,7 @@ pub async fn fetch_receita_with_fallback(
             if let Ok(val) = resp.json::<Value>().await {
                 if let Some(rec) = parse_receitaws_json(cnpj_digits, &val) {
                     return KybLookupOutcome::Found {
-                        record: rec,
+                        record: Box::new(rec),
                         from_cache: false,
                     };
                 }
@@ -1038,7 +1052,7 @@ pub async fn lookup_cnpj_cached(
         let payload: Value = row.get("payload");
         if let Ok(rec) = serde_json::from_value::<ReceitaCnpjRecord>(payload) {
             return KybLookupOutcome::Found {
-                record: rec,
+                record: Box::new(rec),
                 from_cache: true,
             };
         }
@@ -1046,7 +1060,7 @@ pub async fn lookup_cnpj_cached(
 
     let fresh = fetch_receita_with_fallback(cnpj_digits, endpoints).await;
     if let KybLookupOutcome::Found { ref record, .. } = fresh {
-        if let Ok(payload_val) = serde_json::to_value(record) {
+        if let Ok(payload_val) = serde_json::to_value(record.as_ref()) {
             let _ = sqlx::query(
                 "INSERT INTO cnpj_lookup_cache (cnpj_digits, provider, payload, fetched_at, expires_at) \
                  VALUES ($1, $2, $3, NOW(), NOW() + interval '24 hours') \
@@ -1148,18 +1162,20 @@ mod tests {
             false,
         );
         let green = evaluate_auto_kyb(
-            TemplateKey::ClinicaGeral,
-            "Clinica Cardio Prime Ltda",
-            "Cuidado Cardio",
-            "Dr. Joao Carlos da Silva",
-            &cpf,
-            true,
-            true,
-            true,
-            true,
-            today,
+            &AutoKybInput {
+                template: TemplateKey::ClinicaGeral,
+                company_name: "Clinica Cardio Prime Ltda",
+                program_name: "Cuidado Cardio",
+                responsible_name: "Dr. Joao Carlos da Silva",
+                cpf: &cpf,
+                has_council: true,
+                terms_accepted: true,
+                auto_approve_enabled: true,
+                infra_ok: true,
+                today,
+            },
             &KybLookupOutcome::Found {
-                record: rec_green,
+                record: Box::new(rec_green),
                 from_cache: false,
             },
         );
@@ -1176,18 +1192,20 @@ mod tests {
             false,
         );
         let yellow = evaluate_auto_kyb(
-            TemplateKey::ClinicaGeral,
-            "Hospital Coracao Ltda",
-            "Cuidado Cardio",
-            "Joao Carlos Silva",
-            &cpf,
-            true,
-            true,
-            true,
-            true,
-            today,
+            &AutoKybInput {
+                template: TemplateKey::ClinicaGeral,
+                company_name: "Hospital Coracao Ltda",
+                program_name: "Cuidado Cardio",
+                responsible_name: "Joao Carlos Silva",
+                cpf: &cpf,
+                has_council: true,
+                terms_accepted: true,
+                auto_approve_enabled: true,
+                infra_ok: true,
+                today,
+            },
             &KybLookupOutcome::Found {
-                record: rec_recent,
+                record: Box::new(rec_recent),
                 from_cache: false,
             },
         );
@@ -1203,18 +1221,20 @@ mod tests {
         let mut rec_inapta = make_active_record("8630503", 180, vec![], false);
         rec_inapta.situacao_cadastral = "INAPTA".to_string();
         let red = evaluate_auto_kyb(
-            TemplateKey::ClinicaGeral,
-            "Clinica Cardio Prime",
-            "Cuidado Cardio",
-            "Joao Carlos Silva",
-            &cpf,
-            true,
-            true,
-            true,
-            true,
-            today,
+            &AutoKybInput {
+                template: TemplateKey::ClinicaGeral,
+                company_name: "Clinica Cardio Prime",
+                program_name: "Cuidado Cardio",
+                responsible_name: "Joao Carlos Silva",
+                cpf: &cpf,
+                has_council: true,
+                terms_accepted: true,
+                auto_approve_enabled: true,
+                infra_ok: true,
+                today,
+            },
             &KybLookupOutcome::Found {
-                record: rec_inapta,
+                record: Box::new(rec_inapta),
                 from_cache: false,
             },
         );

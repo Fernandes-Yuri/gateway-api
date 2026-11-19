@@ -28,8 +28,8 @@ use uuid::Uuid;
 use crate::b2b_kyb::{
     auto_approve_enabled_from_env, evaluate_auto_kyb, lookup_cnpj_cached, normalize_and_hash_cpf,
     normalize_council_fields, normalize_responsible_phone, normalize_responsible_role,
-    normalize_uf, verify_cnpj_mod11, KybEvaluation, KybProviderEndpoints, NormalizedCpf,
-    ALLOWED_PROOF_DOC_TYPES,
+    normalize_uf, verify_cnpj_mod11, AutoKybInput, KybEvaluation, KybProviderEndpoints,
+    NormalizedCpf, ALLOWED_PROOF_DOC_TYPES,
 };
 use crate::b2b_storage::{
     extract_logo_key_from_url, prepare_kyb_proof_media, resolve_b2b_file_signing_secret,
@@ -1823,32 +1823,36 @@ async fn allocate_unique_invite_code(
     None
 }
 
-async fn emit_b2b_decision_alerts(
-    pool: &PgPool,
-    backend_tcp_addr: String,
+struct B2BDecisionAlert {
     program_id: Uuid,
     owner_user_id: String,
     program_name: String,
     decision: &'static str,
     note: String,
     invite_code: String,
+}
+
+async fn emit_b2b_decision_alerts(
+    pool: &PgPool,
+    backend_tcp_addr: String,
+    alert: B2BDecisionAlert,
 ) {
-    let kind = match decision {
+    let kind = match alert.decision {
         "APPROVED" => "B2B_PROGRAM_APPROVED",
         "PENDING_REVIEW" => "B2B_PROGRAM_PENDING_REVIEW",
         _ => "B2B_PROGRAM_CHANGES_REQUESTED",
     };
-    let payload = json!({ "status": decision });
-    let event_key = format!("b2b_program:{program_id}:{decision}");
-    let group_key = format!("b2b_program:{program_id}");
+    let payload = json!({ "status": alert.decision });
+    let event_key = format!("b2b_program:{}:{}", alert.program_id, alert.decision);
+    let group_key = format!("b2b_program:{}", alert.program_id);
     let _ = sqlx::query(
         "SELECT notification_emit($1, $2, $3, $4, 'CARE', 'b2b_program', $5, $1, 'auto-kyb-v1', NOW(), NOW() + interval '30 days', $6::jsonb, true)",
     )
-    .bind(&owner_user_id)
+    .bind(&alert.owner_user_id)
     .bind(&event_key)
     .bind(&group_key)
     .bind(kind)
-    .bind(program_id.to_string())
+    .bind(alert.program_id.to_string())
     .bind(&payload)
     .execute(pool)
     .await;
@@ -1866,11 +1870,11 @@ async fn emit_b2b_decision_alerts(
                         .post(&url)
                         .bearer_auth(&token)
                         .json(&json!({
-                            "ownerUserId": owner_user_id,
-                            "programName": program_name,
-                            "decision": decision,
-                            "note": note,
-                            "inviteCode": invite_code,
+                            "ownerUserId": alert.owner_user_id,
+                            "programName": alert.program_name,
+                            "decision": alert.decision,
+                            "note": alert.note,
+                            "inviteCode": alert.invite_code,
                         }))
                         .send()
                         .await;
@@ -2223,15 +2227,15 @@ pub async fn save_my_program_handler(
         let existing_council_type: Option<String> = ex.try_get("council_type").ok().flatten();
         let existing_council_number: Option<String> = ex.try_get("council_number").ok().flatten();
         let existing_council_uf: Option<String> = ex.try_get("council_uf").ok().flatten();
-        if let Some((ref nct, ref ncn, ref ncuf)) = parsed_council {
+        if let Some(ref c) = parsed_council {
             if let Err((code, msg)) = check_approved_council_mutation(
                 current_status,
                 existing_council_type.as_deref(),
-                nct.as_deref(),
+                c.council_type.as_deref(),
                 existing_council_number.as_deref(),
-                ncn.as_deref(),
+                c.council_number.as_deref(),
                 existing_council_uf.as_deref(),
-                ncuf.as_deref(),
+                c.council_uf.as_deref(),
             ) {
                 return json_error(code, msg);
             }
@@ -2288,7 +2292,7 @@ pub async fn save_my_program_handler(
                 .flatten()
         });
         let (next_ct, next_cn, next_cuf) = match parsed_council {
-            Some(t) => t,
+            Some(c) => (c.council_type, c.council_number, c.council_uf),
             None => (
                 existing_council_type,
                 existing_council_number,
@@ -2384,7 +2388,12 @@ pub async fn save_my_program_handler(
         };
         let next_role = clean_role.flatten();
         let next_phone = clean_phone.flatten();
-        let (next_ct, next_cn, next_cuf) = parsed_council.unwrap_or((None, None, None));
+        let next_council = parsed_council.unwrap_or_default();
+        let (next_ct, next_cn, next_cuf) = (
+            next_council.council_type,
+            next_council.council_number,
+            next_council.council_uf,
+        );
         let next_city = clean_city.flatten();
         let next_state = clean_state.flatten();
         let accept_terms_now = req.terms_accepted == Some(true);
@@ -2658,16 +2667,18 @@ pub async fn submit_my_program_handler(
     let endpoints = KybProviderEndpoints::default();
     let lookup = lookup_cnpj_cached(pool, &cnpj_digits, &endpoints).await;
     let eval = evaluate_auto_kyb(
-        template,
-        &company_name,
-        &program_name,
-        &responsible_name,
-        &cpf_norm,
-        has_council,
-        terms_accepted,
-        auto_approve,
-        infra_ok,
-        Utc::now().date_naive(),
+        &AutoKybInput {
+            template,
+            company_name: &company_name,
+            program_name: &program_name,
+            responsible_name: &responsible_name,
+            cpf: &cpf_norm,
+            has_council,
+            terms_accepted,
+            auto_approve_enabled: auto_approve,
+            infra_ok,
+            today: Utc::now().date_naive(),
+        },
         &lookup,
     );
 
@@ -2774,12 +2785,14 @@ pub async fn submit_my_program_handler(
             emit_b2b_decision_alerts(
                 pool,
                 state.backend_tcp_addr.clone(),
-                prog_uuid,
-                identity.uid.clone(),
-                program_name,
-                "PENDING_REVIEW",
-                summary_note,
-                String::new(),
+                B2BDecisionAlert {
+                    program_id: prog_uuid,
+                    owner_user_id: identity.uid.clone(),
+                    program_name,
+                    decision: "PENDING_REVIEW",
+                    note: summary_note,
+                    invite_code: String::new(),
+                },
             )
             .await;
 
@@ -2889,12 +2902,14 @@ pub async fn submit_my_program_handler(
             emit_b2b_decision_alerts(
                 pool,
                 state.backend_tcp_addr.clone(),
-                prog_uuid,
-                identity.uid.clone(),
-                program_name,
-                "APPROVED",
-                String::new(),
-                next_invite_code,
+                B2BDecisionAlert {
+                    program_id: prog_uuid,
+                    owner_user_id: identity.uid.clone(),
+                    program_name,
+                    decision: "APPROVED",
+                    note: String::new(),
+                    invite_code: next_invite_code,
+                },
             )
             .await;
 
@@ -3596,12 +3611,14 @@ pub async fn admin_review_program_handler(
     emit_b2b_decision_alerts(
         pool,
         state.backend_tcp_addr.clone(),
-        prog_uuid,
-        owner_user_id,
-        program_name,
-        decision_tag,
-        clean_note.to_string(),
-        next_invite_code.unwrap_or_default(),
+        B2BDecisionAlert {
+            program_id: prog_uuid,
+            owner_user_id,
+            program_name,
+            decision: decision_tag,
+            note: clean_note.to_string(),
+            invite_code: next_invite_code.unwrap_or_default(),
+        },
     )
     .await;
 
