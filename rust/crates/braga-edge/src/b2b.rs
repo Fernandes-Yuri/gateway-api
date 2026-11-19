@@ -3737,6 +3737,137 @@ pub async fn get_participant_summary_handler(
     (StatusCode::OK, Json(json!({ "summary": summary }))).into_response()
 }
 
+// =========================================================================
+// B2B-17B: Gestao de Vagas pelo Empresario (Remocao de Participante REMOVED)
+// =========================================================================
+
+pub async fn remove_program_participant_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(patient_id): Path<String>,
+) -> Response {
+    let target_patient_id = patient_id.trim().to_string();
+    if target_patient_id.is_empty() || target_patient_id.len() > 128 {
+        return json_error(StatusCode::BAD_REQUEST, "Participante inválido.");
+    }
+    let identity = match authenticate_request(
+        &headers,
+        &state,
+        "POST",
+        &format!("/api/b2b/program/me/participants/{target_patient_id}/remove"),
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let program_row = match sqlx::query(
+        "SELECT id::text AS id, owner_user_id, company_name, program_name, cnpj, primary_color, \
+                logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit, \
+                template_key, experience_config, closed_at \
+           FROM partner_programs \
+          WHERE owner_user_id = $1 AND closed_at IS NULL",
+    )
+    .bind(&identity.uid)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao consultar programa do responsável.",
+            )
+        }
+    };
+
+    let Some(program_row) = program_row else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "Nenhum programa parceiro vinculado a esta conta.",
+        );
+    };
+
+    let status_str: String = program_row.get("approval_status");
+    if status_str != "APPROVED" {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "A gestão de participantes está disponível apenas para programas aprovados.",
+        );
+    }
+
+    let id_str: String = program_row.get("id");
+    let Ok(prog_uuid) = Uuid::parse_str(&id_str) else {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Identificador do programa inválido.",
+        );
+    };
+
+    let res = match sqlx::query(
+        "UPDATE program_enrollments \
+            SET status = 'REMOVED', \
+                shared_categories = '[]'::jsonb, \
+                family_share_enabled = false, \
+                revoked_at = NOW(), \
+                updated_at = NOW() \
+          WHERE program_id = $1 AND patient_user_id = $2 AND status = 'ACTIVE'",
+    )
+    .bind(prog_uuid)
+    .bind(&target_patient_id)
+    .execute(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao encerrar vínculo do participante.",
+            )
+        }
+    };
+
+    if res.rows_affected() == 0 {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "Vínculo ativo não encontrado para este participante.",
+        );
+    }
+
+    let _ = record_audit(
+        pool,
+        Some(prog_uuid),
+        &identity.uid,
+        &target_patient_id,
+        "PARTICIPANT_REMOVED",
+        json!({
+            "status": "REMOVED",
+            "patientUserId": target_patient_id
+        }),
+    )
+    .await;
+
+    let active_participants = count_active_participants(pool, prog_uuid)
+        .await
+        .unwrap_or(0);
+    let program_dto = map_program_row(&program_row, active_participants, false);
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "removedPatientUserId": target_patient_id,
+            "program": program_dto
+        })),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3947,6 +4078,17 @@ mod tests {
                 "owner-1",
                 "owner-1",
                 Some("REVOKED")
+            )
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            check_partner_summary_access(
+                ApprovalStatus::Approved,
+                "owner-1",
+                "owner-1",
+                Some("REMOVED")
             )
             .unwrap_err()
             .0,

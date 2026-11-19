@@ -210,7 +210,8 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             await conn.execute(
                 """
                 UPDATE program_enrollments
-                   SET status = 'REVOKED', shared_categories = '[]'::jsonb, revoked_at = NOW()
+                   SET status = 'REMOVED', shared_categories = '[]'::jsonb,
+                       family_share_enabled = false, revoked_at = NOW()
                  WHERE program_id = $1 AND patient_user_id = 'patient-1'
                 """,
                 self.prog_a,
@@ -220,6 +221,14 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 self.prog_a,
             )
             self.assertEqual(active_count_a, 0)
+            removed_row = await conn.fetchrow(
+                "SELECT status, shared_categories, family_share_enabled "
+                "FROM program_enrollments WHERE program_id = $1 AND patient_user_id = 'patient-1'",
+                self.prog_a,
+            )
+            self.assertEqual(removed_row["status"], "REMOVED")
+            self.assertEqual(removed_row["shared_categories"], "[]")
+            self.assertFalse(removed_row["family_share_enabled"])
 
     async def test_lgpd_delete_account_succeeds_for_draft_and_approved_b2b_owners(self):
         with patch.object(account_deletion, "cleanup_account_files", AsyncMock(return_value=True)):
