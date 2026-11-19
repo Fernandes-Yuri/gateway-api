@@ -3243,6 +3243,10 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             "/api/b2b/program/me/participants/:patient_id/summary",
             get(b2b::get_participant_summary_handler),
         )
+        .route(
+            "/api/b2b/program/me/participants/:patient_id/remove",
+            post(b2b::remove_program_participant_handler),
+        )
         .route("/api/b2b/invite/:code", get(b2b::lookup_invite_handler))
         .route("/api/b2b/enrollments/join", post(b2b::join_program_handler))
         .route(
@@ -3587,6 +3591,11 @@ mod tests {
                 "GET",
                 "/api/b2b/program/me/participants/patient-1/summary",
                 None,
+            ),
+            (
+                "POST",
+                "/api/b2b/program/me/participants/patient-1/remove",
+                Some("{}"),
             ),
             (
                 "POST",
