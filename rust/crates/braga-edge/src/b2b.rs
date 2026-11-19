@@ -1023,14 +1023,6 @@ pub fn parse_composite_cursor_and_limit(
     (dt_opt, None, clamped_limit)
 }
 
-pub fn parse_cursor_and_limit(
-    cursor: Option<&str>,
-    limit: Option<i64>,
-) -> (Option<DateTime<Utc>>, i64) {
-    let (dt, _, clamped) = parse_composite_cursor_and_limit(cursor, limit);
-    (dt, clamped)
-}
-
 pub fn escape_like_pattern(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len() + 4);
     for ch in raw.chars() {
@@ -6055,12 +6047,15 @@ mod tests {
         assert_eq!(clamp_summary_days(Some(-5)), 1);
         assert_eq!(clamp_summary_days(Some(365)), 90);
 
-        let (c_none, l_default) = parse_cursor_and_limit(None, None);
+        let (c_none, id_none, l_default) = parse_composite_cursor_and_limit(None, None);
         assert!(c_none.is_none());
+        assert!(id_none.is_none());
         assert_eq!(l_default, 20);
 
-        let (c_ok, l_clamped) = parse_cursor_and_limit(Some("2026-11-18T20:00:00Z"), Some(500));
+        let (c_ok, id_ok, l_clamped) =
+            parse_composite_cursor_and_limit(Some("2026-11-18T20:00:00Z"), Some(500));
         assert!(c_ok.is_some());
+        assert!(id_ok.is_none());
         assert_eq!(l_clamped, 50);
 
         let (comp_dt, comp_id, comp_lim) =
