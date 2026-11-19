@@ -72,15 +72,15 @@ async fn ensure_family_access(
     pool: &PgPool,
     caller_uid: &str,
     patient_id: &str,
-) -> Result<(), Response> {
+) -> Result<(), (StatusCode, &'static str)> {
     match require_family_access(pool, caller_uid, patient_id).await {
         Ok(()) => Ok(()),
         Err(IdentityError::FamilyAccessForbidden)
-        | Err(IdentityError::PatientPermissionForbidden) => Err(json_error(
+        | Err(IdentityError::PatientPermissionForbidden) => Err((
             StatusCode::FORBIDDEN,
             "Seu vínculo familiar não permite visualizar ou confirmar ações deste programa.",
         )),
-        Err(_) => Err(json_error(
+        Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             "Erro ao validar vínculo familiar.",
         )),
@@ -116,8 +116,8 @@ pub async fn get_family_program_overview_handler(
         Err((code, msg)) => return json_error(code, msg),
     };
 
-    if let Err(resp) = ensure_family_access(pool, &identity.uid, patient_id).await {
-        return resp;
+    if let Err((code, msg)) = ensure_family_access(pool, &identity.uid, patient_id).await {
+        return json_error(code, msg);
     }
 
     let enroll_rows = match sqlx::query(
@@ -327,8 +327,8 @@ pub async fn acknowledge_family_program_reminder_handler(
         Err((code, msg)) => return json_error(code, msg),
     };
 
-    if let Err(resp) = ensure_family_access(pool, &identity.uid, patient_id).await {
-        return resp;
+    if let Err((code, msg)) = ensure_family_access(pool, &identity.uid, patient_id).await {
+        return json_error(code, msg);
     }
 
     let ctx_row = match sqlx::query(
