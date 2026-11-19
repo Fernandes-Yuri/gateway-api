@@ -603,34 +603,38 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNotNone(ev)
 
-            # Mutar o programa bloqueia novas emissoes notification_emit (fail-closed)
+            # Mutar o programa bloqueia novas emissoes notification_emit (retorna NULL sem gravar outbox)
             await conn.execute(
                 "UPDATE program_enrollments SET muted_at = NOW() WHERE program_id = $1 AND patient_user_id = 'patient-1'",
                 self.prog_a,
             )
-            with self.assertRaises(Exception):
-                await conn.fetchval(
-                    """
-                    SELECT notification_emit(
-                        'patient-1',
-                        $1,
-                        $2,
-                        'PARTNER_REMINDER',
-                        'CARE',
-                        'b2b_reminder',
-                        $3,
-                        'patient-1',
-                        'owner-a',
-                        NOW(),
-                        NOW() + interval '30 days',
-                        '{}'::jsonb,
-                        true
-                    )
-                    """,
-                    f"b2b_reminder:{rem_id}:patient-1:muted",
-                    f"b2b_reminder:{rem_id}:muted",
-                    str(rem_id),
+            muted_ev = await conn.fetchval(
+                """
+                SELECT notification_emit(
+                    'patient-1',
+                    $1,
+                    $2,
+                    'PARTNER_REMINDER',
+                    'CARE',
+                    'b2b_reminder',
+                    $3,
+                    'patient-1',
+                    'owner-a',
+                    NOW(),
+                    NOW() + interval '30 days',
+                    '{}'::jsonb,
+                    true
                 )
+                """,
+                f"b2b_reminder:{rem_id}:patient-1:muted",
+                f"b2b_reminder:{rem_id}:muted",
+                str(rem_id),
+            )
+            self.assertIsNone(muted_ev)
+            outbox_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM notification_outbox WHERE recipient_id = 'patient-1' AND kind = 'PARTNER_REMINDER'"
+            )
+            self.assertEqual(outbox_count, 1)
 
             # Recibo de leitura e preservacao de medications pessoais
             await conn.execute(
