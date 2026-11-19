@@ -259,27 +259,14 @@ async fn query_direct_messages_page(
         parse_direct_cursor_and_limit(query.cursor.as_deref(), query.limit);
     let fetch_limit = limit + 1;
 
-    let rows = sqlx::query(
-        "SELECT id::text AS message_id, program_id::text AS program_id, patient_user_id, \
-                sender_user_id, sender_role, body, created_at, read_at \
-           FROM program_direct_messages \
-          WHERE program_id = $1 \
-            AND patient_user_id = $2 \
-            AND ( \
-                $3::timestamptz IS NULL \
-                OR created_at < $3 \
-                OR ($4::uuid IS NOT NULL AND created_at = $3 AND id < $4) \
-            ) \
-          ORDER BY created_at DESC, id DESC \
-          LIMIT $5",
-    )
-    .bind(program_id)
-    .bind(patient_uid)
-    .bind(cursor_dt)
-    .bind(cursor_id)
-    .bind(fetch_limit)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query(include_str!("../sql/direct_messages_page.sql"))
+        .bind(program_id)
+        .bind(patient_uid)
+        .bind(cursor_dt)
+        .bind(cursor_id)
+        .bind(fetch_limit)
+        .fetch_all(pool)
+        .await?;
 
     let has_more = rows.len() > limit as usize;
     let slice_len = if has_more { limit as usize } else { rows.len() };

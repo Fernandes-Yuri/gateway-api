@@ -1192,6 +1192,64 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual([(r["program_id"], r["patient_user_id"]) for r in visible_progs], [(self.prog_a, "patient-1")])
 
+    async def test_chat_01_production_relay_queries_keep_short_buffers_and_tenant_scope(self):
+        """Executa o mesmo SQL incluido no Rust; retencao local nao amplia o RDS."""
+        try:
+            from purge_retention_data import purge_family_messages
+        except ImportError:
+            from scripts.server.purge_retention_data import purge_family_messages
+
+        sql_dir = ROOT / "rust/crates/braga-edge/sql"
+        page_sql = (sql_dir / "direct_messages_page.sql").read_text(encoding="utf-8")
+        purge_sql = (sql_dir / "purge_direct_messages.sql").read_text(encoding="utf-8")
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO program_direct_messages
+                   (program_id, patient_user_id, sender_user_id, sender_role, body, created_at)
+                   SELECT $1, 'patient-1', 'owner-a', 'PARTNER', 'buffer expirado',
+                          NOW() - interval '8 days' FROM generate_series(1, 501)""",
+                self.prog_a,
+            )
+            saved = await conn.fetchval(
+                """INSERT INTO program_direct_messages
+                   (program_id, patient_user_id, sender_user_id, sender_role, body, created_at)
+                   VALUES ($1, 'patient-1', 'owner-a', 'PARTNER', '48h no relay', NOW() - interval '48 hours')
+                   RETURNING id""",
+                self.prog_a,
+            )
+            await conn.execute(
+                """INSERT INTO program_direct_messages
+                   (program_id, patient_user_id, sender_user_id, sender_role, body)
+                   VALUES ($1, 'patient-2', 'owner-b', 'PARTNER', 'Outra clinica')""",
+                self.prog_b,
+            )
+            page = await conn.fetch(page_sql, self.prog_a, "patient-1", None, None, 51)
+            self.assertEqual([r["message_id"] for r in page], [str(saved)])
+            self.assertEqual(
+                await conn.fetch(page_sql, self.prog_b, "patient-1", None, None, 51),
+                [],
+            )
+            self.assertEqual(await conn.execute(purge_sql), "DELETE 500")
+            self.assertEqual(await conn.execute(purge_sql), "DELETE 1")
+            self.assertEqual(await conn.execute(purge_sql), "DELETE 0")
+            self.assertEqual(
+                await conn.fetchval("SELECT COUNT(*) FROM program_direct_messages"), 2
+            )
+
+            await conn.execute(
+                """INSERT INTO family_messages
+                   (patient_id, sender_id, sender_name, message_text, sent_at, expires_at)
+                   VALUES ('patient-1', 'patient-1', 'Sintetico', 'expirado',
+                           NOW() - interval '48 hours', NOW() - interval '24 hours'),
+                          ('patient-1', 'patient-1', 'Sintetico', 'entrega pendente',
+                           NOW(), NOW() + interval '24 hours')"""
+            )
+            self.assertEqual(await purge_family_messages(conn), 1)
+            self.assertEqual(await conn.fetchval("SELECT COUNT(*) FROM family_messages"), 1)
+            self.assertEqual(
+                await conn.fetchval("SELECT COUNT(*) FROM program_direct_messages"), 2
+            )
+
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:
             await conn.execute(
