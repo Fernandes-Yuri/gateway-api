@@ -3700,7 +3700,6 @@ mod tests {
                 "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/leave",
                 Some("{}"),
             ),
-            ("GET", "/api/admin/b2b/abuse-reports", None),
         ];
 
         for (method, path, body_opt) in protected {
@@ -3739,6 +3738,7 @@ mod tests {
         // Rotas administrativas exigem SERVICE_TOKEN (401 se configurado, 503 se ausente em teste)
         for admin_uri in [
             "/api/admin/b2b/programs",
+            "/api/admin/b2b/abuse-reports",
             "/api/admin/b2b/programs/00000000-0000-0000-0000-000000000000/proofs/proof-1",
         ] {
             let admin_resp = app
