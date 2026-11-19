@@ -115,7 +115,7 @@ pub(crate) fn validate_create_appointment_input(
 
     let slot_text = sanitize_non_https_urls(&req.requested_slot_text);
     let slot_len = slot_text.chars().count();
-    if slot_len < 2 || slot_len > 160 {
+    if !(2..=160).contains(&slot_len) {
         return Err((
             StatusCode::UNPROCESSABLE_ENTITY,
             "Informe a janela de horário desejada (entre 2 e 160 caracteres).",
@@ -259,28 +259,32 @@ async fn emit_partner_appointment_notification(
     .await;
 }
 
+struct AppointmentFanoutCtx<'a> {
+    program_id: Uuid,
+    patient_uid: &'a str,
+    appointment_id: Uuid,
+    actor_uid: &'a str,
+    status: &'a str,
+    suffix: &'a str,
+    family_link_enabled: bool,
+}
+
 async fn emit_patient_and_family_appointment_notifications(
     tx: &mut Transaction<'_, Postgres>,
-    program_id: Uuid,
-    patient_uid: &str,
-    appointment_id: Uuid,
-    actor_uid: &str,
-    status: &str,
-    suffix: &str,
-    family_link_enabled: bool,
+    ctx: &AppointmentFanoutCtx<'_>,
 ) {
     emit_partner_appointment_notification(
         tx,
-        patient_uid,
-        patient_uid,
-        appointment_id,
-        actor_uid,
-        status,
-        suffix,
+        ctx.patient_uid,
+        ctx.patient_uid,
+        ctx.appointment_id,
+        ctx.actor_uid,
+        ctx.status,
+        ctx.suffix,
     )
     .await;
 
-    if !family_link_enabled {
+    if !ctx.family_link_enabled {
         return;
     }
 
@@ -295,8 +299,8 @@ async fn emit_patient_and_family_appointment_notifications(
             AND e.status = 'ACTIVE' \
             AND COALESCE(e.family_share_enabled, false) = true",
     )
-    .bind(program_id)
-    .bind(patient_uid)
+    .bind(ctx.program_id)
+    .bind(ctx.patient_uid)
     .fetch_all(&mut **tx)
     .await
     {
@@ -304,11 +308,11 @@ async fn emit_patient_and_family_appointment_notifications(
             emit_partner_appointment_notification(
                 tx,
                 &caregiver_uid,
-                patient_uid,
-                appointment_id,
-                actor_uid,
-                status,
-                suffix,
+                ctx.patient_uid,
+                ctx.appointment_id,
+                ctx.actor_uid,
+                ctx.status,
+                ctx.suffix,
             )
             .await;
         }
@@ -687,17 +691,16 @@ pub async fn update_owner_appointment_handler(
     };
 
     let ts_suffix = format!("{target_status}:{}", Utc::now().timestamp_millis());
-    emit_patient_and_family_appointment_notifications(
-        &mut tx,
+    let fanout = AppointmentFanoutCtx {
         program_id,
-        &patient_uid,
-        appt_uuid,
-        &identity.uid,
-        &target_status,
-        &ts_suffix,
-        config.features.family_link_enabled,
-    )
-    .await;
+        patient_uid: &patient_uid,
+        appointment_id: appt_uuid,
+        actor_uid: &identity.uid,
+        status: &target_status,
+        suffix: &ts_suffix,
+        family_link_enabled: config.features.family_link_enabled,
+    };
+    emit_patient_and_family_appointment_notifications(&mut tx, &fanout).await;
 
     let _ = record_audit(
         &mut *tx,
