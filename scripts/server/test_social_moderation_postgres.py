@@ -19,7 +19,10 @@ class SocialModerationPostgres(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as conn:
             await conn.execute('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS applied_at timestamptz DEFAULT NOW()')
             for number in (23, 24, 27, 47, 77):
-                migration = next((privacy.ROOT / 'migrations').glob(f'{number:03d}_*.sql'))
+                migration = next(
+                    f for f in sorted((privacy.ROOT / 'migrations').glob(f'{number:03d}_*.sql'))
+                    if not f.stem.endswith('_rollback')
+                )
                 await conn.execute(migration.read_text(encoding='utf-8'))
             await conn.execute("INSERT INTO profiles(id,full_name) VALUES ('terceiro','Terceiro')")
             self.post = await conn.fetchval("INSERT INTO social_posts(user_id,post_type,title) VALUES ('paciente','milestone','Conquista') RETURNING id")
