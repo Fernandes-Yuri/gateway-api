@@ -351,57 +351,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Frente B2B: Motor 100% em Rust (B2B-04, B2B-07, B2B-09, B2B-10, B2B-11, B2B-12)
     if state.pool.is_some() {
-        app = app
-            .route("/api/b2b/contexts", get(b2b::get_contexts_handler))
-            .route(
-                "/api/b2b/contexts/select",
-                post(b2b::select_context_handler),
-            )
-            .route(
-                "/api/b2b/program/me",
-                get(b2b::get_my_program_handler)
-                    .put(b2b::save_my_program_handler)
-                    .post(b2b::save_my_program_handler),
-            )
-            .route(
-                "/api/b2b/program/me/submit",
-                post(b2b::submit_my_program_handler),
-            )
-            .route(
-                "/api/b2b/program/me/invite-policy",
-                post(b2b::update_invite_policy_handler),
-            )
-            .route(
-                "/api/b2b/program/me/invite-code/regenerate",
-                post(b2b::regenerate_invite_code_handler),
-            )
-            .route(
-                "/api/b2b/program/me/participants",
-                get(b2b::list_program_participants_handler),
-            )
-            .route(
-                "/api/b2b/program/me/participants/:patient_id/summary",
-                get(b2b::get_participant_summary_handler),
-            )
-            .route("/api/b2b/invite/:code", get(b2b::lookup_invite_handler))
-            .route("/api/b2b/enrollments/join", post(b2b::join_program_handler))
-            .route(
-                "/api/b2b/enrollments/:program_id/consent",
-                post(b2b::update_enrollment_consent_handler)
-                    .put(b2b::update_enrollment_consent_handler),
-            )
-            .route(
-                "/api/b2b/enrollments/:program_id/leave",
-                post(b2b::leave_program_handler),
-            )
-            .route(
-                "/api/admin/b2b/programs",
-                get(b2b::admin_list_programs_handler),
-            )
-            .route(
-                "/api/admin/b2b/programs/:program_id/review",
-                post(b2b::admin_review_program_handler),
-            );
+        app = mount_b2b_routes(app);
     }
 
     let app = app
@@ -3250,6 +3200,60 @@ pub fn is_go_chat_route(path: &str) -> bool {
         || path.starts_with("/api/notifications/")
 }
 
+fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    router
+        .route("/api/b2b/contexts", get(b2b::get_contexts_handler))
+        .route(
+            "/api/b2b/contexts/select",
+            post(b2b::select_context_handler),
+        )
+        .route(
+            "/api/b2b/program/me",
+            get(b2b::get_my_program_handler)
+                .put(b2b::save_my_program_handler)
+                .post(b2b::save_my_program_handler),
+        )
+        .route(
+            "/api/b2b/program/me/submit",
+            post(b2b::submit_my_program_handler),
+        )
+        .route(
+            "/api/b2b/program/me/invite-policy",
+            post(b2b::update_invite_policy_handler),
+        )
+        .route(
+            "/api/b2b/program/me/invite-code/regenerate",
+            post(b2b::regenerate_invite_code_handler),
+        )
+        .route(
+            "/api/b2b/program/me/participants",
+            get(b2b::list_program_participants_handler),
+        )
+        .route(
+            "/api/b2b/program/me/participants/:patient_id/summary",
+            get(b2b::get_participant_summary_handler),
+        )
+        .route("/api/b2b/invite/:code", get(b2b::lookup_invite_handler))
+        .route("/api/b2b/enrollments/join", post(b2b::join_program_handler))
+        .route(
+            "/api/b2b/enrollments/:program_id/consent",
+            post(b2b::update_enrollment_consent_handler)
+                .put(b2b::update_enrollment_consent_handler),
+        )
+        .route(
+            "/api/b2b/enrollments/:program_id/leave",
+            post(b2b::leave_program_handler),
+        )
+        .route(
+            "/api/admin/b2b/programs",
+            get(b2b::admin_list_programs_handler),
+        )
+        .route(
+            "/api/admin/b2b/programs/:program_id/review",
+            post(b2b::admin_review_program_handler),
+        )
+}
+
 fn is_spoofable_client_header(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.starts_with("x-internal-")
@@ -3500,5 +3504,137 @@ mod tests {
                 "Header nao deve ser bloqueado na borda: {allowed}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_b2b_routes_enforce_auth_and_reject_malformed_inputs() {
+        use tower::ServiceExt;
+
+        let state = Arc::new(AppState {
+            backend_sock: PathBuf::from("/tmp/nonexistent-backend.sock"),
+            backend_tcp_addr: "127.0.0.1:1".to_string(),
+            chat_sock: PathBuf::from("/tmp/nonexistent-chat.sock"),
+            chat_routes_enabled: false,
+            cert_cache: FirebaseCertCache::new(),
+            limiter: StrictRateLimiter::new(),
+            pool: None,
+            firebase_project_id: "braga-saude".to_string(),
+            catalog_cache: moka::future::Cache::builder().max_capacity(10).build(),
+            moderation_cache: moka::future::Cache::builder().max_capacity(10).build(),
+            backend_pool: Arc::new(BackendConnPool::new(4)),
+            chat_pool: Arc::new(BackendConnPool::new(4)),
+            read_routes_enabled: false,
+            write_routes_enabled: false,
+            vitals_write_enabled: false,
+            orb_ws_enabled: false,
+            start_time: std::time::Instant::now(),
+            db_max_connections: 5,
+            db_min_connections: 1,
+            concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(8)),
+            max_concurrent_requests: 8,
+            rejected_503_count: Arc::new(AtomicU64::new(0)),
+            rate_limited_429_count: Arc::new(AtomicU64::new(0)),
+            proxy_timeout_secs: 5,
+            edge_rate_limit_per_min: 0,
+        });
+
+        let app = mount_b2b_routes(Router::new()).with_state(state);
+
+        // Todas as rotas B2B autenticadas devem bloquear acesso anonimo com 401
+        let protected = [
+            ("GET", "/api/b2b/contexts", None),
+            (
+                "POST",
+                "/api/b2b/contexts/select",
+                Some("{\"mode\":\"PERSONAL\"}"),
+            ),
+            ("GET", "/api/b2b/program/me", None),
+            (
+                "POST",
+                "/api/b2b/program/me",
+                Some("{\"companyName\":\"Clinica\",\"programName\":\"Programa\"}"),
+            ),
+            ("POST", "/api/b2b/program/me/submit", Some("{}")),
+            (
+                "POST",
+                "/api/b2b/program/me/invite-policy",
+                Some("{\"paused\":true}"),
+            ),
+            (
+                "POST",
+                "/api/b2b/program/me/invite-code/regenerate",
+                Some("{}"),
+            ),
+            ("GET", "/api/b2b/program/me/participants", None),
+            (
+                "GET",
+                "/api/b2b/program/me/participants/patient-1/summary",
+                None,
+            ),
+            (
+                "POST",
+                "/api/b2b/enrollments/join",
+                Some("{\"inviteCode\":\"CARD-4F9A\",\"sharedCategories\":[\"steps\"]}"),
+            ),
+            (
+                "PUT",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/consent",
+                Some("{\"sharedCategories\":[\"steps\"]}"),
+            ),
+            (
+                "POST",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/leave",
+                Some("{}"),
+            ),
+        ];
+
+        for (method, path, body_opt) in protected {
+            let mut builder = Request::builder().method(method).uri(path);
+            let body = if let Some(json_str) = body_opt {
+                builder = builder.header(CONTENT_TYPE, "application/json");
+                Body::from(json_str)
+            } else {
+                Body::empty()
+            };
+            let resp = app
+                .clone()
+                .oneshot(builder.body(body).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::UNAUTHORIZED,
+                "Rota protegida {method} {path} deveria exigir JWT RS256"
+            );
+        }
+
+        // Previa publica rejeita codigo malformado com 400 antes mesmo de consultar o RDS
+        let bad_invite = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/b2b/invite/!invalid!")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad_invite.status(), StatusCode::BAD_REQUEST);
+
+        // Rotas administrativas exigem SERVICE_TOKEN (401 se configurado, 503 se ausente em teste)
+        let admin_resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/b2b/programs")
+                    .header("authorization", "Bearer wrong-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            admin_resp.status() == StatusCode::UNAUTHORIZED
+                || admin_resp.status() == StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 }
