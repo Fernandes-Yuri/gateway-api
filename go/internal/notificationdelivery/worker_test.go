@@ -268,23 +268,28 @@ func TestPushMessageFormatsB2BProgramEvents(t *testing.T) {
 		Revision:    1,
 	}
 	cases := []struct {
-		kind      string
-		wantTitle string
+		kind         string
+		resourceType string
+		wantDataKey  string
+		wantTitle    string
 	}{
-		{"B2B_PROGRAM_APPROVED", "Programa Parceiro aprovado"},
-		{"B2B_PROGRAM_CHANGES_REQUESTED", "Atualização no Programa Parceiro"},
-		{"B2B_PROGRAM_PENDING_REVIEW", "Programa Parceiro em análise"},
+		{"B2B_PROGRAM_APPROVED", "b2b_program", "programId", "Programa Parceiro aprovado"},
+		{"B2B_PROGRAM_CHANGES_REQUESTED", "b2b_program", "programId", "Atualização no Programa Parceiro"},
+		{"B2B_PROGRAM_PENDING_REVIEW", "b2b_program", "programId", "Programa Parceiro em análise"},
+		{"PARTNER_REMINDER", "b2b_reminder", "reminderId", "Novo lembrete do Programa Parceiro"},
+		{"PARTNER_APPOINTMENT", "b2b_appointment", "appointmentId", "Atualização de agendamento do programa"},
+		{"PARTNER_DIRECT_MESSAGE", "b2b_direct_thread", "programId", "Nova mensagem do Programa Parceiro"},
 	}
 	for _, tc := range cases {
 		msg := pushMessage(entry, &source{
 			Kind:         tc.kind,
-			ResourceType: "b2b_program",
-			ResourceID:   "prog-123",
+			ResourceType: tc.resourceType,
+			ResourceID:   "res-123",
 		}, "fcm-tok")
 		if msg.Title != tc.wantTitle {
 			t.Fatalf("%s: title=%q, esperado %q", tc.kind, msg.Title, tc.wantTitle)
 		}
-		if msg.Data["type"] != tc.kind || msg.Data["programId"] != "prog-123" {
+		if msg.Data["type"] != tc.kind || msg.Data[tc.wantDataKey] != "res-123" {
 			t.Fatalf("%s: payload inesperado %+v", tc.kind, msg.Data)
 		}
 	}
