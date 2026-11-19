@@ -1394,17 +1394,10 @@ pub async fn cleanup_expired_b2b_buffers(pool: &PgPool) -> Result<B2BCleanupSumm
     .await?
     .rows_affected();
 
-    let msg = sqlx::query(
-        "DELETE FROM program_direct_messages \
-          WHERE id IN ( \
-              SELECT id FROM program_direct_messages \
-               WHERE created_at < NOW() - interval '7 days' \
-               LIMIT 500 \
-          )",
-    )
-    .execute(pool)
-    .await?
-    .rows_affected();
+    let msg = sqlx::query(include_str!("../sql/purge_direct_messages.sql"))
+        .execute(pool)
+        .await?
+        .rows_affected();
 
     let cache = sqlx::query(
         "DELETE FROM cnpj_lookup_cache \
