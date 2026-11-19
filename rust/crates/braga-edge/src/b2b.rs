@@ -4,6 +4,7 @@
 //! - B2B-09: Aprovacao manual assistida (SERVICE_TOKEN, maquina de estados e invite_code)
 //! - B2B-10: Vinculo do paciente por codigo e consentimento granular por categoria
 //! - B2B-11: Franquia atomica de participantes ativos (SELECT ... FOR UPDATE), pausa e regeneracao de codigo
+//! - B2B-12: Projecao autorizada de rotina compartilhada / registros autorizados (Anti-IDOR + paginacao por cursor)
 
 use std::sync::Arc;
 
@@ -174,6 +175,115 @@ pub struct UpdateConsentRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInvitePolicyRequest {
     pub paused: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ParticipantsQuery {
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ParticipantSummaryQuery {
+    pub days: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartnerParticipantItemDto {
+    pub patient_user_id: String,
+    pub display_name: String,
+    pub shared_categories: Vec<String>,
+    pub consented_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedStepsDayDto {
+    pub date: String,
+    pub steps: i32,
+    pub active_minutes: i32,
+    pub distance_meters: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedStepsSectionDto {
+    pub source: String,
+    pub average_steps: i64,
+    pub days_recorded: usize,
+    pub days: Vec<SharedStepsDayDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedHydrationDayDto {
+    pub date: String,
+    pub total_ml: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedHydrationSectionDto {
+    pub source: String,
+    pub average_ml: i64,
+    pub days_recorded: usize,
+    pub days: Vec<SharedHydrationDayDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedMedicationItemDto {
+    pub name: String,
+    pub dosage_mg: Option<f64>,
+    pub schedule: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedMedicationsSectionDto {
+    pub source: String,
+    pub reminder_count: usize,
+    pub user_confirmations_in_period: i64,
+    pub note: String,
+    pub items: Vec<SharedMedicationItemDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedVitalEntryDto {
+    pub measured_at: String,
+    pub origin: String,
+    pub systolic_pressure: Option<i32>,
+    pub diastolic_pressure: Option<i32>,
+    pub heart_rate: Option<i32>,
+    pub glucose_level: Option<i32>,
+    pub glucose_type: Option<String>,
+    pub oxygen_saturation: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedAuthorizedRecordsSectionDto {
+    pub source: String,
+    pub zero_file_egress_notice: String,
+    pub records: Vec<SharedVitalEntryDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantRoutineSummaryDto {
+    pub program_id: String,
+    pub program_name: String,
+    pub company_name: String,
+    pub patient_user_id: String,
+    pub participant_name: String,
+    pub period_days: i32,
+    pub shared_categories: Vec<String>,
+    pub steps_section: Option<SharedStepsSectionDto>,
+    pub hydration_section: Option<SharedHydrationSectionDto>,
+    pub medications_section: Option<SharedMedicationsSectionDto>,
+    pub authorized_records_section: Option<SharedAuthorizedRecordsSectionDto>,
 }
 
 fn json_error(status: StatusCode, detail: &str) -> Response {
@@ -439,6 +549,54 @@ pub fn check_enrollment_eligibility(
         }
     }
     Ok(())
+}
+
+pub fn parse_cursor_and_limit(
+    cursor: Option<&str>,
+    limit: Option<i64>,
+) -> (Option<DateTime<Utc>>, i64) {
+    let clamped_limit = limit.unwrap_or(20).clamp(1, 50);
+    let parsed_cursor = cursor
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc));
+    (parsed_cursor, clamped_limit)
+}
+
+pub fn clamp_summary_days(days: Option<i32>) -> i32 {
+    days.unwrap_or(30).clamp(1, 90)
+}
+
+pub fn check_partner_summary_access(
+    program_status: ApprovalStatus,
+    program_owner: &str,
+    requester_uid: &str,
+    enrollment_status: Option<&str>,
+) -> Result<(), (StatusCode, &'static str)> {
+    if program_owner != requester_uid || program_status != ApprovalStatus::Approved {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Acesso restrito ao responsável de programa aprovado.",
+        ));
+    }
+    if enrollment_status != Some("ACTIVE") {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Participante sem vínculo ativo neste programa.",
+        ));
+    }
+    Ok(())
+}
+
+pub fn format_confirmed_via_label(raw: Option<&str>) -> &'static str {
+    match raw.unwrap_or("app").trim().to_ascii_lowercase().as_str() {
+        "braga.voice" => "Braga Voz (autoinformado)",
+        "braga.manual" => "Registro manual (autoinformado)",
+        "whatsapp" | "braga.whatsapp" => "Canal externo (autoinformado)",
+        "web" => "Portal Web (autoinformado)",
+        _ => "Braga Saúde (autoinformado)",
+    }
 }
 
 fn require_pool(state: &AppState) -> Result<&PgPool, (StatusCode, &'static str)> {
@@ -1897,6 +2055,501 @@ pub async fn regenerate_invite_code_handler(
     (StatusCode::OK, Json(json!({ "program": dto }))).into_response()
 }
 
+// =========================================================================
+// B2B-12: Projecao Autorizada de Rotina Compartilhada (Anti-IDOR + Cursor)
+// =========================================================================
+
+pub async fn list_program_participants_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<ParticipantsQuery>,
+) -> Response {
+    let identity =
+        match authenticate_request(&headers, &state, "GET", "/api/b2b/program/me/participants")
+            .await
+        {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let program_row = match sqlx::query(
+        "SELECT id::text AS id, owner_user_id, company_name, program_name, cnpj, primary_color, \
+                logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit \
+           FROM partner_programs \
+          WHERE owner_user_id = $1",
+    )
+    .bind(&identity.uid)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao consultar programa do responsável.",
+            )
+        }
+    };
+
+    let Some(program_row) = program_row else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "Nenhum programa parceiro vinculado a esta conta.",
+        );
+    };
+
+    let status_str: String = program_row.get("approval_status");
+    if status_str != "APPROVED" {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "A área de participantes é liberada somente após aprovação do programa.",
+        );
+    }
+
+    let id_str: String = program_row.get("id");
+    let Ok(prog_uuid) = Uuid::parse_str(&id_str) else {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Identificador do programa inválido.",
+        );
+    };
+
+    let (cursor_dt, limit) = parse_cursor_and_limit(query.cursor.as_deref(), query.limit);
+    let fetch_limit = limit + 1;
+
+    let rows = match sqlx::query(
+        "SELECT e.patient_user_id, \
+                COALESCE(NULLIF(BTRIM(pr.full_name), ''), 'Participante') AS display_name, \
+                e.shared_categories, \
+                e.consented_at \
+           FROM program_enrollments e \
+           JOIN profiles pr ON pr.id = e.patient_user_id \
+          WHERE e.program_id = $1 \
+            AND e.status = 'ACTIVE' \
+            AND ($2::timestamptz IS NULL OR e.consented_at < $2) \
+          ORDER BY e.consented_at DESC, e.patient_user_id ASC \
+          LIMIT $3",
+    )
+    .bind(prog_uuid)
+    .bind(cursor_dt)
+    .bind(fetch_limit)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao listar participantes vinculados.",
+            )
+        }
+    };
+
+    let has_more = rows.len() > limit as usize;
+    let slice_len = if has_more { limit as usize } else { rows.len() };
+    let mut participants = Vec::with_capacity(slice_len);
+    let mut next_cursor: Option<String> = None;
+
+    for row in rows.into_iter().take(slice_len) {
+        let consented: Option<DateTime<Utc>> = row.try_get("consented_at").ok();
+        let consented_iso = consented.map(|dt| dt.to_rfc3339());
+        if has_more {
+            next_cursor = consented_iso.clone();
+        }
+        let cats: Value = row.get("shared_categories");
+        participants.push(PartnerParticipantItemDto {
+            patient_user_id: row.get("patient_user_id"),
+            display_name: row.get("display_name"),
+            shared_categories: parse_categories_json(&cats),
+            consented_at: consented_iso,
+        });
+    }
+
+    let active_participants = count_active_participants(pool, prog_uuid)
+        .await
+        .unwrap_or(0);
+    let program_dto = map_program_row(&program_row, active_participants, false);
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "program": program_dto,
+            "participants": participants,
+            "nextCursor": next_cursor,
+            "hasMore": has_more
+        })),
+    )
+        .into_response()
+}
+
+async fn load_steps_section(pool: &PgPool, patient_id: &str, days: i32) -> SharedStepsSectionDto {
+    let rows = sqlx::query(
+        "SELECT date, steps, active_minutes, \
+                COALESCE(distance_final_meters, distance_meters, 0.0)::double precision AS dist \
+           FROM daily_metrics \
+          WHERE user_id = $1 \
+            AND date >= (CURRENT_DATE - make_interval(days => $2))::date \
+          ORDER BY date DESC \
+          LIMIT 31",
+    )
+    .bind(patient_id)
+    .bind(days)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut total_steps: i64 = 0;
+    let items: Vec<SharedStepsDayDto> = rows
+        .into_iter()
+        .map(|r| {
+            let d: chrono::NaiveDate = r.try_get("date").unwrap_or_default();
+            let steps: i32 = r
+                .try_get::<Option<i32>, _>("steps")
+                .ok()
+                .flatten()
+                .unwrap_or(0);
+            let active_minutes: i32 = r
+                .try_get::<Option<i32>, _>("active_minutes")
+                .ok()
+                .flatten()
+                .unwrap_or(0);
+            let dist: f64 = r
+                .try_get::<Option<f64>, _>("dist")
+                .ok()
+                .flatten()
+                .unwrap_or(0.0);
+            total_steps += i64::from(steps.max(0));
+            SharedStepsDayDto {
+                date: d.to_string(),
+                steps: steps.max(0),
+                active_minutes: active_minutes.max(0),
+                distance_meters: dist.max(0.0),
+            }
+        })
+        .collect();
+
+    let days_recorded = items.len();
+    let average_steps = if days_recorded > 0 {
+        total_steps / (days_recorded as i64)
+    } else {
+        0
+    };
+
+    SharedStepsSectionDto {
+        source: "Braga Saúde • Passos".to_string(),
+        average_steps,
+        days_recorded,
+        days: items,
+    }
+}
+
+async fn load_hydration_section(
+    pool: &PgPool,
+    patient_id: &str,
+    days: i32,
+) -> SharedHydrationSectionDto {
+    let rows = sqlx::query(
+        "SELECT (measured_at AT TIME ZONE 'America/Sao_Paulo')::date AS day, \
+                COALESCE(SUM(hydration_ml), 0)::bigint AS total_ml \
+           FROM vital_signs \
+          WHERE user_id = $1 \
+            AND deleted_at IS NULL \
+            AND hydration_ml IS NOT NULL \
+            AND hydration_ml > 0 \
+            AND measured_at >= NOW() - make_interval(days => $2) \
+          GROUP BY 1 \
+          ORDER BY 1 DESC \
+          LIMIT 31",
+    )
+    .bind(patient_id)
+    .bind(days)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut sum_ml: i64 = 0;
+    let items: Vec<SharedHydrationDayDto> = rows
+        .into_iter()
+        .map(|r| {
+            let day: chrono::NaiveDate = r.try_get("day").unwrap_or_default();
+            let total_ml: i64 = r.try_get::<i64, _>("total_ml").unwrap_or(0).max(0);
+            sum_ml += total_ml;
+            SharedHydrationDayDto {
+                date: day.to_string(),
+                total_ml,
+            }
+        })
+        .collect();
+
+    let days_recorded = items.len();
+    let average_ml = if days_recorded > 0 {
+        sum_ml / (days_recorded as i64)
+    } else {
+        0
+    };
+
+    SharedHydrationSectionDto {
+        source: "Braga Saúde • Autoinformado".to_string(),
+        average_ml,
+        days_recorded,
+        days: items,
+    }
+}
+
+async fn load_medications_section(
+    pool: &PgPool,
+    patient_id: &str,
+    days: i32,
+) -> SharedMedicationsSectionDto {
+    let med_rows = sqlx::query(
+        "SELECT name, dosage_mg, COALESCE(NULLIF(schedule_times, ''), schedule_time, '') AS sched \
+           FROM medications \
+          WHERE user_id = $1 \
+          ORDER BY created_at DESC \
+          LIMIT 30",
+    )
+    .bind(patient_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let items: Vec<SharedMedicationItemDto> = med_rows
+        .into_iter()
+        .map(|r| {
+            let dosage_mg = r
+                .try_get::<Option<f64>, _>("dosage_mg")
+                .ok()
+                .flatten()
+                .or_else(|| {
+                    r.try_get::<Option<i32>, _>("dosage_mg")
+                        .ok()
+                        .flatten()
+                        .map(f64::from)
+                });
+            SharedMedicationItemDto {
+                name: r.try_get("name").unwrap_or_default(),
+                dosage_mg,
+                schedule: r.try_get::<String, _>("sched").unwrap_or_default(),
+            }
+        })
+        .collect();
+
+    let confirmations: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint \
+           FROM medication_logs \
+          WHERE user_id = $1 \
+            AND taken_at >= NOW() - make_interval(days => $2)",
+    )
+    .bind(patient_id)
+    .bind(days)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+
+    SharedMedicationsSectionDto {
+        source: "Braga Saúde • Lembretes".to_string(),
+        reminder_count: items.len(),
+        user_confirmations_in_period: confirmations,
+        note: "Confirmações de rotina registradas pelo usuário (não comprova tomada).".to_string(),
+        items,
+    }
+}
+
+async fn load_authorized_records_section(
+    pool: &PgPool,
+    patient_id: &str,
+    days: i32,
+) -> SharedAuthorizedRecordsSectionDto {
+    let rows = sqlx::query(
+        "SELECT measured_at, confirmed_via, systolic_pressure, diastolic_pressure, \
+                heart_rate, glucose_level, glucose_type, oxygen_saturation \
+           FROM vital_signs \
+          WHERE user_id = $1 \
+            AND deleted_at IS NULL \
+            AND measured_at >= NOW() - make_interval(days => $2) \
+            AND (systolic_pressure IS NOT NULL OR diastolic_pressure IS NOT NULL \
+                 OR heart_rate IS NOT NULL OR glucose_level IS NOT NULL \
+                 OR oxygen_saturation IS NOT NULL) \
+          ORDER BY measured_at DESC \
+          LIMIT 30",
+    )
+    .bind(patient_id)
+    .bind(days)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let records: Vec<SharedVitalEntryDto> = rows
+        .into_iter()
+        .map(|r| {
+            let measured_at: Option<DateTime<Utc>> = r.try_get("measured_at").ok();
+            let confirmed_via: Option<String> = r.try_get("confirmed_via").ok();
+            let oxygen_saturation = r
+                .try_get::<f64, _>("oxygen_saturation")
+                .ok()
+                .or_else(|| r.try_get::<i32, _>("oxygen_saturation").ok().map(f64::from))
+                .map(|v| (v * 100.0).round() / 100.0);
+            SharedVitalEntryDto {
+                measured_at: measured_at.map(|dt| dt.to_rfc3339()).unwrap_or_default(),
+                origin: format_confirmed_via_label(confirmed_via.as_deref()).to_string(),
+                systolic_pressure: r.try_get("systolic_pressure").ok(),
+                diastolic_pressure: r.try_get("diastolic_pressure").ok(),
+                heart_rate: r.try_get("heart_rate").ok(),
+                glucose_level: r.try_get("glucose_level").ok(),
+                glucose_type: r.try_get("glucose_type").ok(),
+                oxygen_saturation,
+            }
+        })
+        .collect();
+
+    SharedAuthorizedRecordsSectionDto {
+        source: "Braga Saúde • Registros autorizados".to_string(),
+        zero_file_egress_notice:
+            "Arquivos e exames do organizador pessoal permanecem privados neste fluxo (Zero File Egress)."
+                .to_string(),
+        records,
+    }
+}
+
+pub async fn get_participant_summary_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(patient_id): Path<String>,
+    Query(query): Query<ParticipantSummaryQuery>,
+) -> Response {
+    let target_patient_id = patient_id.trim().to_string();
+    if target_patient_id.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "Participante inválido.");
+    }
+    let identity = match authenticate_request(
+        &headers,
+        &state,
+        "GET",
+        &format!("/api/b2b/program/me/participants/{target_patient_id}/summary"),
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let access_row = match sqlx::query(
+        "SELECT p.id AS program_id, p.owner_user_id, p.approval_status, p.program_name, \
+                p.company_name, e.status AS enrollment_status, e.shared_categories, \
+                COALESCE(NULLIF(BTRIM(pr.full_name), ''), 'Participante') AS participant_name \
+           FROM partner_programs p \
+           LEFT JOIN program_enrollments e \
+             ON e.program_id = p.id AND e.patient_user_id = $2 \
+           LEFT JOIN profiles pr ON pr.id = e.patient_user_id \
+          WHERE p.owner_user_id = $1",
+    )
+    .bind(&identity.uid)
+    .bind(&target_patient_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao validar vínculo do participante.",
+            )
+        }
+    };
+
+    let Some(row) = access_row else {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "Acesso restrito ao responsável de programa aprovado.",
+        );
+    };
+
+    let prog_status_str: String = row.get("approval_status");
+    let prog_status = ApprovalStatus::parse(&prog_status_str).unwrap_or(ApprovalStatus::Draft);
+    let owner_uid: String = row.get("owner_user_id");
+    let enrollment_status: Option<String> = row.try_get("enrollment_status").ok().flatten();
+
+    if let Err((code, msg)) = check_partner_summary_access(
+        prog_status,
+        &owner_uid,
+        &identity.uid,
+        enrollment_status.as_deref(),
+    ) {
+        return json_error(code, msg);
+    }
+
+    let prog_uuid: Uuid = row.get("program_id");
+    let cats_val: Value = row
+        .try_get::<Option<Value>, _>("shared_categories")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| json!([]));
+    let shared_categories = parse_categories_json(&cats_val);
+    let period_days = clamp_summary_days(query.days);
+
+    let steps_section = if shared_categories.iter().any(|c| c == "steps") {
+        Some(load_steps_section(pool, &target_patient_id, period_days).await)
+    } else {
+        None
+    };
+
+    let hydration_section = if shared_categories.iter().any(|c| c == "hydration") {
+        Some(load_hydration_section(pool, &target_patient_id, period_days).await)
+    } else {
+        None
+    };
+
+    let medications_section = if shared_categories.iter().any(|c| c == "medications") {
+        Some(load_medications_section(pool, &target_patient_id, period_days).await)
+    } else {
+        None
+    };
+
+    let authorized_records_section = if shared_categories.iter().any(|c| c == "authorized_records")
+    {
+        Some(load_authorized_records_section(pool, &target_patient_id, period_days).await)
+    } else {
+        None
+    };
+
+    let _ = record_audit(
+        pool,
+        Some(prog_uuid),
+        &identity.uid,
+        &target_patient_id,
+        "PARTNER_VIEWED_PARTICIPANT_SUMMARY",
+        json!({
+            "days": period_days,
+            "categoriesReturned": shared_categories
+        }),
+    )
+    .await;
+
+    let summary = ParticipantRoutineSummaryDto {
+        program_id: prog_uuid.to_string(),
+        program_name: row.get("program_name"),
+        company_name: row.get("company_name"),
+        patient_user_id: target_patient_id,
+        participant_name: row.get("participant_name"),
+        period_days,
+        shared_categories,
+        steps_section,
+        hydration_section,
+        medications_section,
+        authorized_records_section,
+    };
+
+    (StatusCode::OK, Json(json!({ "summary": summary }))).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2074,5 +2727,68 @@ mod tests {
             10,
         )
         .is_ok());
+    }
+
+    #[test]
+    fn test_partner_summary_access_and_pagination_guards() {
+        // Isolamento multi-tenant e aprovacao
+        assert_eq!(
+            check_partner_summary_access(
+                ApprovalStatus::Approved,
+                "owner-1",
+                "owner-2",
+                Some("ACTIVE")
+            )
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            check_partner_summary_access(
+                ApprovalStatus::PendingReview,
+                "owner-1",
+                "owner-1",
+                Some("ACTIVE")
+            )
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            check_partner_summary_access(
+                ApprovalStatus::Approved,
+                "owner-1",
+                "owner-1",
+                Some("REVOKED")
+            )
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert!(check_partner_summary_access(
+            ApprovalStatus::Approved,
+            "owner-1",
+            "owner-1",
+            Some("ACTIVE")
+        )
+        .is_ok());
+
+        // Limites de protecao para o RDS Micro
+        assert_eq!(clamp_summary_days(None), 30);
+        assert_eq!(clamp_summary_days(Some(-5)), 1);
+        assert_eq!(clamp_summary_days(Some(365)), 90);
+
+        let (c_none, l_default) = parse_cursor_and_limit(None, None);
+        assert!(c_none.is_none());
+        assert_eq!(l_default, 20);
+
+        let (c_ok, l_clamped) = parse_cursor_and_limit(Some("2026-11-18T20:00:00Z"), Some(500));
+        assert!(c_ok.is_some());
+        assert_eq!(l_clamped, 50);
+
+        assert_eq!(
+            format_confirmed_via_label(Some("braga.voice")),
+            "Braga Voz (autoinformado)"
+        );
     }
 }
