@@ -420,7 +420,7 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                     'b2b:' || $1::text || ':approved',
                     'b2b_program:' || $1::text,
                     'B2B_PROGRAM_APPROVED',
-                    'SYSTEM',
+                    'CARE',
                     'b2b_program',
                     $1::text,
                     NULL,
