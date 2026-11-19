@@ -682,7 +682,7 @@ pub struct ParticipantRoutineSummaryDto {
     pub authorized_records_section: Option<SharedAuthorizedRecordsSectionDto>,
 }
 
-fn json_error(status: StatusCode, detail: &str) -> Response {
+pub(crate) fn json_error(status: StatusCode, detail: &str) -> Response {
     (status, Json(json!({ "detail": detail }))).into_response()
 }
 
@@ -1528,7 +1528,7 @@ pub fn check_approved_council_mutation(
     Ok(())
 }
 
-fn parse_experience_config_json(
+pub(crate) fn parse_experience_config_json(
     raw_template_key: Option<&str>,
     raw_config: Option<&Value>,
 ) -> (String, ProgramExperienceConfigDto) {
@@ -1550,14 +1550,14 @@ fn parse_experience_config_json(
     )
 }
 
-fn require_pool(state: &AppState) -> Result<&PgPool, (StatusCode, &'static str)> {
+pub(crate) fn require_pool(state: &AppState) -> Result<&PgPool, (StatusCode, &'static str)> {
     state.pool.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Banco de dados não disponível.",
     ))
 }
 
-fn parse_categories_json(raw: &Value) -> Vec<String> {
+pub(crate) fn parse_categories_json(raw: &Value) -> Vec<String> {
     raw.as_array()
         .map(|arr| {
             arr.iter()
@@ -1577,7 +1577,7 @@ async fn count_active_participants(pool: &PgPool, program_id: Uuid) -> Result<i6
     Ok(count)
 }
 
-async fn record_audit(
+pub(crate) async fn record_audit(
     executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
     program_id: Option<Uuid>,
     actor_user_id: &str,

@@ -21,11 +21,16 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[2]
 TEST_DSN = os.getenv("TEST_POSTGRES_URL")
 B2B_RUST_PATH = ROOT / "rust/crates/braga-edge/src/b2b.rs"
+B2B_ENGAGEMENT_RUST_PATH = ROOT / "rust/crates/braga-edge/src/b2b_engagement.rs"
 B2B_KYB_RUST_PATH = ROOT / "rust/crates/braga-edge/src/b2b_kyb.rs"
 MIG_091_PATH = ROOT / "migrations/091_b2b_nocode_experience_builder.sql"
 MIG_091_ROLLBACK_PATH = ROOT / "migrations/091_b2b_nocode_experience_builder_rollback.sql"
 MIG_091B_PATH = ROOT / "migrations/091b_b2b_auto_kyb.sql"
 MIG_091B_ROLLBACK_PATH = ROOT / "migrations/091b_b2b_auto_kyb_rollback.sql"
+MIG_092_PATH = ROOT / "migrations/092_b2b_reminders_appointments_direct_chat.sql"
+MIG_092_ROLLBACK_PATH = (
+    ROOT / "migrations/092_b2b_reminders_appointments_direct_chat_rollback.sql"
+)
 
 
 class B2BStaticGuardsTest(unittest.TestCase):
@@ -51,6 +56,38 @@ class B2BStaticGuardsTest(unittest.TestCase):
             forbidden_tables.search(src),
             "O motor B2B em Rust nunca deve consultar exams, symptoms_diary ou family_messages.",
         )
+
+        eng_src = B2B_ENGAGEMENT_RUST_PATH.read_text(encoding="utf-8")
+        self.assertIsNone(
+            re.search(
+                r"\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(medications|medication_logs|consultations|family_messages)\b",
+                eng_src,
+                re.IGNORECASE,
+            ),
+            "Modulo de engajamento B2B nunca pode escrever em medications, consultations ou family_messages.",
+        )
+
+    def test_migration_092_is_additive_reversible_and_isolated(self):
+        sql_up = MIG_092_PATH.read_text(encoding="utf-8")
+        sql_down = MIG_092_ROLLBACK_PATH.read_text(encoding="utf-8")
+        self.assertIn("SET LOCAL lock_timeout = '5s';", sql_up)
+        self.assertIn("SET LOCAL statement_timeout = '60s';", sql_up)
+        for tbl in (
+            "program_reminders",
+            "program_reminder_receipts",
+            "program_appointments",
+            "program_direct_threads",
+            "program_direct_messages",
+            "program_abuse_reports",
+        ):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {tbl}", sql_up)
+            self.assertIn(f"DROP TABLE IF EXISTS {tbl};", sql_down)
+        for kind in (
+            "PARTNER_REMINDER",
+            "PARTNER_APPOINTMENT",
+            "PARTNER_DIRECT_MESSAGE",
+        ):
+            self.assertIn(kind, sql_up)
 
     def test_migration_091_is_additive_reversible_and_unblocks_lgpd_deletion(self):
         sql_up = MIG_091_PATH.read_text(encoding="utf-8")
@@ -188,6 +225,8 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                         await conn.execute(mig_file.read_text(encoding="utf-8-sig"))
                 async with conn.transaction():
                     await conn.execute(MIG_091B_PATH.read_text(encoding="utf-8-sig"))
+                async with conn.transaction():
+                    await conn.execute(MIG_092_PATH.read_text(encoding="utf-8-sig"))
 
                 await conn.execute(
                     """
@@ -519,6 +558,97 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             self.assertAlmostEqual(bio_row["weight_kg"], 72.4, places=1)
             self.assertAlmostEqual(bio_row["imc"], 23.6, places=1)
 
+    async def test_b2b_18_reminders_notifications_mute_and_medications_isolated(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO medications (user_id, name, dosage_mg, schedule_time)
+                VALUES ('patient-1', 'Losartana', 50.0, '08:00')
+                """
+            )
+            rem_id = await conn.fetchval(
+                """
+                INSERT INTO program_reminders
+                    (program_id, target_patient_id, target_category, reminder_type, title, body, created_by)
+                VALUES
+                    ($1, 'patient-1', 'steps', 'ACTIVITY', 'Caminhada leve', 'Registre seus passos de hoje', 'owner-a')
+                RETURNING id
+                """,
+                self.prog_a,
+            )
+            self.assertIsNotNone(rem_id)
+
+            # notification_emit aceita PARTNER_REMINDER para participante ativo nao silenciado
+            ev = await conn.fetchval(
+                """
+                SELECT notification_emit(
+                    'patient-1',
+                    $1,
+                    $2,
+                    'PARTNER_REMINDER',
+                    'CARE',
+                    'b2b_reminder',
+                    $3,
+                    'patient-1',
+                    'owner-a',
+                    NOW(),
+                    NOW() + interval '30 days',
+                    '{}'::jsonb,
+                    true
+                )
+                """,
+                f"b2b_reminder:{rem_id}:patient-1",
+                f"b2b_reminder:{rem_id}",
+                str(rem_id),
+            )
+            self.assertIsNotNone(ev)
+
+            # Mutar o programa bloqueia novas emissoes notification_emit (retorna NULL sem gravar outbox)
+            await conn.execute(
+                "UPDATE program_enrollments SET muted_at = NOW() WHERE program_id = $1 AND patient_user_id = 'patient-1'",
+                self.prog_a,
+            )
+            muted_ev = await conn.fetchval(
+                """
+                SELECT notification_emit(
+                    'patient-1',
+                    $1,
+                    $2,
+                    'PARTNER_REMINDER',
+                    'CARE',
+                    'b2b_reminder',
+                    $3,
+                    'patient-1',
+                    'owner-a',
+                    NOW(),
+                    NOW() + interval '30 days',
+                    '{}'::jsonb,
+                    true
+                )
+                """,
+                f"b2b_reminder:{rem_id}:patient-1:muted",
+                f"b2b_reminder:{rem_id}:muted",
+                str(rem_id),
+            )
+            self.assertIsNone(muted_ev)
+            outbox_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM notification_outbox WHERE recipient_id = 'patient-1' AND kind = 'PARTNER_REMINDER'"
+            )
+            self.assertEqual(outbox_count, 1)
+
+            # Recibo de leitura e preservacao de medications pessoais
+            await conn.execute(
+                """
+                INSERT INTO program_reminder_receipts (reminder_id, patient_user_id, acknowledged_by_uid)
+                VALUES ($1, 'patient-1', 'patient-1')
+                """,
+                rem_id,
+            )
+            med_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM medications WHERE user_id = 'patient-1'"
+            )
+            self.assertEqual(med_count, 1)
+
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:
             await conn.execute(
@@ -554,6 +684,9 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(expected_idx, indexes)
 
             async with conn.transaction():
+                await conn.execute(
+                    MIG_092_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
+                )
                 await conn.execute(
                     MIG_091B_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
                 )

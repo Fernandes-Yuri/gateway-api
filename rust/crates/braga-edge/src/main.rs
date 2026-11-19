@@ -1,4 +1,5 @@
 mod b2b;
+mod b2b_engagement;
 mod b2b_kyb;
 mod b2b_storage;
 
@@ -3267,12 +3268,29 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             "/api/b2b/program/me/participants/:patient_id/remove",
             post(b2b::remove_program_participant_handler),
         )
+        .route(
+            "/api/b2b/program/me/reminders",
+            get(b2b_engagement::list_owner_reminders_handler)
+                .post(b2b_engagement::create_program_reminder_handler),
+        )
         .route("/api/b2b/invite/:code", get(b2b::lookup_invite_handler))
         .route("/api/b2b/enrollments/join", post(b2b::join_program_handler))
         .route(
             "/api/b2b/enrollments/:program_id/consent",
             post(b2b::update_enrollment_consent_handler)
                 .put(b2b::update_enrollment_consent_handler),
+        )
+        .route(
+            "/api/b2b/enrollments/:program_id/reminders",
+            get(b2b_engagement::list_enrollment_reminders_handler),
+        )
+        .route(
+            "/api/b2b/enrollments/:program_id/reminders/:reminder_id/ack",
+            post(b2b_engagement::acknowledge_enrollment_reminder_handler),
+        )
+        .route(
+            "/api/b2b/enrollments/:program_id/mute",
+            post(b2b_engagement::set_enrollment_mute_handler),
         )
         .route(
             "/api/b2b/enrollments/:program_id/leave",
@@ -3629,6 +3647,12 @@ mod tests {
                 "/api/b2b/program/me/participants/patient-1/remove",
                 Some("{}"),
             ),
+            ("GET", "/api/b2b/program/me/reminders", None),
+            (
+                "POST",
+                "/api/b2b/program/me/reminders",
+                Some("{\"title\":\"Hidratacao\",\"body\":\"Beba agua\"}"),
+            ),
             (
                 "POST",
                 "/api/b2b/enrollments/join",
@@ -3638,6 +3662,21 @@ mod tests {
                 "PUT",
                 "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/consent",
                 Some("{\"sharedCategories\":[\"steps\"]}"),
+            ),
+            (
+                "GET",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/reminders",
+                None,
+            ),
+            (
+                "POST",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/reminders/00000000-0000-0000-0000-000000000001/ack",
+                Some("{}"),
+            ),
+            (
+                "POST",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/mute",
+                Some("{\"muted\":true}"),
             ),
             (
                 "POST",
