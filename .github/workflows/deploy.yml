@@ -164,7 +164,7 @@ jobs:
           export PRESIGNED_URL
           PRESIGNED_URL=$(aws s3 presign "s3://${BUCKET}/${KEY}" --expires-in 900)
 
-          python3 - <<PY > /tmp/ssm_rust.json
+          python3 - <<'PY' > /tmp/ssm_rust.json
           import json, os
           url = os.environ["PRESIGNED_URL"]
           script = "\n".join([
