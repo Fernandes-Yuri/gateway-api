@@ -322,6 +322,8 @@ class TestConfigAndDeployIntegration(unittest.TestCase):
         self.assertIn("EnvironmentFile=-/run/braga-saude/gateway.env", service_content)
         self.assertIn("Environment=USE_AWS_SECRETS=1", service_content)
         self.assertIn("Environment=AWS_SSM_PREFIX=/braga-saude/production", service_content)
+        self.assertNotIn("--limit-concurrency", service_content)
+        self.assertIn("http://127.0.0.1:8083/health", deploy_content)
 
     def test_cli_main_check_and_strict_error(self):
         """Testa o entrypoint CLI main() em modo --check e falha com --strict."""

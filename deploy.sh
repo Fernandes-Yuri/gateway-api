@@ -143,10 +143,17 @@ sudo systemctl daemon-reload
 
 echo "=== [4/4] Reiniciando Braga Gateway ==="
 sudo systemctl restart braga-gateway.service
-sleep 2
 
-# Verificacao de integridade
-HEALTH=$(curl -s http://127.0.0.1:8080/health || echo "{}")
+# Verificacao de integridade real do Gunicorn (porta 8083 + socket unix) e da borda (8080)
+HEALTH=""
+for _ in $(seq 1 12); do
+    sleep 1
+    HEALTH=$(curl -s http://127.0.0.1:8083/health || true)
+    if echo "$HEALTH" | grep -q '"status":"online"'; then
+        break
+    fi
+done
+
 if echo "$HEALTH" | grep -q '"status":"online"'; then
     echo "================================================="
     echo "DEPLOY CONCLUIDO COM SUCESSO: Gateway esta ONLINE!"
