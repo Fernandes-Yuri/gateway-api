@@ -431,7 +431,7 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                     true
                 )
                 """,
-                self.prog_a,
+                str(self.prog_a),
             )
             self.assertIsNotNone(notif_id)
             outbox_count = await conn.fetchval(
