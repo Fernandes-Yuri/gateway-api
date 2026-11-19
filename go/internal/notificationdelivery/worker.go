@@ -339,6 +339,12 @@ func pushMessage(entry *job, current *source, token string) PushMessage {
 		title = "Atualização de consulta"
 	case current.Kind == "POST_REACTION":
 		title = "Nova interação no mural"
+	case current.Kind == "B2B_PROGRAM_APPROVED":
+		title = "Programa Parceiro aprovado"
+	case current.Kind == "B2B_PROGRAM_CHANGES_REQUESTED":
+		title = "Atualização no Programa Parceiro"
+	case current.Kind == "B2B_PROGRAM_PENDING_REVIEW":
+		title = "Programa Parceiro em análise"
 	}
 	body := "Abra o Braga Saúde para consultar os detalhes."
 	data := map[string]string{"type": current.Kind, "eventId": entry.ItemID, "revision": strconv.FormatInt(entry.Revision, 10),
@@ -357,6 +363,8 @@ func pushMessage(entry *job, current *source, token string) PushMessage {
 		data["medicationId"] = current.ResourceID
 	case "binding":
 		data["bindingId"] = current.ResourceID
+	case "b2b_program":
+		data["programId"] = current.ResourceID
 	}
 	return PushMessage{Token: token, Title: title, Body: body, Data: data}
 }

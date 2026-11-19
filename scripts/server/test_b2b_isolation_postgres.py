@@ -21,8 +21,11 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[2]
 TEST_DSN = os.getenv("TEST_POSTGRES_URL")
 B2B_RUST_PATH = ROOT / "rust/crates/braga-edge/src/b2b.rs"
+B2B_KYB_RUST_PATH = ROOT / "rust/crates/braga-edge/src/b2b_kyb.rs"
 MIG_091_PATH = ROOT / "migrations/091_b2b_nocode_experience_builder.sql"
 MIG_091_ROLLBACK_PATH = ROOT / "migrations/091_b2b_nocode_experience_builder_rollback.sql"
+MIG_091B_PATH = ROOT / "migrations/091b_b2b_auto_kyb.sql"
+MIG_091B_ROLLBACK_PATH = ROOT / "migrations/091b_b2b_auto_kyb_rollback.sql"
 
 
 class B2BStaticGuardsTest(unittest.TestCase):
@@ -59,13 +62,93 @@ class B2BStaticGuardsTest(unittest.TestCase):
         self.assertIn("DROP TRIGGER IF EXISTS trg_profiles_b2b_lgpd_cleanup", sql_down)
         self.assertIn("DROP COLUMN IF EXISTS experience_config", sql_down)
 
-        for number in (3, 10, 17, 18, 31, 32, 33, 54, 56, 71, 80, 81, 90, 91):
+        for number in (3, 10, 17, 18, 31, 32, 33, 54, 56, 71, 80, 81, 82, 90, 91):
             matches = [
                 f
                 for f in (ROOT / "migrations").glob(f"{number:03d}_*.sql")
                 if not f.stem.endswith("_rollback")
             ]
             self.assertEqual(len(matches), 1, f"Migration {number:03d} nao encontrada")
+
+    def test_migration_091b_is_additive_reversible_and_protects_cnpj_and_kyb(self):
+        sql_up = MIG_091B_PATH.read_text(encoding="utf-8")
+        sql_down = MIG_091B_ROLLBACK_PATH.read_text(encoding="utf-8")
+        self.assertIn("uq_partner_programs_active_cnpj", sql_up)
+        self.assertIn("CREATE TABLE IF NOT EXISTS cnpj_lookup_cache", sql_up)
+        self.assertIn("B2B_PROGRAM_APPROVED", sql_up)
+        self.assertIn("b2b_r2_keys", sql_up)
+        self.assertIn("DROP INDEX IF EXISTS uq_partner_programs_active_cnpj", sql_down)
+        self.assertIn("DROP TABLE IF EXISTS cnpj_lookup_cache", sql_down)
+        self.assertIn("DROP COLUMN IF EXISTS b2b_r2_keys", sql_down)
+
+        kyb_src = B2B_KYB_RUST_PATH.read_text(encoding="utf-8")
+        self.assertIn("normalize_and_hash_cpf", kyb_src)
+        self.assertIn("brasilapi.com.br", kyb_src)
+        self.assertIn("publica.cnpj.ws", kyb_src)
+        self.assertIn("receitaws.com.br", kyb_src)
+        self.assertNotIn("responsible_cpf varchar", sql_up)
+
+    def test_b2b_r2_key_extraction_email_templates_and_internal_notify(self):
+        import asyncio
+        from types import SimpleNamespace
+        try:
+            import email_service
+            from routers import admin
+        except ImportError as exc:
+            self.skipTest(f"Dependencias FastAPI ausentes neste Python local: {exc}")
+
+        if account_deletion is not None:
+            keys = account_deletion._extract_b2b_r2_keys_for_program(
+                {
+                    "id": "prog-1",
+                    "logo_url": "https://api.bragasaude.online/api/files/b2b-logos/prog-1/logo-abc.png?exp=9&sig=x",
+                    "proof_documents": [
+                        {"id": "p1", "storageKey": "b2b-kyb/prog-1/p1.pdf"},
+                        {"id": "evil", "storageKey": "../outside/secret.pdf"},
+                    ],
+                }
+            )
+            self.assertEqual(
+                keys,
+                ["b2b-logos/prog-1/logo-abc.png", "b2b-kyb/prog-1/p1.pdf"],
+            )
+
+        sent = []
+
+        def fake_send(to_email, subject, html_body, plain_text):
+            sent.append((to_email, subject, html_body, plain_text))
+            return True
+
+        with patch.object(email_service, "_send_gmail_sync", side_effect=fake_send):
+            res = asyncio.run(
+                email_service.send_b2b_decision_email(
+                    to_email="clinic@example.test",
+                    program_name="Clínica <Vida>",
+                    decision="APPROVED",
+                    invite_code="VIDA-1234",
+                )
+            )
+            self.assertTrue(res["success"])
+            self.assertIn("aprovado", sent[0][1])
+            self.assertIn("VIDA-1234", sent[0][2])
+            self.assertIn("Clínica &lt;Vida&gt;", sent[0][2])
+
+            body = admin.B2BDecisionEmailRequest(
+                ownerUserId="owner-1",
+                programName="Clínica Vida",
+                decision="CHANGES_REQUESTED",
+                note="Envie comprovante CRM.",
+            )
+            with patch(
+                "firebase_admin.auth.get_user",
+                return_value=SimpleNamespace(email="owner@example.test"),
+            ):
+                notify_res = asyncio.run(
+                    admin.notify_b2b_decision_internal(body, _auth=True)
+                )
+            self.assertTrue(notify_res["success"])
+            self.assertEqual(sent[1][0], "owner@example.test")
+            self.assertIn("Envie comprovante CRM.", sent[1][2])
 
 
 @unittest.skipUnless(TEST_DSN and asyncpg is not None, "PostgreSQL efemero exclusivo do CI")
@@ -95,7 +178,7 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(
                     "CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)"
                 )
-                for number in (3, 10, 17, 18, 31, 32, 33, 54, 56, 71, 80, 81, 90, 91):
+                for number in (3, 10, 17, 18, 31, 32, 33, 54, 56, 71, 80, 81, 82, 90, 91):
                     mig_file = next(
                         f
                         for f in (ROOT / "migrations").glob(f"{number:03d}_*.sql")
@@ -103,6 +186,8 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                     )
                     async with conn.transaction():
                         await conn.execute(mig_file.read_text(encoding="utf-8-sig"))
+                async with conn.transaction():
+                    await conn.execute(MIG_091B_PATH.read_text(encoding="utf-8-sig"))
 
                 await conn.execute(
                     """
@@ -231,7 +316,25 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(removed_row["family_share_enabled"])
 
     async def test_lgpd_delete_account_succeeds_for_draft_and_approved_b2b_owners(self):
-        with patch.object(account_deletion, "cleanup_account_files", AsyncMock(return_value=True)):
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE partner_programs
+                   SET logo_url = $2,
+                       proof_documents = $3::jsonb
+                 WHERE id = $1
+                """,
+                self.prog_a,
+                f"https://api.bragasaude.online/api/files/b2b-logos/{self.prog_a}/logo-a.png",
+                f'[{{"id":"proof-1","storageKey":"b2b-kyb/{self.prog_a}/proof-1.pdf"}}]',
+            )
+
+        deleted_r2_keys = []
+
+        def fake_delete_r2(keys):
+            deleted_r2_keys.extend(keys)
+
+        with patch.object(account_deletion, "_delete_r2_objects_sync", side_effect=fake_delete_r2):
             res_draft = await account_deletion.delete_account(
                 self.pool, "owner-draft", actor="próprio titular"
             )
@@ -241,6 +344,9 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 self.pool, "owner-a", actor="próprio titular"
             )
             self.assertTrue(res_approved["deleted"])
+
+        self.assertIn(f"b2b-logos/{self.prog_a}/logo-a.png", deleted_r2_keys)
+        self.assertIn(f"b2b-kyb/{self.prog_a}/proof-1.pdf", deleted_r2_keys)
 
         async with self.pool.acquire() as conn:
             remaining_programs = await conn.fetch(
@@ -265,6 +371,74 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 "   OR target_user_id IN ('owner-a', 'owner-draft')"
             )
             self.assertEqual(leaked_audit_actors, 0)
+
+    async def test_091b_unique_active_cnpj_cache_and_b2b_notifications(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO profiles (id, full_name) VALUES ('owner-dup', 'Outro Dono'), ('owner-ok', 'Dono Apos Rejeicao')"
+            )
+            with self.assertRaises(asyncpg.UniqueViolationError):
+                await conn.execute(
+                    """
+                    INSERT INTO partner_programs (owner_user_id, program_name, company_name, cnpj, approval_status)
+                    VALUES ('owner-dup', 'Clone A', 'Clinica Clone', '12.345.678/0001-95', 'PENDING_REVIEW')
+                    """
+                )
+
+            rejected_id = await conn.fetchval(
+                """
+                INSERT INTO partner_programs (owner_user_id, program_name, company_name, cnpj, approval_status)
+                VALUES ('owner-dup', 'Rejeitado B', 'Clinica Rejeitada', '11.222.333/0001-81', 'REJECTED')
+                RETURNING id
+                """
+            )
+            self.assertIsNotNone(rejected_id)
+            allowed_id = await conn.fetchval(
+                """
+                INSERT INTO partner_programs (owner_user_id, program_name, company_name, cnpj, approval_status)
+                VALUES ('owner-ok', 'Valido B', 'Clinica Valida', '11.222.333/0001-81', 'APPROVED')
+                RETURNING id
+                """
+            )
+            self.assertIsNotNone(allowed_id)
+
+            await conn.execute(
+                """
+                INSERT INTO cnpj_lookup_cache (cnpj_digits, provider, payload, expires_at)
+                VALUES ('12345678000195', 'brasilapi', '{"cnpj":"12345678000195"}'::jsonb, NOW() + INTERVAL '24 hours')
+                """
+            )
+            cached_provider = await conn.fetchval(
+                "SELECT provider FROM cnpj_lookup_cache WHERE cnpj_digits = '12345678000195'"
+            )
+            self.assertEqual(cached_provider, "brasilapi")
+
+            notif_id = await conn.fetchval(
+                """
+                SELECT notification_emit(
+                    'owner-a',
+                    'b2b:' || $1::text || ':approved',
+                    'b2b_program:' || $1::text,
+                    'B2B_PROGRAM_APPROVED',
+                    'SYSTEM',
+                    'b2b_program',
+                    $1::text,
+                    NULL,
+                    'auto-kyb-v1',
+                    now(),
+                    NULL,
+                    '{"status":"APPROVED"}'::jsonb,
+                    true
+                )
+                """,
+                self.prog_a,
+            )
+            self.assertIsNotNone(notif_id)
+            outbox_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM notification_outbox WHERE item_id = $1",
+                notif_id,
+            )
+            self.assertEqual(outbox_count, 1)
 
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:
@@ -301,6 +475,9 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(expected_idx, indexes)
 
             async with conn.transaction():
+                await conn.execute(
+                    MIG_091B_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
+                )
                 await conn.execute(
                     MIG_091_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
                 )

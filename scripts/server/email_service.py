@@ -414,3 +414,48 @@ async def send_account_deactivation_email(to_email: str, user_name: str = "") ->
         _account_lifecycle_html(user_name, paused=True),
         "Sua conta foi pausada. Os registros sincronizados permanecem salvos e os avisos push foram desativados. Faça login novamente para reativar.")
     return {"success": success}
+
+
+async def send_b2b_decision_email(
+    to_email: str,
+    program_name: str,
+    decision: str,
+    note: str = "",
+    invite_code: str = "",
+) -> Dict[str, Any]:
+    safe_program = html.escape(program_name or "Programa Parceiro")
+    safe_note = html.escape(note or "")
+    safe_code = html.escape(invite_code or "")
+    normalized = (decision or "").strip().upper()
+
+    if normalized == "APPROVED":
+        subject = f"Programa Parceiro aprovado ({program_name}) - Braga Saúde"
+        heading = f"Programa {safe_program} aprovado"
+        lead = "Sua validação cadastral foi concluída e o espaço do programa já está liberado no Braga Saúde."
+        extra = f"<p><strong>Código de convite ativo:</strong> {safe_code}</p>" if safe_code else ""
+        plain = f"Seu Programa Parceiro {program_name} foi aprovado! Código de convite: {invite_code or '-'}."
+    elif normalized == "PENDING_REVIEW":
+        subject = f"Programa Parceiro em revisão ({program_name}) - Braga Saúde"
+        heading = f"Programa {safe_program} recebido para revisão"
+        lead = "Recebemos sua solicitação. Nossa equipe validará os dados cadastrais informados e eventuais comprovantes privados enviados no app."
+        extra = f"<p>{safe_note}</p>" if safe_note else ""
+        plain = f"Seu Programa Parceiro {program_name} entrou em revisão manual. {note}"
+    else:
+        subject = f"Atualização do Programa Parceiro ({program_name}) - Braga Saúde"
+        heading = f"Atualização cadastral de {safe_program}"
+        lead = "Houve uma atualização cadastral ou solicitação de ajustes no seu Programa Parceiro no Braga Saúde."
+        extra = f"<p>{safe_note}</p>" if safe_note else ""
+        plain = f"Atualização do Programa Parceiro {program_name}: {note}"
+
+    html_body = (
+        '<!DOCTYPE html><html lang="pt-BR"><meta charset="UTF-8">'
+        '<body style="font-family:Arial,sans-serif;background:#F0FDF4;padding:24px">'
+        '<main style="max-width:560px;margin:auto;background:#FFFFFF;border-radius:16px;overflow:hidden">'
+        '<header style="background:linear-gradient(135deg,#1A6B5C,#0F4C81);padding:26px;color:white">'
+        f'<h1 style="font-size:20px;margin:0">{heading}</h1><div style="opacity:0.9;margin-top:6px">Braga Saúde · Programas Parceiros</div></header>'
+        f'<section style="padding:24px;color:#334155;line-height:1.6"><p>{lead}</p>{extra}'
+        '<p style="font-size:13px;color:#64748B">Abra o aplicativo Braga Saúde na área Programas Parceiros para acompanhar ou ajustar os detalhes.</p>'
+        '</section></main></body></html>'
+    )
+    success = await asyncio.to_thread(_send_gmail_sync, to_email, subject, html_body, plain)
+    return {"success": success}

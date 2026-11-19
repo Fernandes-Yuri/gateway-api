@@ -260,3 +260,32 @@ func TestWorkerDeliversPerDeviceWithoutDuplicateAndSkipsReadItems(t *testing.T) 
 		t.Fatalf("state=%s; esperado SKIPPED para item já lido", state)
 	}
 }
+
+func TestPushMessageFormatsB2BProgramEvents(t *testing.T) {
+	entry := &job{
+		ItemID:      "11111111-1111-1111-1111-111111111111",
+		RecipientID: "owner-1",
+		Revision:    1,
+	}
+	cases := []struct {
+		kind      string
+		wantTitle string
+	}{
+		{"B2B_PROGRAM_APPROVED", "Programa Parceiro aprovado"},
+		{"B2B_PROGRAM_CHANGES_REQUESTED", "Atualização no Programa Parceiro"},
+		{"B2B_PROGRAM_PENDING_REVIEW", "Programa Parceiro em análise"},
+	}
+	for _, tc := range cases {
+		msg := pushMessage(entry, &source{
+			Kind:         tc.kind,
+			ResourceType: "b2b_program",
+			ResourceID:   "prog-123",
+		}, "fcm-tok")
+		if msg.Title != tc.wantTitle {
+			t.Fatalf("%s: title=%q, esperado %q", tc.kind, msg.Title, tc.wantTitle)
+		}
+		if msg.Data["type"] != tc.kind || msg.Data["programId"] != "prog-123" {
+			t.Fatalf("%s: payload inesperado %+v", tc.kind, msg.Data)
+		}
+	}
+}

@@ -9,6 +9,7 @@ User=ec2-user
 WorkingDirectory=/home/ec2-user/braga-gateway/app
 EnvironmentFile=-/run/braga-saude/gateway.env
 EnvironmentFile=-/etc/braga-saude/gateway.env
+EnvironmentFile=-/etc/braga-saude/r2-backup.env
 EnvironmentFile=-/home/ec2-user/braga-gateway/.env
 EnvironmentFile=-/home/ec2-user/braga-gateway/app/.env
 Environment=PYTHONUNBUFFERED=1

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use axum::{
     extract::{FromRequest, Multipart, Path, Query, Request, State},
     http::{
-        header::{CACHE_CONTROL, CONTENT_TYPE},
+        header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE},
         HeaderMap, HeaderName, StatusCode,
     },
     response::{IntoResponse, Response},
@@ -25,10 +25,17 @@ use sqlx::{PgPool, Row};
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::b2b_kyb::{
+    auto_approve_enabled_from_env, evaluate_auto_kyb, lookup_cnpj_cached, normalize_and_hash_cpf,
+    normalize_council_fields, normalize_responsible_phone, normalize_responsible_role,
+    normalize_uf, verify_cnpj_mod11, KybEvaluation, KybProviderEndpoints, NormalizedCpf,
+    ALLOWED_PROOF_DOC_TYPES,
+};
 use crate::b2b_storage::{
-    extract_logo_key_from_url, resolve_b2b_file_signing_secret, sanitize_logo_image_to_png,
-    validate_logo_filename, verify_b2b_file_signature, B2BObjectStorage, B2B_LOGO_STORAGE_PREFIX,
-    MAX_LOGO_BYTES,
+    extract_logo_key_from_url, prepare_kyb_proof_media, resolve_b2b_file_signing_secret,
+    sanitize_logo_image_to_png, validate_kyb_proof_filename, validate_logo_filename,
+    verify_b2b_file_signature, B2BObjectStorage, B2B_KYB_STORAGE_PREFIX, B2B_LOGO_STORAGE_PREFIX,
+    MAX_KYB_PROOF_BYTES, MAX_LOGO_BYTES,
 };
 use crate::{authenticate_request, AppState};
 
@@ -111,6 +118,7 @@ pub enum ApprovalStatus {
     ChangesRequested,
     Approved,
     Rejected,
+    Suspended,
 }
 
 impl ApprovalStatus {
@@ -121,6 +129,7 @@ impl ApprovalStatus {
             Self::ChangesRequested => "CHANGES_REQUESTED",
             Self::Approved => "APPROVED",
             Self::Rejected => "REJECTED",
+            Self::Suspended => "SUSPENDED",
         }
     }
 
@@ -131,6 +140,7 @@ impl ApprovalStatus {
             "CHANGES_REQUESTED" => Some(Self::ChangesRequested),
             "APPROVED" => Some(Self::Approved),
             "REJECTED" => Some(Self::Rejected),
+            "SUSPENDED" => Some(Self::Suspended),
             _ => None,
         }
     }
@@ -141,6 +151,8 @@ pub enum ReviewAction {
     Approve,
     RequestChanges,
     Reject,
+    Demote,
+    Suspend,
 }
 
 impl ReviewAction {
@@ -149,6 +161,8 @@ impl ReviewAction {
             "approve" => Some(Self::Approve),
             "request_changes" => Some(Self::RequestChanges),
             "reject" => Some(Self::Reject),
+            "demote" => Some(Self::Demote),
+            "suspend" => Some(Self::Suspend),
             _ => None,
         }
     }
@@ -399,6 +413,36 @@ pub struct UpsertPartnerProgramRequest {
     pub logo_url: Option<String>,
     #[serde(alias = "template_key")]
     pub template_key: Option<String>,
+    pub responsible_name: Option<String>,
+    pub responsible_cpf: Option<String>,
+    pub responsible_role: Option<String>,
+    pub responsible_phone: Option<String>,
+    pub council_type: Option<String>,
+    pub council_number: Option<String>,
+    pub council_uf: Option<String>,
+    pub city: Option<String>,
+    pub state: Option<String>,
+    pub terms_accepted: Option<bool>,
+    pub terms_version: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitPartnerProgramRequest {
+    pub terms_accepted: Option<bool>,
+    pub terms_version: Option<String>,
+    pub responsible_cpf: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProofDocumentSummaryDto {
+    pub id: String,
+    pub doc_type: String,
+    pub file_name: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub uploaded_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -420,6 +464,36 @@ pub struct PartnerProgramDto {
     pub can_promote: bool,
     pub template_key: String,
     pub experience_config: ProgramExperienceConfigDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responsible_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responsible_cpf_masked: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responsible_role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responsible_phone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub council_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub council_number: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub council_uf: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terms_accepted_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terms_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_kyb_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto_kyb_flags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_documents: Vec<ProofDocumentSummaryDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_kyb_evidence: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -661,12 +735,16 @@ pub fn normalize_cnpj(raw: Option<&str>, required: bool) -> Result<Option<String
         return Ok(None);
     }
     let digits: String = cleaned.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() == 11 {
+        return Err(
+            "Cadastros apenas com CPF não são aceitos. Informe o CNPJ ativo de 14 dígitos (MEI/SLU/LTDA).",
+        );
+    }
     if digits.len() != 14 {
         return Err("CNPJ inválido. Informe os 14 dígitos numéricos.");
     }
-    let first = digits.as_bytes()[0];
-    if digits.bytes().all(|b| b == first) {
-        return Err("CNPJ inválido. Informe os 14 dígitos numéricos.");
+    if !verify_cnpj_mod11(&digits) {
+        return Err("CNPJ inválido. Confira os dígitos verificadores.");
     }
     Ok(Some(format!(
         "{}.{}.{}/{}-{}",
@@ -737,18 +815,59 @@ pub fn validate_review_transition(
     note: &str,
     seat_limit: Option<i32>,
 ) -> Result<(ApprovalStatus, &'static str), (StatusCode, &'static str)> {
-    if current != ApprovalStatus::PendingReview {
-        return Err((
-            StatusCode::CONFLICT,
-            "Apenas solicitações em análise (PENDING_REVIEW) podem receber decisão.",
-        ));
-    }
     if note.len() > 600 {
         return Err((
             StatusCode::BAD_REQUEST,
             "A mensagem para o parceiro deve ter no máximo 600 caracteres.",
         ));
     }
+    match action {
+        ReviewAction::Demote => {
+            if current != ApprovalStatus::Approved {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "Apenas programas aprovados podem ser rebaixados para nova verificação.",
+                ));
+            }
+            if note.len() < 5 {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Informe o motivo (mínimo 5 caracteres) ao rebaixar para verificação.",
+                ));
+            }
+            return Ok((
+                ApprovalStatus::ChangesRequested,
+                "PROGRAM_DEMOTED_FOR_VERIFICATION",
+            ));
+        }
+        ReviewAction::Suspend => {
+            if !matches!(
+                current,
+                ApprovalStatus::Approved | ApprovalStatus::PendingReview
+            ) {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "Apenas programas ativos ou em análise podem ser suspensos.",
+                ));
+            }
+            if note.len() < 5 {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Informe o motivo da suspensão (mínimo 5 caracteres).",
+                ));
+            }
+            return Ok((ApprovalStatus::Suspended, "PROGRAM_SUSPENDED"));
+        }
+        ReviewAction::Approve | ReviewAction::RequestChanges | ReviewAction::Reject => {
+            if current != ApprovalStatus::PendingReview {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "Apenas solicitações em análise (PENDING_REVIEW) podem receber decisão.",
+                ));
+            }
+        }
+    }
+
     match action {
         ReviewAction::Approve => {
             if let Some(limit) = seat_limit {
@@ -782,6 +901,7 @@ pub fn validate_review_transition(
             }
             Ok((ApprovalStatus::Rejected, "PROGRAM_REJECTED"))
         }
+        ReviewAction::Demote | ReviewAction::Suspend => unreachable!(),
     }
 }
 
@@ -1318,6 +1438,29 @@ pub fn check_approved_identity_mutation(
     Ok(())
 }
 
+pub fn check_approved_council_mutation(
+    status: ApprovalStatus,
+    existing_type: Option<&str>,
+    new_type: Option<&str>,
+    existing_number: Option<&str>,
+    new_number: Option<&str>,
+    existing_uf: Option<&str>,
+    new_uf: Option<&str>,
+) -> Result<(), (StatusCode, &'static str)> {
+    if status == ApprovalStatus::Approved {
+        let changed = existing_type.map(str::trim) != new_type.map(str::trim)
+            || existing_number.map(str::trim) != new_number.map(str::trim)
+            || existing_uf.map(str::trim) != new_uf.map(str::trim);
+        if changed {
+            return Err((
+                StatusCode::CONFLICT,
+                "Alterar o registro profissional de um programa aprovado exige nova revisão cadastral.",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn parse_experience_config_json(
     raw_template_key: Option<&str>,
     raw_config: Option<&Value>,
@@ -1638,6 +1781,138 @@ pub async fn select_context_handler(
 // B2B-07 & B2B-15: Onboarding Empresarial, No-Code Experience & Previa
 // =========================================================================
 
+fn is_unique_violation(err: &sqlx::Error) -> bool {
+    err.as_database_error()
+        .and_then(|db| db.code())
+        .is_some_and(|code| code == "23505")
+}
+
+fn resolve_masked_cpf_from_row(
+    masked: Option<&str>,
+    hash_hex: Option<&str>,
+) -> Option<NormalizedCpf> {
+    let m = masked?.trim();
+    let central_6: String = m.chars().filter(|c| c.is_ascii_digit()).collect();
+    if central_6.len() != 6 {
+        return None;
+    }
+    Some(NormalizedCpf {
+        central_6,
+        masked: m.to_string(),
+        hash_hex: hash_hex.unwrap_or_default().to_string(),
+    })
+}
+
+async fn allocate_unique_invite_code(
+    executor: &mut sqlx::PgConnection,
+    program_name: &str,
+) -> Option<String> {
+    for _ in 0..5 {
+        let candidate = generate_invite_code(program_name);
+        let collision: Option<i32> =
+            sqlx::query_scalar("SELECT 1 FROM partner_programs WHERE UPPER(invite_code) = $1")
+                .bind(&candidate)
+                .fetch_optional(&mut *executor)
+                .await
+                .ok()
+                .flatten();
+        if collision.is_none() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+async fn emit_b2b_decision_alerts(
+    pool: &PgPool,
+    backend_tcp_addr: String,
+    program_id: Uuid,
+    owner_user_id: String,
+    program_name: String,
+    decision: &'static str,
+    note: String,
+    invite_code: String,
+) {
+    let kind = match decision {
+        "APPROVED" => "B2B_PROGRAM_APPROVED",
+        "PENDING_REVIEW" => "B2B_PROGRAM_PENDING_REVIEW",
+        _ => "B2B_PROGRAM_CHANGES_REQUESTED",
+    };
+    let payload = json!({ "status": decision });
+    let event_key = format!("b2b_program:{program_id}:{decision}");
+    let group_key = format!("b2b_program:{program_id}");
+    let _ = sqlx::query(
+        "SELECT notification_emit($1, $2, $3, $4, 'CARE', 'b2b_program', $5, $1, 'auto-kyb-v1', NOW(), NOW() + interval '30 days', $6::jsonb, true)",
+    )
+    .bind(&owner_user_id)
+    .bind(&event_key)
+    .bind(&group_key)
+    .bind(kind)
+    .bind(program_id.to_string())
+    .bind(&payload)
+    .execute(pool)
+    .await;
+
+    if let Ok(token) = std::env::var("SERVICE_TOKEN") {
+        let token = token.trim().to_string();
+        if !token.is_empty() && !backend_tcp_addr.trim().is_empty() {
+            tokio::spawn(async move {
+                let url = format!("http://{backend_tcp_addr}/api/internal/b2b/notify-decision");
+                if let Ok(client) = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build()
+                {
+                    let _ = client
+                        .post(&url)
+                        .bearer_auth(&token)
+                        .json(&json!({
+                            "ownerUserId": owner_user_id,
+                            "programName": program_name,
+                            "decision": decision,
+                            "note": note,
+                            "inviteCode": invite_code,
+                        }))
+                        .send()
+                        .await;
+                }
+            });
+        }
+    }
+}
+
+fn parse_proof_documents_summary(raw: Option<Value>) -> Vec<ProofDocumentSummaryDto> {
+    let Some(Value::Array(items)) = raw else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_str()?.to_string();
+            let doc_type = item.get("docType")?.as_str()?.to_string();
+            let file_name = item.get("fileName")?.as_str()?.to_string();
+            let content_type = item
+                .get("contentType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let size_bytes = item.get("sizeBytes").and_then(|v| v.as_i64()).unwrap_or(0);
+            let uploaded_at = item
+                .get("uploadedAt")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            Some(ProofDocumentSummaryDto {
+                id,
+                doc_type,
+                file_name,
+                content_type,
+                size_bytes,
+                uploaded_at,
+            })
+        })
+        .collect()
+}
+
 fn map_program_row(
     row: &sqlx::postgres::PgRow,
     active_participants: i64,
@@ -1658,6 +1933,25 @@ fn map_program_row(
     let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
     let (template_key, experience_config) =
         parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
+
+    let terms_dt: Option<DateTime<Utc>> = row.try_get("terms_accepted_at").ok().flatten();
+    let auto_kyb_flags_raw: Option<Value> = row.try_get("auto_kyb_flags").ok();
+    let auto_kyb_flags = auto_kyb_flags_raw
+        .as_ref()
+        .map(parse_categories_json)
+        .unwrap_or_default();
+    let proof_documents = parse_proof_documents_summary(
+        row.try_get::<Option<Value>, _>("proof_documents")
+            .ok()
+            .flatten(),
+    );
+    let auto_kyb_evidence = if include_admin_meta {
+        row.try_get::<Option<Value>, _>("auto_kyb_evidence")
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
 
     let (reviewed_by, reviewed_at, created_at, updated_at) = if include_admin_meta {
         let rev_at: Option<DateTime<Utc>> = row.try_get("reviewed_at").ok().flatten();
@@ -1690,6 +1984,21 @@ fn map_program_row(
         active_participants,
         template_key,
         experience_config,
+        responsible_name: row.try_get("responsible_name").ok().flatten(),
+        responsible_cpf_masked: row.try_get("responsible_cpf_masked").ok().flatten(),
+        responsible_role: row.try_get("responsible_role").ok().flatten(),
+        responsible_phone: row.try_get("responsible_phone").ok().flatten(),
+        council_type: row.try_get("council_type").ok().flatten(),
+        council_number: row.try_get("council_number").ok().flatten(),
+        council_uf: row.try_get("council_uf").ok().flatten(),
+        city: row.try_get("city").ok().flatten(),
+        state: row.try_get("state").ok().flatten(),
+        terms_accepted_at: terms_dt.map(|d| d.to_rfc3339()),
+        terms_version: row.try_get("terms_version").ok().flatten(),
+        auto_kyb_status: row.try_get("auto_kyb_status").ok().flatten(),
+        auto_kyb_flags,
+        proof_documents,
+        auto_kyb_evidence,
         closed_at,
         reviewed_by,
         reviewed_at,
@@ -1715,7 +2024,10 @@ pub async fn get_my_program_handler(
     let row = match sqlx::query(
         "SELECT id::text AS id, owner_user_id, company_name, program_name, cnpj, primary_color, \
                 logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit, \
-                template_key, experience_config, closed_at \
+                template_key, experience_config, closed_at, responsible_name, \
+                responsible_cpf_masked, responsible_role, responsible_phone, council_type, \
+                council_number, council_uf, city, state, terms_accepted_at, terms_version, \
+                auto_kyb_status, auto_kyb_flags, proof_documents \
            FROM partner_programs \
           WHERE owner_user_id = $1 AND closed_at IS NULL",
     )
@@ -1789,13 +2101,88 @@ pub async fn save_my_program_handler(
         _ => None,
     };
 
+    let clean_resp_name: Option<Option<String>> = match req.responsible_name.as_deref() {
+        None => None,
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Some(None)
+            } else if !(2..=160).contains(&trimmed.chars().count()) {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    "Informe o nome completo do responsável (entre 2 e 160 caracteres).",
+                );
+            } else {
+                Some(Some(trimmed.to_string()))
+            }
+        }
+    };
+    let parsed_cpf = match req.responsible_cpf.as_deref() {
+        None => None,
+        Some(raw) => match normalize_and_hash_cpf(Some(raw), false) {
+            Ok(v) => Some(v),
+            Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
+        },
+    };
+    let clean_role: Option<Option<String>> = match req.responsible_role.as_deref() {
+        None => None,
+        Some(raw) => match normalize_responsible_role(Some(raw)) {
+            Ok(v) => Some(v),
+            Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
+        },
+    };
+    let clean_phone: Option<Option<String>> = match req.responsible_phone.as_deref() {
+        None => None,
+        Some(raw) => match normalize_responsible_phone(Some(raw)) {
+            Ok(v) => Some(v),
+            Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
+        },
+    };
+    let council_provided =
+        req.council_type.is_some() || req.council_number.is_some() || req.council_uf.is_some();
+    let parsed_council = if council_provided {
+        match normalize_council_fields(
+            req.council_type.as_deref(),
+            req.council_number.as_deref(),
+            req.council_uf.as_deref(),
+        ) {
+            Ok(triple) => Some(triple),
+            Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
+        }
+    } else {
+        None
+    };
+    let clean_city: Option<Option<String>> = match req.city.as_deref() {
+        None => None,
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Some(None)
+            } else if !(2..=96).contains(&trimmed.chars().count()) {
+                return json_error(StatusCode::BAD_REQUEST, "Cidade inválida.");
+            } else {
+                Some(Some(trimmed.to_string()))
+            }
+        }
+    };
+    let clean_state: Option<Option<String>> = match req.state.as_deref() {
+        None => None,
+        Some(raw) => match normalize_uf(Some(raw), "UF da empresa inválida.") {
+            Ok(v) => Some(v),
+            Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
+        },
+    };
+
     let pool = match require_pool(&state) {
         Ok(p) => p,
         Err((code, msg)) => return json_error(code, msg),
     };
 
     let existing = match sqlx::query(
-        "SELECT id, approval_status, company_name, cnpj, closed_at, template_key, experience_config \
+        "SELECT id, approval_status, company_name, cnpj, closed_at, template_key, experience_config, \
+                responsible_name, responsible_cpf_hash, responsible_cpf_masked, responsible_role, \
+                responsible_phone, council_type, council_number, council_uf, city, state, \
+                terms_accepted_at, terms_version \
            FROM partner_programs \
           WHERE owner_user_id = $1",
     )
@@ -1833,6 +2220,23 @@ pub async fn save_my_program_handler(
             return json_error(code, msg);
         }
 
+        let existing_council_type: Option<String> = ex.try_get("council_type").ok().flatten();
+        let existing_council_number: Option<String> = ex.try_get("council_number").ok().flatten();
+        let existing_council_uf: Option<String> = ex.try_get("council_uf").ok().flatten();
+        if let Some((ref nct, ref ncn, ref ncuf)) = parsed_council {
+            if let Err((code, msg)) = check_approved_council_mutation(
+                current_status,
+                existing_council_type.as_deref(),
+                nct.as_deref(),
+                existing_council_number.as_deref(),
+                ncn.as_deref(),
+                existing_council_uf.as_deref(),
+                ncuf.as_deref(),
+            ) {
+                return json_error(code, msg);
+            }
+        }
+
         let next_status = if current_status == ApprovalStatus::Approved {
             "APPROVED"
         } else {
@@ -1856,15 +2260,79 @@ pub async fn save_my_program_handler(
             )
         };
 
+        let next_resp_name = clean_resp_name.unwrap_or_else(|| {
+            ex.try_get::<Option<String>, _>("responsible_name")
+                .ok()
+                .flatten()
+        });
+        let (next_cpf_hash, next_cpf_masked) = match parsed_cpf {
+            Some(Some(cpf)) => (Some(cpf.hash_hex), Some(cpf.masked)),
+            Some(None) => (None, None),
+            None => (
+                ex.try_get::<Option<String>, _>("responsible_cpf_hash")
+                    .ok()
+                    .flatten(),
+                ex.try_get::<Option<String>, _>("responsible_cpf_masked")
+                    .ok()
+                    .flatten(),
+            ),
+        };
+        let next_role = clean_role.unwrap_or_else(|| {
+            ex.try_get::<Option<String>, _>("responsible_role")
+                .ok()
+                .flatten()
+        });
+        let next_phone = clean_phone.unwrap_or_else(|| {
+            ex.try_get::<Option<String>, _>("responsible_phone")
+                .ok()
+                .flatten()
+        });
+        let (next_ct, next_cn, next_cuf) = match parsed_council {
+            Some(t) => t,
+            None => (
+                existing_council_type,
+                existing_council_number,
+                existing_council_uf,
+            ),
+        };
+        let next_city =
+            clean_city.unwrap_or_else(|| ex.try_get::<Option<String>, _>("city").ok().flatten());
+        let next_state =
+            clean_state.unwrap_or_else(|| ex.try_get::<Option<String>, _>("state").ok().flatten());
+        let accept_terms_now = req.terms_accepted == Some(true);
+        let next_terms_ver: Option<String> = if accept_terms_now {
+            Some(
+                req.terms_version
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("B2B-V1-2026")
+                    .chars()
+                    .take(32)
+                    .collect(),
+            )
+        } else {
+            ex.try_get::<Option<String>, _>("terms_version")
+                .ok()
+                .flatten()
+        };
+
         let updated = match sqlx::query(
             "UPDATE partner_programs \
                 SET company_name = $2, program_name = $3, cnpj = $4, primary_color = $5, \
                     logo_url = $6, approval_status = $7, template_key = $8, \
-                    experience_config = $9, closed_at = NULL, updated_at = NOW() \
+                    experience_config = $9, responsible_name = $10, responsible_cpf_hash = $11, \
+                    responsible_cpf_masked = $12, responsible_role = $13, responsible_phone = $14, \
+                    council_type = $15, council_number = $16, council_uf = $17, city = $18, \
+                    state = $19, terms_accepted_at = CASE WHEN $20 THEN COALESCE(terms_accepted_at, NOW()) ELSE terms_accepted_at END, \
+                    terms_version = $21, closed_at = NULL, updated_at = NOW() \
               WHERE owner_user_id = $1 \
              RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
                        primary_color, logo_url, approval_status, review_note, invite_code, \
-                       invite_paused, seat_limit, template_key, experience_config, closed_at",
+                       invite_paused, seat_limit, template_key, experience_config, closed_at, \
+                       responsible_name, responsible_cpf_masked, responsible_role, responsible_phone, \
+                       council_type, council_number, council_uf, city, state, terms_accepted_at, \
+                       terms_version, auto_kyb_status, auto_kyb_flags, proof_documents",
         )
         .bind(&identity.uid)
         .bind(clean_company)
@@ -1875,10 +2343,28 @@ pub async fn save_my_program_handler(
         .bind(next_status)
         .bind(&next_tk)
         .bind(&next_cfg_val)
+        .bind(&next_resp_name)
+        .bind(&next_cpf_hash)
+        .bind(&next_cpf_masked)
+        .bind(&next_role)
+        .bind(&next_phone)
+        .bind(&next_ct)
+        .bind(&next_cn)
+        .bind(&next_cuf)
+        .bind(&next_city)
+        .bind(&next_state)
+        .bind(accept_terms_now)
+        .bind(&next_terms_ver)
         .fetch_one(pool)
         .await
         {
             Ok(r) => r,
+            Err(e) if is_unique_violation(&e) => {
+                return json_error(
+                    StatusCode::CONFLICT,
+                    "Este CNPJ já está vinculado a outro programa ativo ou em análise.",
+                )
+            }
             Err(_) => {
                 return json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1891,14 +2377,45 @@ pub async fn save_my_program_handler(
         let initial_tk = requested_template.unwrap_or(TemplateKey::ClinicaGeral);
         let initial_cfg = default_experience_config_for_template(initial_tk);
         let initial_cfg_val = serde_json::to_value(&initial_cfg).unwrap_or_else(|_| json!({}));
+        let next_resp_name = clean_resp_name.flatten();
+        let (next_cpf_hash, next_cpf_masked) = match parsed_cpf {
+            Some(Some(cpf)) => (Some(cpf.hash_hex), Some(cpf.masked)),
+            _ => (None, None),
+        };
+        let next_role = clean_role.flatten();
+        let next_phone = clean_phone.flatten();
+        let (next_ct, next_cn, next_cuf) = parsed_council.unwrap_or((None, None, None));
+        let next_city = clean_city.flatten();
+        let next_state = clean_state.flatten();
+        let accept_terms_now = req.terms_accepted == Some(true);
+        let next_terms_ver: Option<String> = if accept_terms_now {
+            Some(
+                req.terms_version
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("B2B-V1-2026")
+                    .chars()
+                    .take(32)
+                    .collect(),
+            )
+        } else {
+            None
+        };
+
         let created = match sqlx::query(
             "INSERT INTO partner_programs \
                 (owner_user_id, company_name, program_name, cnpj, primary_color, logo_url, \
-                 approval_status, template_key, experience_config) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'DRAFT', $7, $8) \
+                 approval_status, template_key, experience_config, responsible_name, \
+                 responsible_cpf_hash, responsible_cpf_masked, responsible_role, responsible_phone, \
+                 council_type, council_number, council_uf, city, state, terms_accepted_at, terms_version) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'DRAFT', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, CASE WHEN $19 THEN NOW() ELSE NULL END, $20) \
              RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
                        primary_color, logo_url, approval_status, review_note, invite_code, \
-                       invite_paused, seat_limit, template_key, experience_config, closed_at",
+                       invite_paused, seat_limit, template_key, experience_config, closed_at, \
+                       responsible_name, responsible_cpf_masked, responsible_role, responsible_phone, \
+                       council_type, council_number, council_uf, city, state, terms_accepted_at, \
+                       terms_version, auto_kyb_status, auto_kyb_flags, proof_documents",
         )
         .bind(&identity.uid)
         .bind(clean_company)
@@ -1908,10 +2425,28 @@ pub async fn save_my_program_handler(
         .bind(&clean_logo)
         .bind(initial_tk.as_str())
         .bind(&initial_cfg_val)
+        .bind(&next_resp_name)
+        .bind(&next_cpf_hash)
+        .bind(&next_cpf_masked)
+        .bind(&next_role)
+        .bind(&next_phone)
+        .bind(&next_ct)
+        .bind(&next_cn)
+        .bind(&next_cuf)
+        .bind(&next_city)
+        .bind(&next_state)
+        .bind(accept_terms_now)
+        .bind(&next_terms_ver)
         .fetch_one(pool)
         .await
         {
             Ok(r) => r,
+            Err(e) if is_unique_violation(&e) => {
+                return json_error(
+                    StatusCode::CONFLICT,
+                    "Este CNPJ já está vinculado a outro programa ativo ou em análise.",
+                )
+            }
             Err(_) => {
                 return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Erro ao criar programa.")
             }
@@ -1943,6 +2478,7 @@ pub async fn save_my_program_handler(
 pub async fn submit_my_program_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    request: Request,
 ) -> Response {
     let identity =
         match authenticate_request(&headers, &state, "POST", "/api/b2b/program/me/submit").await {
@@ -1954,10 +2490,27 @@ pub async fn submit_my_program_handler(
         Err((code, msg)) => return json_error(code, msg),
     };
 
+    let body_bytes = axum::body::to_bytes(request.into_body(), 16 * 1024)
+        .await
+        .unwrap_or_default();
+    let req: SubmitPartnerProgramRequest = if body_bytes.iter().all(|b| b.is_ascii_whitespace()) {
+        SubmitPartnerProgramRequest::default()
+    } else {
+        match serde_json::from_slice(&body_bytes) {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                return json_error(StatusCode::BAD_REQUEST, "Corpo da solicitação inválido.");
+            }
+        }
+    };
+
     let existing = match sqlx::query(
         "SELECT id::text AS id, owner_user_id, company_name, program_name, cnpj, primary_color, \
                 logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit, \
-                template_key, experience_config, closed_at \
+                template_key, experience_config, closed_at, responsible_name, \
+                responsible_cpf_hash, responsible_cpf_masked, responsible_role, responsible_phone, \
+                council_type, council_number, council_uf, city, state, terms_accepted_at, \
+                terms_version, auto_kyb_status, auto_kyb_flags, proof_documents \
            FROM partner_programs \
           WHERE owner_user_id = $1 AND closed_at IS NULL",
     )
@@ -1983,58 +2536,381 @@ pub async fn submit_my_program_handler(
 
     let current_status: String = existing.get("approval_status");
     let id_str: String = existing.get("id");
-    let prog_uuid = Uuid::parse_str(&id_str).ok();
+    let Ok(prog_uuid) = Uuid::parse_str(&id_str) else {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Programa inválido.");
+    };
     if current_status == "APPROVED" {
-        let active = match prog_uuid {
-            Some(u) => count_active_participants(pool, u).await.unwrap_or(0),
-            None => 0,
-        };
+        let active = count_active_participants(pool, prog_uuid)
+            .await
+            .unwrap_or(0);
         let dto = map_program_row(&existing, active, false);
-        return (StatusCode::OK, Json(json!({ "program": dto }))).into_response();
+        return (
+            StatusCode::OK,
+            Json(json!({ "program": dto, "kybDecision": "GREEN", "flags": [] })),
+        )
+            .into_response();
     }
 
     let cnpj: Option<String> = existing.get("cnpj");
-    if let Err(msg) = normalize_cnpj(cnpj.as_deref(), true) {
-        return json_error(StatusCode::BAD_REQUEST, msg);
-    }
-
-    let updated = match sqlx::query(
-        "UPDATE partner_programs \
-            SET approval_status = 'PENDING_REVIEW', updated_at = NOW() \
-          WHERE owner_user_id = $1 \
-         RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
-                   primary_color, logo_url, approval_status, review_note, invite_code, \
-                   invite_paused, seat_limit, template_key, experience_config, closed_at",
-    )
-    .bind(&identity.uid)
-    .fetch_one(pool)
-    .await
-    {
-        Ok(r) => r,
-        Err(_) => {
+    let clean_cnpj = match normalize_cnpj(cnpj.as_deref(), true) {
+        Ok(Some(c)) => c,
+        Ok(None) => {
             return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Erro ao enviar programa para análise.",
+                StatusCode::BAD_REQUEST,
+                "Informe o CNPJ da empresa para enviar a solicitação para análise.",
             )
         }
+        Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
     };
+    let cnpj_digits: String = clean_cnpj.chars().filter(|c| c.is_ascii_digit()).collect();
 
-    let active = match prog_uuid {
-        Some(u) => count_active_participants(pool, u).await.unwrap_or(0),
-        None => 0,
-    };
-    let _ = record_audit(
-        pool,
-        prog_uuid,
-        &identity.uid,
-        &identity.uid,
-        "PROGRAM_SUBMITTED_FOR_REVIEW",
-        json!({ "approvalStatus": "PENDING_REVIEW" }),
+    let duplicate: Option<String> = sqlx::query_scalar(
+        "SELECT id::text FROM partner_programs \
+          WHERE cnpj = $1 AND id <> $2 AND approval_status <> 'REJECTED' AND closed_at IS NULL \
+          LIMIT 1",
     )
-    .await;
+    .bind(&clean_cnpj)
+    .bind(prog_uuid)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    if duplicate.is_some() {
+        return json_error(
+            StatusCode::CONFLICT,
+            "Este CNPJ já possui outro programa ativo ou em análise no Braga Saúde.",
+        );
+    }
 
-    let dto = map_program_row(&updated, active, false);
-    (StatusCode::OK, Json(json!({ "program": dto }))).into_response()
+    let responsible_name: String = existing
+        .try_get::<Option<String>, _>("responsible_name")
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if responsible_name.chars().count() < 2 {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Informe o nome completo do responsável antes de enviar para análise.",
+        );
+    }
+
+    let cpf_norm = if req
+        .responsible_cpf
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        match normalize_and_hash_cpf(req.responsible_cpf.as_deref(), true) {
+            Ok(Some(v)) => v,
+            Ok(None) => unreachable!(),
+            Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
+        }
+    } else {
+        let masked: Option<String> = existing.try_get("responsible_cpf_masked").ok().flatten();
+        let hash_hex: Option<String> = existing.try_get("responsible_cpf_hash").ok().flatten();
+        let Some(existing_cpf) =
+            resolve_masked_cpf_from_row(masked.as_deref(), hash_hex.as_deref())
+        else {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Informe o CPF do responsável para conferência automática na Receita Federal.",
+            );
+        };
+        existing_cpf
+    };
+
+    let existing_terms_at: Option<DateTime<Utc>> =
+        existing.try_get("terms_accepted_at").ok().flatten();
+    let terms_accepted = req.terms_accepted == Some(true) || existing_terms_at.is_some();
+    let terms_version_to_save: Option<String> = if req.terms_accepted == Some(true) {
+        Some(
+            req.terms_version
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("B2B-V1-2026")
+                .chars()
+                .take(32)
+                .collect(),
+        )
+    } else {
+        existing.try_get("terms_version").ok().flatten()
+    };
+
+    let company_name: String = existing.get("company_name");
+    let program_name: String = existing.get("program_name");
+    let raw_tk: Option<String> = existing.try_get("template_key").ok();
+    let template = raw_tk
+        .as_deref()
+        .and_then(TemplateKey::parse)
+        .unwrap_or(TemplateKey::ClinicaGeral);
+    let council_type: Option<String> = existing.try_get("council_type").ok().flatten();
+    let council_number: Option<String> = existing.try_get("council_number").ok().flatten();
+    let council_uf: Option<String> = existing.try_get("council_uf").ok().flatten();
+    let has_council = council_type.is_some() && council_number.is_some() && council_uf.is_some();
+
+    let infra_ok = sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(pool)
+        .await
+        .is_ok();
+    let auto_approve = auto_approve_enabled_from_env();
+    let endpoints = KybProviderEndpoints::default();
+    let lookup = lookup_cnpj_cached(pool, &cnpj_digits, &endpoints).await;
+    let eval = evaluate_auto_kyb(
+        template,
+        &company_name,
+        &program_name,
+        &responsible_name,
+        &cpf_norm,
+        has_council,
+        terms_accepted,
+        auto_approve,
+        infra_ok,
+        Utc::now().date_naive(),
+        &lookup,
+    );
+
+    match eval {
+        KybEvaluation::Red {
+            status,
+            detail,
+            flags,
+        } => {
+            let flags_json = json!(flags);
+            let _ = sqlx::query(
+                "UPDATE partner_programs \
+                    SET auto_kyb_status = 'RED', auto_kyb_flags = $2, \
+                        responsible_cpf_hash = $3, responsible_cpf_masked = $4, \
+                        updated_at = NOW() \
+                  WHERE id = $1",
+            )
+            .bind(prog_uuid)
+            .bind(&flags_json)
+            .bind(&cpf_norm.hash_hex)
+            .bind(&cpf_norm.masked)
+            .execute(pool)
+            .await;
+
+            let _ = record_audit(
+                pool,
+                Some(prog_uuid),
+                &identity.uid,
+                &identity.uid,
+                "PROGRAM_KYB_BLOCKED",
+                json!({ "flags": flags }),
+            )
+            .await;
+
+            (
+                status,
+                Json(json!({
+                    "detail": detail,
+                    "kybDecision": "RED",
+                    "flags": flags
+                })),
+            )
+                .into_response()
+        }
+        KybEvaluation::Yellow {
+            flags,
+            summary_note,
+            evidence,
+        } => {
+            let flags_json = json!(flags);
+            let updated = match sqlx::query(
+                "UPDATE partner_programs \
+                    SET approval_status = 'PENDING_REVIEW', \
+                        review_note = $2, \
+                        responsible_cpf_hash = $3, \
+                        responsible_cpf_masked = $4, \
+                        terms_accepted_at = CASE WHEN $5 THEN COALESCE(terms_accepted_at, NOW()) ELSE terms_accepted_at END, \
+                        terms_version = $6, \
+                        auto_kyb_status = 'YELLOW', \
+                        auto_kyb_flags = $7, \
+                        auto_kyb_evidence = $8, \
+                        updated_at = NOW() \
+                  WHERE id = $1 \
+                 RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
+                           primary_color, logo_url, approval_status, review_note, invite_code, \
+                           invite_paused, seat_limit, template_key, experience_config, closed_at, \
+                           responsible_name, responsible_cpf_masked, responsible_role, responsible_phone, \
+                           council_type, council_number, council_uf, city, state, terms_accepted_at, \
+                           terms_version, auto_kyb_status, auto_kyb_flags, proof_documents",
+            )
+            .bind(prog_uuid)
+            .bind(&summary_note)
+            .bind(&cpf_norm.hash_hex)
+            .bind(&cpf_norm.masked)
+            .bind(terms_accepted)
+            .bind(&terms_version_to_save)
+            .bind(&flags_json)
+            .bind(&evidence)
+            .fetch_one(pool)
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Erro ao enviar programa para análise.",
+                    )
+                }
+            };
+
+            let active = count_active_participants(pool, prog_uuid)
+                .await
+                .unwrap_or(0);
+            let _ = record_audit(
+                pool,
+                Some(prog_uuid),
+                &identity.uid,
+                &identity.uid,
+                "PROGRAM_SUBMITTED_FOR_REVIEW",
+                json!({ "approvalStatus": "PENDING_REVIEW", "kybDecision": "YELLOW", "flags": flags }),
+            )
+            .await;
+
+            emit_b2b_decision_alerts(
+                pool,
+                state.backend_tcp_addr.clone(),
+                prog_uuid,
+                identity.uid.clone(),
+                program_name,
+                "PENDING_REVIEW",
+                summary_note,
+                String::new(),
+            )
+            .await;
+
+            let dto = map_program_row(&updated, active, false);
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "program": dto,
+                    "kybDecision": "YELLOW",
+                    "flags": flags,
+                    "requiresManualProof": true
+                })),
+            )
+                .into_response()
+        }
+        KybEvaluation::Green { evidence } => {
+            let mut tx = match pool.begin().await {
+                Ok(t) => t,
+                Err(_) => {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Erro ao concluir aprovação automática.",
+                    )
+                }
+            };
+
+            let existing_invite: Option<String> = existing.get("invite_code");
+            let next_invite_code = match existing_invite {
+                Some(code) => code,
+                None => match allocate_unique_invite_code(&mut tx, &program_name).await {
+                    Some(code) => code,
+                    None => {
+                        return json_error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Não foi possível gerar um código de convite único.",
+                        )
+                    }
+                },
+            };
+
+            let updated = match sqlx::query(
+                "UPDATE partner_programs \
+                    SET approval_status = 'APPROVED', \
+                        review_note = NULL, \
+                        reviewed_by = 'auto-kyb-v1', \
+                        reviewed_at = NOW(), \
+                        invite_code = $2, \
+                        invite_paused = false, \
+                        responsible_cpf_hash = $3, \
+                        responsible_cpf_masked = $4, \
+                        terms_accepted_at = CASE WHEN $5 THEN COALESCE(terms_accepted_at, NOW()) ELSE terms_accepted_at END, \
+                        terms_version = $6, \
+                        auto_kyb_status = 'GREEN', \
+                        auto_kyb_flags = '[]'::jsonb, \
+                        auto_kyb_evidence = $7, \
+                        updated_at = NOW() \
+                  WHERE id = $1 \
+                 RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
+                           primary_color, logo_url, approval_status, review_note, invite_code, \
+                           invite_paused, seat_limit, template_key, experience_config, closed_at, \
+                           responsible_name, responsible_cpf_masked, responsible_role, responsible_phone, \
+                           council_type, council_number, council_uf, city, state, terms_accepted_at, \
+                           terms_version, auto_kyb_status, auto_kyb_flags, proof_documents",
+            )
+            .bind(prog_uuid)
+            .bind(&next_invite_code)
+            .bind(&cpf_norm.hash_hex)
+            .bind(&cpf_norm.masked)
+            .bind(terms_accepted)
+            .bind(&terms_version_to_save)
+            .bind(&evidence)
+            .fetch_one(&mut *tx)
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Erro ao salvar aprovação automática.",
+                    )
+                }
+            };
+
+            let _ = record_audit(
+                &mut *tx,
+                Some(prog_uuid),
+                "auto-kyb-v1",
+                &identity.uid,
+                "PROGRAM_AUTO_APPROVED",
+                json!({
+                    "reviewedBy": "auto-kyb-v1",
+                    "kybDecision": "GREEN"
+                }),
+            )
+            .await;
+
+            if tx.commit().await.is_err() {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Erro ao confirmar aprovação automática.",
+                );
+            }
+
+            let active = count_active_participants(pool, prog_uuid)
+                .await
+                .unwrap_or(0);
+            emit_b2b_decision_alerts(
+                pool,
+                state.backend_tcp_addr.clone(),
+                prog_uuid,
+                identity.uid.clone(),
+                program_name,
+                "APPROVED",
+                String::new(),
+                next_invite_code,
+            )
+            .await;
+
+            let dto = map_program_row(&updated, active, false);
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "program": dto,
+                    "kybDecision": "GREEN",
+                    "flags": [],
+                    "requiresManualProof": false
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 // =========================================================================
@@ -2461,6 +3337,10 @@ pub async fn admin_list_programs_handler(
                 p.primary_color, p.logo_url, p.approval_status, p.review_note, p.reviewed_by, \
                 p.reviewed_at, p.invite_code, p.invite_paused, p.seat_limit, p.created_at, \
                 p.updated_at, p.template_key, p.experience_config, p.closed_at, \
+                p.responsible_name, p.responsible_cpf_masked, p.responsible_role, \
+                p.responsible_phone, p.council_type, p.council_number, p.council_uf, \
+                p.city, p.state, p.terms_accepted_at, p.terms_version, p.auto_kyb_status, \
+                p.auto_kyb_flags, p.auto_kyb_evidence, p.proof_documents, \
                 COALESCE((SELECT COUNT(*) FROM program_enrollments e \
                            WHERE e.program_id = p.id AND e.status = 'ACTIVE'), 0) AS active_participants \
            FROM partner_programs p \
@@ -2520,7 +3400,7 @@ pub async fn admin_review_program_handler(
     let Some(action) = ReviewAction::parse(&req.action) else {
         return json_error(
             StatusCode::BAD_REQUEST,
-            "Ação inválida. Use approve, request_changes ou reject.",
+            "Ação inválida. Use approve, request_changes, reject, demote ou suspend.",
         );
     };
     let clean_note = req.note.as_deref().unwrap_or("").trim();
@@ -2547,7 +3427,8 @@ pub async fn admin_review_program_handler(
     };
 
     let existing = match sqlx::query(
-        "SELECT id, program_name, approval_status, invite_code, seat_limit \
+        "SELECT id, owner_user_id, program_name, approval_status, invite_code, invite_paused, \
+                seat_limit, auto_kyb_status, proof_documents \
            FROM partner_programs \
           WHERE id = $1 \
             FOR UPDATE",
@@ -2569,6 +3450,8 @@ pub async fn admin_review_program_handler(
         return json_error(StatusCode::NOT_FOUND, "Programa parceiro não encontrado.");
     };
 
+    let owner_user_id: String = existing.get("owner_user_id");
+    let program_name: String = existing.get("program_name");
     let current_status_str: String = existing.get("approval_status");
     let current_status =
         ApprovalStatus::parse(&current_status_str).unwrap_or(ApprovalStatus::Draft);
@@ -2587,28 +3470,49 @@ pub async fn admin_review_program_handler(
     };
 
     if action == ReviewAction::Approve && next_invite_code.is_none() {
-        let program_name: String = existing.get("program_name");
-        for _ in 0..5 {
-            let candidate = generate_invite_code(&program_name);
-            let collision: Option<i32> =
-                sqlx::query_scalar("SELECT 1 FROM partner_programs WHERE UPPER(invite_code) = $1")
-                    .bind(&candidate)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .ok()
-                    .flatten();
-            if collision.is_none() {
-                next_invite_code = Some(candidate);
-                break;
-            }
-        }
-        if next_invite_code.is_none() {
+        let Some(code) = allocate_unique_invite_code(&mut tx, &program_name).await else {
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Não foi possível gerar um código de convite único.",
             );
-        }
+        };
+        next_invite_code = Some(code);
     }
+
+    let next_invite_paused: bool = match action {
+        ReviewAction::Demote | ReviewAction::Suspend | ReviewAction::Reject => true,
+        ReviewAction::Approve => false,
+        ReviewAction::RequestChanges => existing.get("invite_paused"),
+    };
+
+    let existing_kyb_status: Option<String> = existing.try_get("auto_kyb_status").ok().flatten();
+    let next_kyb_status: Option<String> = match action {
+        ReviewAction::Demote | ReviewAction::Suspend => Some("MANUAL_OVERRIDE".to_string()),
+        ReviewAction::Approve | ReviewAction::Reject => {
+            existing_kyb_status.or(Some("MANUAL_OVERRIDE".to_string()))
+        }
+        ReviewAction::RequestChanges => existing_kyb_status,
+    };
+
+    let should_purge_proofs = matches!(action, ReviewAction::Approve | ReviewAction::Reject);
+    let existing_proofs_val: Option<Value> = existing.try_get("proof_documents").ok();
+    let proof_keys_to_purge: Vec<String> = if should_purge_proofs {
+        existing_proofs_val
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| {
+                        item.get("storageKey")
+                            .and_then(|k| k.as_str())
+                            .map(ToString::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     let note_to_store = if clean_note.is_empty() {
         None
@@ -2619,19 +3523,27 @@ pub async fn admin_review_program_handler(
     let updated = match sqlx::query(
         "UPDATE partner_programs \
             SET approval_status = $2, review_note = $3, reviewed_by = $4, reviewed_at = NOW(), \
-                invite_code = $5, seat_limit = $6, updated_at = NOW() \
+                invite_code = $5, invite_paused = $6, seat_limit = $7, auto_kyb_status = $8, \
+                proof_documents = CASE WHEN $9 THEN '[]'::jsonb ELSE proof_documents END, \
+                updated_at = NOW() \
           WHERE id = $1 \
          RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
                    primary_color, logo_url, approval_status, review_note, reviewed_by, \
                    reviewed_at, invite_code, invite_paused, seat_limit, created_at, updated_at, \
-                   template_key, experience_config, closed_at",
+                   template_key, experience_config, closed_at, responsible_name, \
+                   responsible_cpf_masked, responsible_role, responsible_phone, council_type, \
+                   council_number, council_uf, city, state, terms_accepted_at, terms_version, \
+                   auto_kyb_status, auto_kyb_flags, auto_kyb_evidence, proof_documents",
     )
     .bind(prog_uuid)
     .bind(next_status.as_str())
     .bind(&note_to_store)
     .bind(&clean_reviewer)
     .bind(&next_invite_code)
+    .bind(next_invite_paused)
     .bind(next_seat_limit)
+    .bind(&next_kyb_status)
+    .bind(should_purge_proofs)
     .fetch_one(&mut *tx)
     .await
     {
@@ -2648,12 +3560,13 @@ pub async fn admin_review_program_handler(
         &mut *tx,
         Some(prog_uuid),
         &clean_reviewer,
-        &clean_reviewer,
+        &owner_user_id,
         audit_action,
         json!({
             "previousStatus": current_status.as_str(),
             "approvalStatus": next_status.as_str(),
-            "seatLimit": next_seat_limit
+            "seatLimit": next_seat_limit,
+            "proofsPurged": proof_keys_to_purge.len(),
         }),
     )
     .await;
@@ -2664,6 +3577,33 @@ pub async fn admin_review_program_handler(
             "Erro ao confirmar transação de aprovação.",
         );
     }
+
+    if !proof_keys_to_purge.is_empty() {
+        if let Ok(storage) = B2BObjectStorage::from_env() {
+            for key in &proof_keys_to_purge {
+                let _ = storage.delete_object(key).await;
+            }
+        }
+    }
+
+    let decision_tag: &'static str = match action {
+        ReviewAction::Approve => "APPROVED",
+        ReviewAction::RequestChanges
+        | ReviewAction::Demote
+        | ReviewAction::Suspend
+        | ReviewAction::Reject => "CHANGES_REQUESTED",
+    };
+    emit_b2b_decision_alerts(
+        pool,
+        state.backend_tcp_addr.clone(),
+        prog_uuid,
+        owner_user_id,
+        program_name,
+        decision_tag,
+        clean_note.to_string(),
+        next_invite_code.unwrap_or_default(),
+    )
+    .await;
 
     let active = count_active_participants(pool, prog_uuid)
         .await
@@ -3907,43 +4847,60 @@ fn build_b2b_logo_url(program_id: Uuid, file_name: &str) -> String {
     )
 }
 
-async fn read_uploaded_logo_bytes(
+async fn read_multipart_media_payload(
     mut multipart: Multipart,
-) -> Result<Vec<u8>, (StatusCode, &'static str)> {
+    max_bytes: usize,
+    oversized_msg: &'static str,
+    missing_msg: &'static str,
+) -> Result<(Vec<u8>, Option<String>), (StatusCode, &'static str)> {
+    let mut uploaded: Option<Vec<u8>> = None;
+    let mut doc_type: Option<String> = None;
+
     while let Some(mut field) = multipart.next_field().await.map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
-            "Envie a imagem em formato multipart/form-data válido.",
+            "Envie os dados em formato multipart/form-data válido.",
         )
     })? {
-        let field_name = field.name().unwrap_or("");
-        if !field_name.is_empty() && field_name != "file" && field_name != "logo" {
+        let field_name = field.name().unwrap_or("").to_string();
+        if field_name == "docType" || field_name == "doc_type" {
+            if let Ok(text) = field.text().await {
+                let clean = text.trim().to_ascii_uppercase();
+                if !clean.is_empty() && clean.len() <= 64 {
+                    doc_type = Some(clean);
+                }
+            }
+            continue;
+        }
+        if !field_name.is_empty()
+            && field_name != "file"
+            && field_name != "logo"
+            && field_name != "proof"
+        {
+            continue;
+        }
+        if uploaded.is_some() {
             continue;
         }
         let mut buf: Vec<u8> = Vec::new();
         while let Some(chunk) = field.chunk().await.map_err(|_| {
             (
                 StatusCode::BAD_REQUEST,
-                "Falha ao ler os dados da imagem enviada.",
+                "Falha ao ler os dados do arquivo enviado.",
             )
         })? {
-            if buf.len().saturating_add(chunk.len()) > MAX_LOGO_BYTES {
-                return Err((
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "A logo deve ter no máximo 2 MB.",
-                ));
+            if buf.len().saturating_add(chunk.len()) > max_bytes {
+                return Err((StatusCode::PAYLOAD_TOO_LARGE, oversized_msg));
             }
             buf.extend_from_slice(&chunk);
         }
         if !buf.is_empty() {
-            return Ok(buf);
+            uploaded = Some(buf);
         }
     }
 
-    Err((
-        StatusCode::BAD_REQUEST,
-        "Arquivo da logo ausente (use o campo file ou logo).",
-    ))
+    let bytes = uploaded.ok_or((StatusCode::BAD_REQUEST, missing_msg))?;
+    Ok((bytes, doc_type))
 }
 
 pub async fn upload_my_program_logo_handler(
@@ -4001,8 +4958,15 @@ pub async fn upload_my_program_logo_handler(
         }
     };
 
-    let raw_bytes = match read_uploaded_logo_bytes(multipart).await {
-        Ok(b) => b,
+    let (raw_bytes, _) = match read_multipart_media_payload(
+        multipart,
+        MAX_LOGO_BYTES,
+        "A logo deve ter no máximo 2 MB.",
+        "Arquivo da logo ausente (use o campo file ou logo).",
+    )
+    .await
+    {
+        Ok(v) => v,
         Err((code, msg)) => return json_error(code, msg),
     };
 
@@ -4233,6 +5197,396 @@ pub async fn get_b2b_logo_file_handler(
         .into_response()
 }
 
+// =========================================================================
+// B2B-09B: Comprovantes Privados (Upload ate 5 MB em R2 + Admin-only + Expurgo)
+// =========================================================================
+
+pub async fn upload_my_program_proof_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    request: Request,
+) -> Response {
+    let identity =
+        match authenticate_request(&headers, &state, "POST", "/api/b2b/program/me/proofs").await {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let existing = match sqlx::query(
+        "SELECT id::text AS id, approval_status, proof_documents \
+           FROM partner_programs \
+          WHERE owner_user_id = $1 AND closed_at IS NULL",
+    )
+    .bind(&identity.uid)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                "Salve os dados do programa antes de anexar comprovantes.",
+            )
+        }
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao consultar programa para envio de comprovante.",
+            )
+        }
+    };
+
+    let id_str: String = existing.get("id");
+    let Ok(program_uuid) = Uuid::parse_str(&id_str) else {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Programa inválido.");
+    };
+    let current_status: String = existing.get("approval_status");
+    if current_status == "APPROVED" {
+        return json_error(
+            StatusCode::CONFLICT,
+            "Programa aprovado não aceita anexos extras.",
+        );
+    }
+
+    let mut proof_list: Vec<Value> = existing
+        .try_get::<Option<Value>, _>("proof_documents")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    if proof_list.len() >= 2 {
+        return json_error(
+            StatusCode::CONFLICT,
+            "Limite de 2 comprovantes atingido. Remova um anexo antigo para enviar outro.",
+        );
+    }
+
+    let multipart = match Multipart::from_request(request, &state).await {
+        Ok(mp) => mp,
+        Err(_) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Envie o comprovante em formato multipart/form-data (campo file).",
+            )
+        }
+    };
+
+    let (raw_bytes, doc_type_opt) = match read_multipart_media_payload(
+        multipart,
+        MAX_KYB_PROOF_BYTES,
+        "O comprovante deve ter no máximo 5 MB.",
+        "Arquivo de comprovante ausente.",
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let doc_type = doc_type_opt
+        .filter(|dt| ALLOWED_PROOF_DOC_TYPES.contains(&dt.as_str()))
+        .unwrap_or_else(|| "CARTAO_CNPJ_CCMEI".to_string());
+
+    let prepared =
+        match tokio::task::spawn_blocking(move || prepare_kyb_proof_media(&raw_bytes)).await {
+            Ok(Ok(p)) => p,
+            Ok(Err((code, msg))) => return json_error(code, msg),
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Erro ao processar o arquivo do comprovante.",
+                )
+            }
+        };
+
+    let storage = match B2BObjectStorage::from_env() {
+        Ok(st) => st,
+        Err(e) => {
+            warn!("Storage B2B indisponivel no upload de comprovante: {e}");
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Armazenamento seguro indisponível no momento.",
+            );
+        }
+    };
+
+    let proof_id = Uuid::new_v4().to_string();
+    let file_name = format!("proof-{}.{}", Uuid::new_v4().simple(), prepared.extension);
+    let storage_key = format!("{B2B_KYB_STORAGE_PREFIX}/{program_uuid}/{file_name}");
+    if let Err(e) = storage
+        .put_object(&storage_key, prepared.content_type, &prepared.bytes)
+        .await
+    {
+        warn!("Falha ao gravar comprovante privado B2B em R2: {e}");
+        return json_error(
+            StatusCode::BAD_GATEWAY,
+            "Falha ao armazenar o comprovante privado.",
+        );
+    }
+
+    let now_iso = Utc::now().to_rfc3339();
+    proof_list.push(json!({
+        "id": proof_id,
+        "docType": doc_type,
+        "fileName": file_name,
+        "contentType": prepared.content_type,
+        "sizeBytes": prepared.bytes.len(),
+        "storageKey": storage_key,
+        "uploadedAt": now_iso,
+    }));
+    let new_proofs_json = Value::Array(proof_list);
+
+    let updated = match sqlx::query(
+        "UPDATE partner_programs \
+            SET proof_documents = $2, updated_at = NOW() \
+          WHERE id = $1 AND owner_user_id = $3 AND closed_at IS NULL \
+         RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
+                   primary_color, logo_url, approval_status, review_note, invite_code, \
+                   invite_paused, seat_limit, template_key, experience_config, closed_at, \
+                   responsible_name, responsible_cpf_masked, responsible_role, responsible_phone, \
+                   council_type, council_number, council_uf, city, state, terms_accepted_at, \
+                   terms_version, auto_kyb_status, auto_kyb_flags, proof_documents",
+    )
+    .bind(program_uuid)
+    .bind(&new_proofs_json)
+    .bind(&identity.uid)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) | Err(_) => {
+            let _ = storage.delete_object(&storage_key).await;
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao registrar comprovante no programa.",
+            );
+        }
+    };
+
+    let _ = record_audit(
+        pool,
+        Some(program_uuid),
+        &identity.uid,
+        &identity.uid,
+        "KYB_PROOF_UPLOADED",
+        json!({ "proofId": proof_id, "docType": doc_type }),
+    )
+    .await;
+
+    let active = count_active_participants(pool, program_uuid)
+        .await
+        .unwrap_or(0);
+    let dto = map_program_row(&updated, active, false);
+    (
+        StatusCode::OK,
+        Json(json!({ "proofId": proof_id, "program": dto })),
+    )
+        .into_response()
+}
+
+pub async fn delete_my_program_proof_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(raw_proof_id): Path<String>,
+) -> Response {
+    let clean_proof_id = raw_proof_id.trim();
+    let request_path = format!("/api/b2b/program/me/proofs/{clean_proof_id}");
+    let identity = match authenticate_request(&headers, &state, "DELETE", &request_path).await {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let existing = match sqlx::query(
+        "SELECT id::text AS id, proof_documents \
+           FROM partner_programs \
+          WHERE owner_user_id = $1 AND closed_at IS NULL",
+    )
+    .bind(&identity.uid)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Programa não encontrado."),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao consultar programa.",
+            )
+        }
+    };
+
+    let id_str: String = existing.get("id");
+    let Ok(program_uuid) = Uuid::parse_str(&id_str) else {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Programa inválido.");
+    };
+    let mut proofs: Vec<Value> = existing
+        .try_get::<Option<Value>, _>("proof_documents")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    let Some(idx) = proofs
+        .iter()
+        .position(|item| item.get("id").and_then(|v| v.as_str()) == Some(clean_proof_id))
+    else {
+        return json_error(StatusCode::NOT_FOUND, "Comprovante não encontrado.");
+    };
+
+    let removed = proofs.remove(idx);
+    let storage_key = removed
+        .get("storageKey")
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string);
+    let updated = match sqlx::query(
+        "UPDATE partner_programs \
+            SET proof_documents = $2, updated_at = NOW() \
+          WHERE id = $1 AND owner_user_id = $3 AND closed_at IS NULL \
+         RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
+                   primary_color, logo_url, approval_status, review_note, invite_code, \
+                   invite_paused, seat_limit, template_key, experience_config, closed_at, \
+                   responsible_name, responsible_cpf_masked, responsible_role, responsible_phone, \
+                   council_type, council_number, council_uf, city, state, terms_accepted_at, \
+                   terms_version, auto_kyb_status, auto_kyb_flags, proof_documents",
+    )
+    .bind(program_uuid)
+    .bind(Value::Array(proofs))
+    .bind(&identity.uid)
+    .fetch_one(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao remover comprovante.",
+            )
+        }
+    };
+
+    if let Some(key) = storage_key {
+        if let Ok(storage) = B2BObjectStorage::from_env() {
+            let _ = storage.delete_object(&key).await;
+        }
+    }
+
+    let active = count_active_participants(pool, program_uuid)
+        .await
+        .unwrap_or(0);
+    let dto = map_program_row(&updated, active, false);
+    (StatusCode::OK, Json(json!({ "program": dto }))).into_response()
+}
+
+pub async fn admin_download_program_proof_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((raw_program_id, raw_proof_id)): Path<(String, String)>,
+) -> Response {
+    if let Err((code, msg)) = require_service_token(&headers) {
+        return json_error(code, msg);
+    }
+    let Ok(program_uuid) = Uuid::parse_str(raw_program_id.trim()) else {
+        return json_error(StatusCode::BAD_REQUEST, "Programa inválido.");
+    };
+    let clean_proof_id = raw_proof_id.trim();
+    if clean_proof_id.is_empty() || clean_proof_id.len() > 64 {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Identificador do comprovante inválido.",
+        );
+    }
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let row: Option<Value> =
+        match sqlx::query_scalar("SELECT proof_documents FROM partner_programs WHERE id = $1")
+            .bind(program_uuid)
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(Some(v)) => v,
+            Ok(None) => return json_error(StatusCode::NOT_FOUND, "Programa não encontrado."),
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Erro ao consultar comprovantes.",
+                )
+            }
+        };
+
+    let entry = row.and_then(|v| v.as_array().cloned()).and_then(|arr| {
+        arr.into_iter()
+            .find(|item| item.get("id").and_then(|v| v.as_str()) == Some(clean_proof_id))
+    });
+    let Some(entry) = entry else {
+        return json_error(StatusCode::NOT_FOUND, "Comprovante não encontrado.");
+    };
+    let Some(file_name) = entry.get("fileName").and_then(|v| v.as_str()) else {
+        return json_error(StatusCode::NOT_FOUND, "Comprovante inválido.");
+    };
+    let content_type = match validate_kyb_proof_filename(file_name) {
+        Ok(ct) => ct,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+    let Some(storage_key) = entry.get("storageKey").and_then(|v| v.as_str()) else {
+        return json_error(StatusCode::NOT_FOUND, "Referência do arquivo ausente.");
+    };
+    let expected_prefix = format!("{B2B_KYB_STORAGE_PREFIX}/{program_uuid}/");
+    if !storage_key.starts_with(&expected_prefix) {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "Chave de armazenamento fora do escopo.",
+        );
+    }
+
+    let storage = match B2BObjectStorage::from_env() {
+        Ok(st) => st,
+        Err(_) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Armazenamento de mídia indisponível.",
+            )
+        }
+    };
+
+    let bytes = match storage.get_object(storage_key).await {
+        Ok(Some(data)) => data,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Arquivo não localizado no bucket."),
+        Err(_) => {
+            return json_error(
+                StatusCode::BAD_GATEWAY,
+                "Falha ao recuperar comprovante do repositório seguro.",
+            )
+        }
+    };
+
+    let disposition = format!("attachment; filename=\"{file_name}\"");
+    (
+        StatusCode::OK,
+        [
+            (CONTENT_TYPE, content_type.to_string()),
+            (
+                HeaderName::from_static("x-content-type-options"),
+                "nosniff".to_string(),
+            ),
+            (CACHE_CONTROL, "no-store".to_string()),
+            (CONTENT_DISPOSITION, disposition),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4246,6 +5600,8 @@ mod tests {
             normalize_cnpj(Some("12345678000195"), true).unwrap(),
             Some("12.345.678/0001-95".to_string())
         );
+        assert!(normalize_cnpj(Some("12345678000196"), true).is_err());
+        assert!(normalize_cnpj(Some("52998224725"), true).is_err());
         assert!(normalize_cnpj(Some(""), true).is_err());
         assert!(normalize_cnpj(Some("11.111.111/1111-11"), true).is_err());
         assert_eq!(normalize_cnpj(None, false).unwrap(), None);
@@ -4709,5 +6065,39 @@ mod tests {
         let other_pid = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
         assert!(extract_logo_key_from_url(&url, other_pid).is_none());
         assert!(extract_logo_key_from_url("https://example.com/logo.png", pid).is_none());
+    }
+
+    #[test]
+    fn test_demote_and_council_immutability_after_approval() {
+        let demoted = validate_review_transition(
+            ApprovalStatus::Approved,
+            ReviewAction::Demote,
+            "Documentação do CRM requer nova conferência.",
+            None,
+        )
+        .unwrap();
+        assert_eq!(demoted.0, ApprovalStatus::ChangesRequested);
+        assert_eq!(demoted.1, "PROGRAM_DEMOTED_FOR_VERIFICATION");
+
+        let suspended = validate_review_transition(
+            ApprovalStatus::Approved,
+            ReviewAction::Suspend,
+            "Suspensão preventiva para validação cadastral.",
+            None,
+        )
+        .unwrap();
+        assert_eq!(suspended.0, ApprovalStatus::Suspended);
+
+        let council_err = check_approved_council_mutation(
+            ApprovalStatus::Approved,
+            Some("CRM"),
+            Some("CRM"),
+            Some("123456"),
+            Some("999999"),
+            Some("SP"),
+            Some("SP"),
+        )
+        .unwrap_err();
+        assert_eq!(council_err.0, StatusCode::CONFLICT);
     }
 }
