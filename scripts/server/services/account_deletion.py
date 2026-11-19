@@ -22,7 +22,11 @@ async def cleanup_account_files(pool, user_id: str) -> bool:
                 if await account_exists(user_id):
                     # Um retry antigo não pode apagar arquivos de uma conta recriada.
                     return False
-            for root in (os.path.join(STORAGE_DIR, "avatars"), os.path.join(STORAGE_DIR, "medications")):
+            for root in (
+                os.path.join(STORAGE_DIR, "avatars"),
+                os.path.join(STORAGE_DIR, "medications"),
+                os.path.join(STORAGE_DIR, "b2b_logos"),
+            ):
                 path = os.path.realpath(os.path.join(root, user_id))
                 if os.path.commonpath([os.path.realpath(root), path]) != os.path.realpath(root):
                     raise ValueError("Caminho fora do armazenamento de contas")

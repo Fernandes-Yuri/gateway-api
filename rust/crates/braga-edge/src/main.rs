@@ -3207,11 +3207,21 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             "/api/b2b/contexts/select",
             post(b2b::select_context_handler),
         )
+        .route("/api/b2b/templates", get(b2b::list_templates_handler))
         .route(
             "/api/b2b/program/me",
             get(b2b::get_my_program_handler)
                 .put(b2b::save_my_program_handler)
                 .post(b2b::save_my_program_handler),
+        )
+        .route(
+            "/api/b2b/program/me/experience",
+            axum::routing::put(b2b::update_program_experience_handler)
+                .post(b2b::update_program_experience_handler),
+        )
+        .route(
+            "/api/b2b/program/me/close",
+            post(b2b::close_my_program_handler),
         )
         .route(
             "/api/b2b/program/me/submit",
@@ -3548,12 +3558,19 @@ mod tests {
                 "/api/b2b/contexts/select",
                 Some("{\"mode\":\"PERSONAL\"}"),
             ),
+            ("GET", "/api/b2b/templates", None),
             ("GET", "/api/b2b/program/me", None),
             (
                 "POST",
                 "/api/b2b/program/me",
                 Some("{\"companyName\":\"Clinica\",\"programName\":\"Programa\"}"),
             ),
+            (
+                "PUT",
+                "/api/b2b/program/me/experience",
+                Some("{\"templateKey\":\"CLINICA_GERAL\",\"applyTemplateDefaults\":true}"),
+            ),
+            ("POST", "/api/b2b/program/me/close", Some("{}")),
             ("POST", "/api/b2b/program/me/submit", Some("{}")),
             (
                 "POST",

@@ -5,6 +5,7 @@
 //! - B2B-10: Vinculo do paciente por codigo e consentimento granular por categoria
 //! - B2B-11: Franquia atomica de participantes ativos (SELECT ... FOR UPDATE), pausa e regeneracao de codigo
 //! - B2B-12: Projecao autorizada de rotina compartilhada / registros autorizados (Anti-IDOR + paginacao por cursor)
+//! - B2B-15: Motor No-Code, 7 Templates de Perfil (`experience_config`), guardrails de modulo e encerramento seguro
 
 use std::sync::Arc;
 
@@ -23,9 +24,76 @@ use uuid::Uuid;
 use crate::{authenticate_request, AppState};
 
 pub const DEFAULT_PRIMARY_COLOR: &str = "#1A6B5C";
+pub const DEFAULT_TEMPLATE_KEY: &str = "CLINICA_GERAL";
 pub const ALLOWED_SHARED_CATEGORIES: &[&str] =
     &["steps", "hydration", "medications", "authorized_records"];
+pub const ALLOWED_APPOINTMENT_MODALITIES: &[&str] = &["IN_PERSON", "REMOTE"];
+pub const ALLOWED_BOOKING_MODES: &[&str] = &["REQUEST_CONFIRMATION", "EXTERNAL_LINK_ONLY"];
+pub const ALLOWED_AI_ACTIVATION_MODES: &[&str] =
+    &["ALWAYS_FIRST", "OUT_OF_HOURS_ONLY", "MANUAL_ONLY"];
 const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateKey {
+    ClinicaGeral,
+    NutricaoBemEstar,
+    FisioReabilitacao,
+    CuidadoSeniorHomecare,
+    FarmaciaAdesao,
+    SaudeCorporativa,
+    Custom,
+}
+
+impl TemplateKey {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ClinicaGeral => "CLINICA_GERAL",
+            Self::NutricaoBemEstar => "NUTRICAO_BEM_ESTAR",
+            Self::FisioReabilitacao => "FISIO_REABILITACAO",
+            Self::CuidadoSeniorHomecare => "CUIDADO_SENIOR_HOMECARE",
+            Self::FarmaciaAdesao => "FARMACIA_ADESAO",
+            Self::SaudeCorporativa => "SAUDE_CORPORATIVA",
+            Self::Custom => "CUSTOM",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_uppercase().as_str() {
+            "CLINICA_GERAL" => Some(Self::ClinicaGeral),
+            "NUTRICAO_BEM_ESTAR" => Some(Self::NutricaoBemEstar),
+            "FISIO_REABILITACAO" => Some(Self::FisioReabilitacao),
+            "CUIDADO_SENIOR_HOMECARE" => Some(Self::CuidadoSeniorHomecare),
+            "FARMACIA_ADESAO" => Some(Self::FarmaciaAdesao),
+            "SAUDE_CORPORATIVA" => Some(Self::SaudeCorporativa),
+            "CUSTOM" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::ClinicaGeral,
+            Self::NutricaoBemEstar,
+            Self::FisioReabilitacao,
+            Self::CuidadoSeniorHomecare,
+            Self::FarmaciaAdesao,
+            Self::SaudeCorporativa,
+            Self::Custom,
+        ]
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramModule {
+    AssistantChat,
+    DirectPartnerChat,
+    AiReceptionist,
+    FamilyLink,
+    PartnerReminders,
+    Appointments,
+    PreConsultationPdf,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalStatus {
@@ -77,6 +145,210 @@ impl ReviewAction {
     }
 }
 
+fn default_schema_version() -> i32 {
+    1
+}
+
+fn default_template_key() -> String {
+    DEFAULT_TEMPLATE_KEY.to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramFeaturesDto {
+    #[serde(default = "default_true", alias = "assistant_chat_enabled")]
+    pub assistant_chat_enabled: bool,
+    #[serde(default, alias = "direct_partner_chat_enabled")]
+    pub direct_partner_chat_enabled: bool,
+    #[serde(default, alias = "ai_receptionist_enabled")]
+    pub ai_receptionist_enabled: bool,
+    #[serde(default, alias = "family_link_enabled")]
+    pub family_link_enabled: bool,
+    #[serde(default = "default_true", alias = "partner_reminders_enabled")]
+    pub partner_reminders_enabled: bool,
+    #[serde(default = "default_true", alias = "appointments_enabled")]
+    pub appointments_enabled: bool,
+    #[serde(default = "default_true", alias = "pre_consultation_pdf_enabled")]
+    pub pre_consultation_pdf_enabled: bool,
+}
+
+impl Default for ProgramFeaturesDto {
+    fn default() -> Self {
+        Self {
+            assistant_chat_enabled: true,
+            direct_partner_chat_enabled: false,
+            ai_receptionist_enabled: false,
+            family_link_enabled: false,
+            partner_reminders_enabled: true,
+            appointments_enabled: true,
+            pre_consultation_pdf_enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectChatPolicyDto {
+    #[serde(default = "default_service_hours_label", alias = "service_hours_label")]
+    pub service_hours_label: String,
+    #[serde(default = "default_response_sla_label", alias = "response_sla_label")]
+    pub response_sla_label: String,
+    #[serde(default = "default_true", alias = "allow_off_hours_queue")]
+    pub allow_off_hours_queue: bool,
+}
+
+fn default_service_hours_label() -> String {
+    "Seg a Sex, 08h às 18h".to_string()
+}
+
+fn default_response_sla_label() -> String {
+    "Resposta em até 1 dia útil".to_string()
+}
+
+impl Default for DirectChatPolicyDto {
+    fn default() -> Self {
+        Self {
+            service_hours_label: default_service_hours_label(),
+            response_sla_label: default_response_sla_label(),
+            allow_off_hours_queue: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiReceptionistPolicyDto {
+    #[serde(default = "default_ai_persona_name", alias = "persona_name")]
+    pub persona_name: String,
+    #[serde(default = "default_ai_activation_mode", alias = "activation_mode")]
+    pub activation_mode: String,
+    #[serde(default = "default_ai_greeting_message", alias = "greeting_message")]
+    pub greeting_message: String,
+    #[serde(default, alias = "partner_faq_knowledge")]
+    pub partner_faq_knowledge: String,
+    #[serde(default = "default_true", alias = "auto_escalate_to_human_on_unknown")]
+    pub auto_escalate_to_human_on_unknown: bool,
+}
+
+fn default_ai_persona_name() -> String {
+    "Assistente Virtual do Programa".to_string()
+}
+
+fn default_ai_activation_mode() -> String {
+    "OUT_OF_HOURS_ONLY".to_string()
+}
+
+fn default_ai_greeting_message() -> String {
+    "Olá! Sou a recepcionista virtual deste programa. Posso tirar dúvidas sobre horários, funcionamento e como enviar seu resumo — ou chamar o responsável quando precisar.".to_string()
+}
+
+impl Default for AiReceptionistPolicyDto {
+    fn default() -> Self {
+        Self {
+            persona_name: default_ai_persona_name(),
+            activation_mode: default_ai_activation_mode(),
+            greeting_message: default_ai_greeting_message(),
+            partner_faq_knowledge: String::new(),
+            auto_escalate_to_human_on_unknown: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentsPolicyDto {
+    #[serde(default = "default_allowed_modalities", alias = "allowed_modalities")]
+    pub allowed_modalities: Vec<String>,
+    #[serde(default = "default_booking_mode", alias = "booking_mode")]
+    pub booking_mode: String,
+    #[serde(
+        default = "default_availabilities_summary",
+        alias = "availabilities_summary"
+    )]
+    pub availabilities_summary: String,
+    #[serde(default, alias = "external_booking_url")]
+    pub external_booking_url: Option<String>,
+}
+
+fn default_allowed_modalities() -> Vec<String> {
+    vec!["IN_PERSON".to_string(), "REMOTE".to_string()]
+}
+
+fn default_booking_mode() -> String {
+    "REQUEST_CONFIRMATION".to_string()
+}
+
+fn default_availabilities_summary() -> String {
+    "Terças e Quintas, 09h às 17h".to_string()
+}
+
+impl Default for AppointmentsPolicyDto {
+    fn default() -> Self {
+        Self {
+            allowed_modalities: default_allowed_modalities(),
+            booking_mode: default_booking_mode(),
+            availabilities_summary: default_availabilities_summary(),
+            external_booking_url: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramExperienceConfigDto {
+    #[serde(default = "default_schema_version", alias = "schema_version")]
+    pub schema_version: i32,
+    #[serde(default = "default_template_key", alias = "template_key")]
+    pub template_key: String,
+    #[serde(alias = "welcome_headline")]
+    pub welcome_headline: String,
+    #[serde(alias = "welcome_message")]
+    pub welcome_message: String,
+    #[serde(alias = "enabled_metrics")]
+    pub enabled_metrics: Vec<String>,
+    #[serde(default)]
+    pub features: ProgramFeaturesDto,
+    #[serde(default, alias = "direct_chat_policy")]
+    pub direct_chat_policy: DirectChatPolicyDto,
+    #[serde(default, alias = "ai_receptionist_policy")]
+    pub ai_receptionist_policy: AiReceptionistPolicyDto,
+    #[serde(default, alias = "appointments_policy")]
+    pub appointments_policy: AppointmentsPolicyDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateCatalogItemDto {
+    pub template_key: String,
+    pub title: String,
+    pub subtitle: String,
+    pub sample_safe_reminder: String,
+    pub default_config: ProgramExperienceConfigDto,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateExperienceRequest {
+    #[serde(alias = "template_key")]
+    pub template_key: Option<String>,
+    #[serde(default, alias = "apply_template_defaults")]
+    pub apply_template_defaults: bool,
+    #[serde(alias = "experience_config")]
+    pub experience_config: Option<ProgramExperienceConfigDto>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseProgramRequest {
+    pub reason: Option<String>,
+    #[serde(alias = "transfer_target_user_id")]
+    pub transfer_target_user_id: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextDescriptor {
@@ -89,6 +361,11 @@ pub struct ContextDescriptor {
     pub logo_url: Option<String>,
     pub approval_status: Option<String>,
     pub shared_categories: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub experience_config: Option<ProgramExperienceConfigDto>,
+    pub family_share_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +388,8 @@ pub struct UpsertPartnerProgramRequest {
     pub cnpj: Option<String>,
     pub primary_color: Option<String>,
     pub logo_url: Option<String>,
+    #[serde(alias = "template_key")]
+    pub template_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -130,6 +409,10 @@ pub struct PartnerProgramDto {
     pub seat_limit: i32,
     pub active_participants: i64,
     pub can_promote: bool,
+    pub template_key: String,
+    pub experience_config: ProgramExperienceConfigDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reviewed_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -169,6 +452,8 @@ pub struct JoinProgramRequest {
 pub struct UpdateConsentRequest {
     #[serde(default)]
     pub shared_categories: Vec<String>,
+    #[serde(alias = "family_share_enabled")]
+    pub family_share_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,6 +586,9 @@ fn personal_context(uid: &str) -> ContextDescriptor {
         logo_url: None,
         approval_status: None,
         shared_categories: Vec::new(),
+        template_key: None,
+        experience_config: None,
+        family_share_enabled: false,
     }
 }
 
@@ -599,6 +887,450 @@ pub fn format_confirmed_via_label(raw: Option<&str>) -> &'static str {
     }
 }
 
+pub fn default_experience_config_for_template(template: TemplateKey) -> ProgramExperienceConfigDto {
+    let (headline, message, metrics, features) = match template {
+        TemplateKey::ClinicaGeral => (
+            "Seu espaço de acompanhamento entre consultas",
+            "Organize passos, hidratação e registros de rotina para compartilhar apenas o que desejar antes do retorno.",
+            vec!["steps", "hydration", "medications", "authorized_records"],
+            ProgramFeaturesDto {
+                assistant_chat_enabled: true,
+                direct_partner_chat_enabled: false,
+                ai_receptionist_enabled: false,
+                family_link_enabled: false,
+                partner_reminders_enabled: true,
+                appointments_enabled: true,
+                pre_consultation_pdf_enabled: true,
+            },
+        ),
+        TemplateKey::NutricaoBemEstar => (
+            "Hábitos diários mais leves e constantes",
+            "Acompanhe sua hidratação, movimento e registros autorizados no seu ritmo, mantendo o controle do que compartilha.",
+            vec!["hydration", "steps", "authorized_records"],
+            ProgramFeaturesDto {
+                assistant_chat_enabled: true,
+                direct_partner_chat_enabled: true,
+                ai_receptionist_enabled: false,
+                family_link_enabled: false,
+                partner_reminders_enabled: true,
+                appointments_enabled: true,
+                pre_consultation_pdf_enabled: true,
+            },
+        ),
+        TemplateKey::FisioReabilitacao => (
+            "Sua rotina de movimento passo a passo",
+            "Registre sua movimentação diária e marque horários de retorno combinados com o programa.",
+            vec!["steps", "medications", "authorized_records"],
+            ProgramFeaturesDto {
+                assistant_chat_enabled: true,
+                direct_partner_chat_enabled: true,
+                ai_receptionist_enabled: false,
+                family_link_enabled: false,
+                partner_reminders_enabled: true,
+                appointments_enabled: true,
+                pre_consultation_pdf_enabled: true,
+            },
+        ),
+        TemplateKey::CuidadoSeniorHomecare => (
+            "Cuidado conectado com quem apoia você",
+            "Com sua permissão, seu familiar de apoio também acompanha os lembretes e agendamentos do programa.",
+            vec!["steps", "hydration", "medications", "authorized_records"],
+            ProgramFeaturesDto {
+                assistant_chat_enabled: true,
+                direct_partner_chat_enabled: true,
+                ai_receptionist_enabled: false,
+                family_link_enabled: true,
+                partner_reminders_enabled: true,
+                appointments_enabled: true,
+                pre_consultation_pdf_enabled: true,
+            },
+        ),
+        TemplateKey::FarmaciaAdesao => (
+            "Lembretes e organização da sua rotina",
+            "Use o alarme pessoal do seu app no dia a dia; aqui combinamos avisos simples de acompanhamento e apoio.",
+            vec!["medications", "hydration"],
+            ProgramFeaturesDto {
+                assistant_chat_enabled: true,
+                direct_partner_chat_enabled: false,
+                ai_receptionist_enabled: false,
+                family_link_enabled: true,
+                partner_reminders_enabled: true,
+                appointments_enabled: false,
+                pre_consultation_pdf_enabled: true,
+            },
+        ),
+        TemplateKey::SaudeCorporativa => (
+            "Bem-estar no dia a dia, com privacidade",
+            "Este espaço acompanha apenas hábitos de rotina que você escolher compartilhar (passos e hidratação).",
+            vec!["steps", "hydration"],
+            ProgramFeaturesDto {
+                assistant_chat_enabled: true,
+                direct_partner_chat_enabled: false,
+                ai_receptionist_enabled: false,
+                family_link_enabled: false,
+                partner_reminders_enabled: true,
+                appointments_enabled: false,
+                pre_consultation_pdf_enabled: false,
+            },
+        ),
+        TemplateKey::Custom => (
+            "Bem-vindo ao nosso espaço de acompanhamento",
+            "Personalizamos os recursos abaixo para facilitar sua rotina. Você escolhe o que compartilhar a qualquer momento.",
+            vec!["steps", "hydration"],
+            ProgramFeaturesDto {
+                assistant_chat_enabled: true,
+                direct_partner_chat_enabled: false,
+                ai_receptionist_enabled: false,
+                family_link_enabled: false,
+                partner_reminders_enabled: false,
+                appointments_enabled: false,
+                pre_consultation_pdf_enabled: true,
+            },
+        ),
+    };
+
+    ProgramExperienceConfigDto {
+        schema_version: 1,
+        template_key: template.as_str().to_string(),
+        welcome_headline: headline.to_string(),
+        welcome_message: message.to_string(),
+        enabled_metrics: metrics.into_iter().map(ToString::to_string).collect(),
+        features,
+        direct_chat_policy: DirectChatPolicyDto::default(),
+        ai_receptionist_policy: AiReceptionistPolicyDto::default(),
+        appointments_policy: AppointmentsPolicyDto::default(),
+    }
+}
+
+pub fn template_catalog() -> Vec<TemplateCatalogItemDto> {
+    TemplateKey::all()
+        .iter()
+        .copied()
+        .map(|tk| {
+            let (title, subtitle, sample_reminder) = match tk {
+                TemplateKey::ClinicaGeral => (
+                    "Clínica Geral e Ambulatório",
+                    "Consultórios médicos e clínicas ambulatoriais",
+                    "Prepare seu Resumo em PDF 1 dia antes da próxima visita para revisarmos sua rotina juntos.",
+                ),
+                TemplateKey::NutricaoBemEstar => (
+                    "Nutrição e Bem-Estar",
+                    "Nutricionistas, hábitos e estilo de vida",
+                    "Como está sua meta de água hoje? Lembre-se de registrar seus copos ao longo do dia.",
+                ),
+                TemplateKey::FisioReabilitacao => (
+                    "Fisioterapia e Reabilitação",
+                    "Fisioterapia, ortopedia e reabilitação física",
+                    "Antes do próximo encontro, atualize sua contagem de passos da semana no app.",
+                ),
+                TemplateKey::CuidadoSeniorHomecare => (
+                    "Geriatria e Home Care",
+                    "Geriatria, Home Care e cuidado assistido",
+                    "Lembrete de preparo: confirme com seu familiar o melhor horário para nossa próxima visita.",
+                ),
+                TemplateKey::FarmaciaAdesao => (
+                    "Farmácia e Adesão à Rotina",
+                    "Farmácias clínicas e programas de adesão a lembretes",
+                    "Que tal revisar hoje se os horários dos seus lembretes pessoais estão confortáveis para sua semana?",
+                ),
+                TemplateKey::SaudeCorporativa => (
+                    "Saúde Corporativa e RH",
+                    "Empresas / RH (bem-estar e hábitos preventivos)",
+                    "Desafio leve da semana: faça pequenas pausas para se hidratar e caminhar 10 minutos após o almoço.",
+                ),
+                TemplateKey::Custom => (
+                    "Personalizado do Zero",
+                    "Configuração livre do zero",
+                    "Novo aviso do programa disponível — toque para confirmar a leitura quando puder.",
+                ),
+            };
+            TemplateCatalogItemDto {
+                template_key: tk.as_str().to_string(),
+                title: title.to_string(),
+                subtitle: subtitle.to_string(),
+                sample_safe_reminder: sample_reminder.to_string(),
+                default_config: default_experience_config_for_template(tk),
+            }
+        })
+        .collect()
+}
+
+fn contains_dangerous_markup_or_scheme(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    text.chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t')
+        || text.contains('<')
+        || text.contains('>')
+        || lower.contains("javascript:")
+        || lower.contains("vbscript:")
+        || lower.contains("data:text/html")
+        || lower.contains("intent:")
+        || lower.contains("file://")
+}
+
+pub fn sanitize_plain_text_field(
+    raw: &str,
+    min_len: usize,
+    max_len: usize,
+    err_msg: &'static str,
+) -> Result<String, &'static str> {
+    let trimmed = raw.trim();
+    let count = trimmed.chars().count();
+    if count < min_len || count > max_len || contains_dangerous_markup_or_scheme(trimmed) {
+        return Err(err_msg);
+    }
+    Ok(trimmed.to_string())
+}
+
+pub fn validate_and_normalize_experience_config(
+    raw: ProgramExperienceConfigDto,
+) -> Result<ProgramExperienceConfigDto, &'static str> {
+    let Some(tk) = TemplateKey::parse(&raw.template_key) else {
+        return Err("Template do programa inválido.");
+    };
+
+    let welcome_headline = sanitize_plain_text_field(
+        &raw.welcome_headline,
+        2,
+        140,
+        "Título de boas-vindas inválido (use entre 2 e 140 caracteres sem tags ou scripts).",
+    )?;
+
+    let welcome_message = sanitize_plain_text_field(
+        &raw.welcome_message,
+        2,
+        500,
+        "Mensagem de boas-vindas inválida (use entre 2 e 500 caracteres sem tags ou scripts).",
+    )?;
+
+    let enabled_metrics = validate_shared_categories(&raw.enabled_metrics)?;
+
+    if raw.features.ai_receptionist_enabled && !raw.features.direct_partner_chat_enabled {
+        return Err("Ative o Chat Direto com o responsável antes de habilitar a Recepcionista IA.");
+    }
+
+    let service_hours_label = sanitize_plain_text_field(
+        &raw.direct_chat_policy.service_hours_label,
+        2,
+        80,
+        "Horário de atendimento inválido (entre 2 e 80 caracteres sem tags).",
+    )?;
+    let response_sla_label = sanitize_plain_text_field(
+        &raw.direct_chat_policy.response_sla_label,
+        2,
+        80,
+        "Expectativa de resposta inválida (entre 2 e 80 caracteres sem tags).",
+    )?;
+
+    let persona_name = sanitize_plain_text_field(
+        &raw.ai_receptionist_policy.persona_name,
+        2,
+        60,
+        "Nome da Recepcionista IA inválido (entre 2 e 60 caracteres sem tags).",
+    )?;
+    let activation_upper = raw
+        .ai_receptionist_policy
+        .activation_mode
+        .trim()
+        .to_ascii_uppercase();
+    let Some(&activation_mode) = ALLOWED_AI_ACTIVATION_MODES
+        .iter()
+        .find(|&&m| m == activation_upper)
+    else {
+        return Err("Modo de ativação da Recepcionista IA inválido.");
+    };
+    let greeting_message = sanitize_plain_text_field(
+        &raw.ai_receptionist_policy.greeting_message,
+        2,
+        400,
+        "Saudação da Recepcionista IA inválida (entre 2 e 400 caracteres sem tags).",
+    )?;
+    let partner_faq_knowledge = sanitize_plain_text_field(
+        &raw.ai_receptionist_policy.partner_faq_knowledge,
+        0,
+        1500,
+        "FAQ da Recepcionista IA inválido (máximo de 1500 caracteres sem tags HTML ou scripts).",
+    )?;
+
+    if raw.appointments_policy.allowed_modalities.is_empty() {
+        return Err("Selecione ao menos uma modalidade de atendimento (IN_PERSON ou REMOTE).");
+    }
+    let mut allowed_modalities = Vec::new();
+    for m in &raw.appointments_policy.allowed_modalities {
+        let key = m.trim().to_ascii_uppercase();
+        let Some(&canonical) = ALLOWED_APPOINTMENT_MODALITIES.iter().find(|&&c| c == key) else {
+            return Err("Modalidade de agendamento inválida.");
+        };
+        let s = canonical.to_string();
+        if !allowed_modalities.contains(&s) {
+            allowed_modalities.push(s);
+        }
+    }
+
+    let booking_upper = raw
+        .appointments_policy
+        .booking_mode
+        .trim()
+        .to_ascii_uppercase();
+    let Some(&booking_mode) = ALLOWED_BOOKING_MODES.iter().find(|&&m| m == booking_upper) else {
+        return Err("Modo de agendamento inválido.");
+    };
+
+    let availabilities_summary = sanitize_plain_text_field(
+        &raw.appointments_policy.availabilities_summary,
+        2,
+        160,
+        "Resumo de disponibilidade inválido (entre 2 e 160 caracteres sem tags).",
+    )?;
+
+    let external_booking_url = match raw.appointments_policy.external_booking_url.as_deref() {
+        Some(u) if !u.trim().is_empty() => {
+            let trimmed = u.trim();
+            if trimmed.len() > 512
+                || !trimmed.starts_with("https://")
+                || trimmed.chars().any(char::is_whitespace)
+                || contains_dangerous_markup_or_scheme(trimmed)
+            {
+                return Err("A URL externa de agendamento deve utilizar HTTPS válido.");
+            }
+            Some(trimmed.to_string())
+        }
+        _ => None,
+    };
+
+    if raw.features.appointments_enabled
+        && booking_mode == "EXTERNAL_LINK_ONLY"
+        && external_booking_url.is_none()
+    {
+        return Err(
+            "Informe uma URL HTTPS válida quando o agendamento operar apenas por link externo.",
+        );
+    }
+
+    Ok(ProgramExperienceConfigDto {
+        schema_version: 1,
+        template_key: tk.as_str().to_string(),
+        welcome_headline,
+        welcome_message,
+        enabled_metrics,
+        features: raw.features,
+        direct_chat_policy: DirectChatPolicyDto {
+            service_hours_label,
+            response_sla_label,
+            allow_off_hours_queue: raw.direct_chat_policy.allow_off_hours_queue,
+        },
+        ai_receptionist_policy: AiReceptionistPolicyDto {
+            persona_name,
+            activation_mode: activation_mode.to_string(),
+            greeting_message,
+            partner_faq_knowledge,
+            auto_escalate_to_human_on_unknown: raw
+                .ai_receptionist_policy
+                .auto_escalate_to_human_on_unknown,
+        },
+        appointments_policy: AppointmentsPolicyDto {
+            allowed_modalities,
+            booking_mode: booking_mode.to_string(),
+            availabilities_summary,
+            external_booking_url,
+        },
+    })
+}
+
+#[allow(dead_code)]
+pub fn guard_program_module(
+    approval_status: ApprovalStatus,
+    closed_at_present: bool,
+    config: &ProgramExperienceConfigDto,
+    module: ProgramModule,
+) -> Result<(), (StatusCode, &'static str)> {
+    if closed_at_present || approval_status != ApprovalStatus::Approved {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Este programa não está ativo ou aprovado.",
+        ));
+    }
+    let enabled = match module {
+        ProgramModule::AssistantChat => config.features.assistant_chat_enabled,
+        ProgramModule::DirectPartnerChat => config.features.direct_partner_chat_enabled,
+        ProgramModule::AiReceptionist => {
+            config.features.direct_partner_chat_enabled && config.features.ai_receptionist_enabled
+        }
+        ProgramModule::FamilyLink => config.features.family_link_enabled,
+        ProgramModule::PartnerReminders => config.features.partner_reminders_enabled,
+        ProgramModule::Appointments => config.features.appointments_enabled,
+        ProgramModule::PreConsultationPdf => config.features.pre_consultation_pdf_enabled,
+    };
+    if !enabled {
+        return Err((
+            StatusCode::CONFLICT,
+            "Este recurso foi desativado pelo responsável do programa.",
+        ));
+    }
+    Ok(())
+}
+
+pub fn intersect_effective_categories(
+    enabled_metrics: &[String],
+    shared_categories: &[String],
+) -> Vec<String> {
+    let mut effective = Vec::new();
+    for metric in enabled_metrics {
+        let key = metric.trim().to_ascii_lowercase();
+        if ALLOWED_SHARED_CATEGORIES.contains(&key.as_str())
+            && shared_categories
+                .iter()
+                .any(|c| c.trim().eq_ignore_ascii_case(&key))
+            && !effective.contains(&key)
+        {
+            effective.push(key);
+        }
+    }
+    effective
+}
+
+pub fn check_approved_identity_mutation(
+    status: ApprovalStatus,
+    existing_company: &str,
+    new_company: &str,
+    existing_cnpj: Option<&str>,
+    new_cnpj: Option<&str>,
+) -> Result<(), (StatusCode, &'static str)> {
+    if status == ApprovalStatus::Approved {
+        let company_changed = existing_company.trim() != new_company.trim();
+        let cnpj_changed = existing_cnpj.map(str::trim) != new_cnpj.map(str::trim);
+        if company_changed || cnpj_changed {
+            return Err((
+                StatusCode::CONFLICT,
+                "Razão social e CNPJ de programa aprovado exigem nova revisão pela equipe Braga.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn parse_experience_config_json(
+    raw_template_key: Option<&str>,
+    raw_config: Option<&Value>,
+) -> (String, ProgramExperienceConfigDto) {
+    let tk = raw_template_key
+        .and_then(TemplateKey::parse)
+        .unwrap_or(TemplateKey::ClinicaGeral);
+    if let Some(val) = raw_config {
+        if let Ok(mut parsed) = serde_json::from_value::<ProgramExperienceConfigDto>(val.clone()) {
+            parsed.template_key = tk.as_str().to_string();
+            if let Ok(normalized) = validate_and_normalize_experience_config(parsed.clone()) {
+                return (tk.as_str().to_string(), normalized);
+            }
+            return (tk.as_str().to_string(), parsed);
+        }
+    }
+    (
+        tk.as_str().to_string(),
+        default_experience_config_for_template(tk),
+    )
+}
+
 fn require_pool(state: &AppState) -> Result<&PgPool, (StatusCode, &'static str)> {
     state.pool.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
@@ -668,9 +1400,11 @@ pub async fn get_contexts_handler(
     let mut contexts = vec![personal_context(&identity.uid)];
 
     let owner_rows = match sqlx::query(
-        "SELECT id::text AS id, program_name, company_name, primary_color, logo_url, approval_status \
+        "SELECT id::text AS id, program_name, company_name, primary_color, logo_url, \
+                approval_status, template_key, experience_config \
            FROM partner_programs \
           WHERE owner_user_id = $1 \
+            AND closed_at IS NULL \
           ORDER BY created_at ASC",
     )
     .bind(&identity.uid)
@@ -687,6 +1421,9 @@ pub async fn get_contexts_handler(
     };
 
     for row in owner_rows {
+        let raw_tk: Option<String> = row.try_get("template_key").ok();
+        let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
+        let (tk, cfg) = parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
         contexts.push(ContextDescriptor {
             mode: "PARTNER_OWNER".to_string(),
             user_id: identity.uid.clone(),
@@ -697,17 +1434,22 @@ pub async fn get_contexts_handler(
             logo_url: row.get("logo_url"),
             approval_status: Some(row.get("approval_status")),
             shared_categories: Vec::new(),
+            template_key: Some(tk),
+            experience_config: Some(cfg),
+            family_share_enabled: false,
         });
     }
 
     let participant_rows = match sqlx::query(
         "SELECT p.id::text AS id, p.program_name, p.company_name, p.primary_color, p.logo_url, \
-                p.approval_status, e.shared_categories \
+                p.approval_status, p.template_key, p.experience_config, \
+                e.shared_categories, e.family_share_enabled \
            FROM program_enrollments e \
            JOIN partner_programs p ON p.id = e.program_id \
           WHERE e.patient_user_id = $1 \
             AND e.status = 'ACTIVE' \
             AND p.approval_status = 'APPROVED' \
+            AND p.closed_at IS NULL \
           ORDER BY e.consented_at ASC",
     )
     .bind(&identity.uid)
@@ -725,6 +1467,10 @@ pub async fn get_contexts_handler(
 
     for row in participant_rows {
         let cats: Value = row.get("shared_categories");
+        let raw_tk: Option<String> = row.try_get("template_key").ok();
+        let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
+        let (tk, cfg) = parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
+        let family_share: bool = row.try_get("family_share_enabled").unwrap_or(false);
         contexts.push(ContextDescriptor {
             mode: "PARTNER_PARTICIPANT".to_string(),
             user_id: identity.uid.clone(),
@@ -735,6 +1481,9 @@ pub async fn get_contexts_handler(
             logo_url: row.get("logo_url"),
             approval_status: Some(row.get("approval_status")),
             shared_categories: parse_categories_json(&cats),
+            template_key: Some(tk),
+            experience_config: Some(cfg),
+            family_share_enabled: family_share,
         });
     }
 
@@ -787,9 +1536,10 @@ pub async fn select_context_handler(
 
     let resolved: Option<ContextDescriptor> = if mode == "PARTNER_OWNER" {
         sqlx::query(
-            "SELECT id::text AS id, program_name, company_name, primary_color, logo_url, approval_status \
+            "SELECT id::text AS id, program_name, company_name, primary_color, logo_url, \
+                    approval_status, template_key, experience_config \
                FROM partner_programs \
-              WHERE id = $1 AND owner_user_id = $2",
+              WHERE id = $1 AND owner_user_id = $2 AND closed_at IS NULL",
         )
         .bind(program_uuid)
         .bind(&identity.uid)
@@ -797,25 +1547,34 @@ pub async fn select_context_handler(
         .await
         .ok()
         .flatten()
-        .map(|row| ContextDescriptor {
-            mode: "PARTNER_OWNER".to_string(),
-            user_id: identity.uid.clone(),
-            program_id: Some(row.get("id")),
-            program_name: Some(row.get("program_name")),
-            company_name: Some(row.get("company_name")),
-            primary_color: Some(row.get("primary_color")),
-            logo_url: row.get("logo_url"),
-            approval_status: Some(row.get("approval_status")),
-            shared_categories: Vec::new(),
+        .map(|row| {
+            let raw_tk: Option<String> = row.try_get("template_key").ok();
+            let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
+            let (tk, cfg) = parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
+            ContextDescriptor {
+                mode: "PARTNER_OWNER".to_string(),
+                user_id: identity.uid.clone(),
+                program_id: Some(row.get("id")),
+                program_name: Some(row.get("program_name")),
+                company_name: Some(row.get("company_name")),
+                primary_color: Some(row.get("primary_color")),
+                logo_url: row.get("logo_url"),
+                approval_status: Some(row.get("approval_status")),
+                shared_categories: Vec::new(),
+                template_key: Some(tk),
+                experience_config: Some(cfg),
+                family_share_enabled: false,
+            }
         })
     } else {
         sqlx::query(
             "SELECT p.id::text AS id, p.program_name, p.company_name, p.primary_color, p.logo_url, \
-                    p.approval_status, e.shared_categories \
+                    p.approval_status, p.template_key, p.experience_config, \
+                    e.shared_categories, e.family_share_enabled \
                FROM program_enrollments e \
                JOIN partner_programs p ON p.id = e.program_id \
               WHERE e.program_id = $1 AND e.patient_user_id = $2 \
-                AND e.status = 'ACTIVE' AND p.approval_status = 'APPROVED'",
+                AND e.status = 'ACTIVE' AND p.approval_status = 'APPROVED' AND p.closed_at IS NULL",
         )
         .bind(program_uuid)
         .bind(&identity.uid)
@@ -825,6 +1584,10 @@ pub async fn select_context_handler(
         .flatten()
         .map(|row| {
             let cats: Value = row.get("shared_categories");
+            let raw_tk: Option<String> = row.try_get("template_key").ok();
+            let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
+            let (tk, cfg) = parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
+            let family_share: bool = row.try_get("family_share_enabled").unwrap_or(false);
             ContextDescriptor {
                 mode: "PARTNER_PARTICIPANT".to_string(),
                 user_id: identity.uid.clone(),
@@ -835,6 +1598,9 @@ pub async fn select_context_handler(
                 logo_url: row.get("logo_url"),
                 approval_status: Some(row.get("approval_status")),
                 shared_categories: parse_categories_json(&cats),
+                template_key: Some(tk),
+                experience_config: Some(cfg),
+                family_share_enabled: family_share,
             }
         })
     };
@@ -860,7 +1626,7 @@ pub async fn select_context_handler(
 }
 
 // =========================================================================
-// B2B-07: Onboarding Empresarial Enxuto & Previa de Convite
+// B2B-07 & B2B-15: Onboarding Empresarial, No-Code Experience & Previa
 // =========================================================================
 
 fn map_program_row(
@@ -871,11 +1637,18 @@ fn map_program_row(
     let status: String = row.get("approval_status");
     let invite_paused: bool = row.get("invite_paused");
     let raw_invite: Option<String> = row.get("invite_code");
-    let visible_invite = if include_admin_meta || status == "APPROVED" {
+    let closed_dt: Option<DateTime<Utc>> = row.try_get("closed_at").ok().flatten();
+    let closed_at = closed_dt.map(|d| d.to_rfc3339());
+    let visible_invite = if (include_admin_meta || status == "APPROVED") && closed_at.is_none() {
         raw_invite
     } else {
         None
     };
+
+    let raw_tk: Option<String> = row.try_get("template_key").ok();
+    let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
+    let (template_key, experience_config) =
+        parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
 
     let (reviewed_by, reviewed_at, created_at, updated_at) = if include_admin_meta {
         let rev_at: Option<DateTime<Utc>> = row.try_get("reviewed_at").ok().flatten();
@@ -899,13 +1672,16 @@ fn map_program_row(
         cnpj: row.get("cnpj"),
         primary_color: row.get("primary_color"),
         logo_url: row.get("logo_url"),
-        can_promote: status == "APPROVED" && !invite_paused,
+        can_promote: status == "APPROVED" && !invite_paused && closed_at.is_none(),
         approval_status: status,
         review_note: row.get("review_note"),
         invite_code: visible_invite,
         invite_paused,
         seat_limit: row.get("seat_limit"),
         active_participants,
+        template_key,
+        experience_config,
+        closed_at,
         reviewed_by,
         reviewed_at,
         created_at,
@@ -929,9 +1705,10 @@ pub async fn get_my_program_handler(
 
     let row = match sqlx::query(
         "SELECT id::text AS id, owner_user_id, company_name, program_name, cnpj, primary_color, \
-                logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit \
+                logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit, \
+                template_key, experience_config, closed_at \
            FROM partner_programs \
-          WHERE owner_user_id = $1",
+          WHERE owner_user_id = $1 AND closed_at IS NULL",
     )
     .bind(&identity.uid)
     .fetch_optional(pool)
@@ -995,6 +1772,13 @@ pub async fn save_my_program_handler(
         Ok(l) => l,
         Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
     };
+    let requested_template = match req.template_key.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => match TemplateKey::parse(raw) {
+            Some(tk) => Some(tk),
+            None => return json_error(StatusCode::BAD_REQUEST, "Template do programa inválido."),
+        },
+        _ => None,
+    };
 
     let pool = match require_pool(&state) {
         Ok(p) => p,
@@ -1002,7 +1786,9 @@ pub async fn save_my_program_handler(
     };
 
     let existing = match sqlx::query(
-        "SELECT id, approval_status FROM partner_programs WHERE owner_user_id = $1",
+        "SELECT id, approval_status, company_name, cnpj, closed_at, template_key, experience_config \
+           FROM partner_programs \
+          WHERE owner_user_id = $1",
     )
     .bind(&identity.uid)
     .fetch_optional(pool)
@@ -1018,20 +1804,58 @@ pub async fn save_my_program_handler(
     };
 
     let (row, audit_action, prev_status) = if let Some(ex) = existing {
-        let current_status: String = ex.get("approval_status");
-        let next_status = if current_status == "APPROVED" {
+        let current_status_str: String = ex.get("approval_status");
+        let closed_at: Option<DateTime<Utc>> = ex.try_get("closed_at").ok().flatten();
+        let current_status = if closed_at.is_some() {
+            ApprovalStatus::Draft
+        } else {
+            ApprovalStatus::parse(&current_status_str).unwrap_or(ApprovalStatus::Draft)
+        };
+        let existing_company: String = ex.get("company_name");
+        let existing_cnpj: Option<String> = ex.get("cnpj");
+
+        if let Err((code, msg)) = check_approved_identity_mutation(
+            current_status,
+            &existing_company,
+            clean_company,
+            existing_cnpj.as_deref(),
+            clean_cnpj.as_deref(),
+        ) {
+            return json_error(code, msg);
+        }
+
+        let next_status = if current_status == ApprovalStatus::Approved {
             "APPROVED"
         } else {
             "DRAFT"
         };
+
+        let existing_tk_raw: Option<String> = ex.try_get("template_key").ok();
+        let existing_cfg_raw: Option<Value> = ex.try_get("experience_config").ok();
+        let (next_tk, next_cfg_val) = if let Some(new_tk) = requested_template {
+            let cfg = default_experience_config_for_template(new_tk);
+            (
+                new_tk.as_str().to_string(),
+                serde_json::to_value(cfg).unwrap_or_else(|_| json!({})),
+            )
+        } else {
+            let (tk_s, cfg) =
+                parse_experience_config_json(existing_tk_raw.as_deref(), existing_cfg_raw.as_ref());
+            (
+                tk_s,
+                serde_json::to_value(cfg).unwrap_or_else(|_| json!({})),
+            )
+        };
+
         let updated = match sqlx::query(
             "UPDATE partner_programs \
                 SET company_name = $2, program_name = $3, cnpj = $4, primary_color = $5, \
-                    logo_url = $6, approval_status = $7, updated_at = NOW() \
+                    logo_url = $6, approval_status = $7, template_key = $8, \
+                    experience_config = $9, closed_at = NULL, updated_at = NOW() \
               WHERE owner_user_id = $1 \
              RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
                        primary_color, logo_url, approval_status, review_note, invite_code, \
-                       invite_paused, seat_limit",
+                       invite_paused, seat_limit, template_key, experience_config, closed_at",
         )
         .bind(&identity.uid)
         .bind(clean_company)
@@ -1040,6 +1864,8 @@ pub async fn save_my_program_handler(
         .bind(&clean_color)
         .bind(&clean_logo)
         .bind(next_status)
+        .bind(&next_tk)
+        .bind(&next_cfg_val)
         .fetch_one(pool)
         .await
         {
@@ -1051,15 +1877,19 @@ pub async fn save_my_program_handler(
                 )
             }
         };
-        (updated, "PROGRAM_UPDATED", Some(current_status))
+        (updated, "PROGRAM_UPDATED", Some(current_status_str))
     } else {
+        let initial_tk = requested_template.unwrap_or(TemplateKey::ClinicaGeral);
+        let initial_cfg = default_experience_config_for_template(initial_tk);
+        let initial_cfg_val = serde_json::to_value(&initial_cfg).unwrap_or_else(|_| json!({}));
         let created = match sqlx::query(
             "INSERT INTO partner_programs \
-                (owner_user_id, company_name, program_name, cnpj, primary_color, logo_url, approval_status) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'DRAFT') \
+                (owner_user_id, company_name, program_name, cnpj, primary_color, logo_url, \
+                 approval_status, template_key, experience_config) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'DRAFT', $7, $8) \
              RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
                        primary_color, logo_url, approval_status, review_note, invite_code, \
-                       invite_paused, seat_limit",
+                       invite_paused, seat_limit, template_key, experience_config, closed_at",
         )
         .bind(&identity.uid)
         .bind(clean_company)
@@ -1067,15 +1897,14 @@ pub async fn save_my_program_handler(
         .bind(&clean_cnpj)
         .bind(&clean_color)
         .bind(&clean_logo)
+        .bind(initial_tk.as_str())
+        .bind(&initial_cfg_val)
         .fetch_one(pool)
         .await
         {
             Ok(r) => r,
             Err(_) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Erro ao criar programa.",
-                )
+                return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Erro ao criar programa.")
             }
         };
         (created, "PROGRAM_CREATED", None)
@@ -1118,9 +1947,10 @@ pub async fn submit_my_program_handler(
 
     let existing = match sqlx::query(
         "SELECT id::text AS id, owner_user_id, company_name, program_name, cnpj, primary_color, \
-                logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit \
+                logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit, \
+                template_key, experience_config, closed_at \
            FROM partner_programs \
-          WHERE owner_user_id = $1",
+          WHERE owner_user_id = $1 AND closed_at IS NULL",
     )
     .bind(&identity.uid)
     .fetch_optional(pool)
@@ -1165,7 +1995,7 @@ pub async fn submit_my_program_handler(
           WHERE owner_user_id = $1 \
          RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
                    primary_color, logo_url, approval_status, review_note, invite_code, \
-                   invite_paused, seat_limit",
+                   invite_paused, seat_limit, template_key, experience_config, closed_at",
     )
     .bind(&identity.uid)
     .fetch_one(pool)
@@ -1198,6 +2028,326 @@ pub async fn submit_my_program_handler(
     (StatusCode::OK, Json(json!({ "program": dto }))).into_response()
 }
 
+// =========================================================================
+// B2B-15: Catalogo de Templates, Experience Builder & Encerramento Seguro
+// =========================================================================
+
+pub async fn list_templates_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = authenticate_request(&headers, &state, "GET", "/api/b2b/templates").await {
+        return resp;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "templates": template_catalog()
+        })),
+    )
+        .into_response()
+}
+
+pub async fn update_program_experience_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateExperienceRequest>,
+) -> Response {
+    let identity =
+        match authenticate_request(&headers, &state, "PUT", "/api/b2b/program/me/experience").await
+        {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let existing = match sqlx::query(
+        "SELECT id, template_key, experience_config \
+           FROM partner_programs \
+          WHERE owner_user_id = $1 AND closed_at IS NULL",
+    )
+    .bind(&identity.uid)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao consultar programa para atualizar experiência.",
+            )
+        }
+    };
+
+    let Some(existing) = existing else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "Programa parceiro não encontrado para esta conta.",
+        );
+    };
+
+    let prog_uuid: Uuid = existing.get("id");
+    let current_tk_str: Option<String> = existing.try_get("template_key").ok();
+    let target_tk = match req.template_key.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => match TemplateKey::parse(raw) {
+            Some(tk) => tk,
+            None => return json_error(StatusCode::BAD_REQUEST, "Template do programa inválido."),
+        },
+        _ => current_tk_str
+            .as_deref()
+            .and_then(TemplateKey::parse)
+            .unwrap_or(TemplateKey::ClinicaGeral),
+    };
+
+    let candidate_config = match (req.apply_template_defaults, req.experience_config) {
+        (true, _) | (false, None) => default_experience_config_for_template(target_tk),
+        (false, Some(mut provided)) => {
+            if req.template_key.is_some() {
+                provided.template_key = target_tk.as_str().to_string();
+            }
+            provided
+        }
+    };
+
+    let normalized = match validate_and_normalize_experience_config(candidate_config) {
+        Ok(cfg) => cfg,
+        Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
+    };
+
+    let cfg_json = match serde_json::to_value(&normalized) {
+        Ok(v) => v,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao serializar configuração de experiência.",
+            )
+        }
+    };
+
+    let updated = match sqlx::query(
+        "UPDATE partner_programs \
+            SET template_key = $2, experience_config = $3, updated_at = NOW() \
+          WHERE id = $1 \
+         RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
+                   primary_color, logo_url, approval_status, review_note, invite_code, \
+                   invite_paused, seat_limit, template_key, experience_config, closed_at",
+    )
+    .bind(prog_uuid)
+    .bind(&normalized.template_key)
+    .bind(&cfg_json)
+    .fetch_one(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao salvar configuração No-Code do programa.",
+            )
+        }
+    };
+
+    let _ = record_audit(
+        pool,
+        Some(prog_uuid),
+        &identity.uid,
+        &identity.uid,
+        "EXPERIENCE_UPDATED",
+        json!({
+            "templateKey": normalized.template_key,
+            "enabledMetrics": normalized.enabled_metrics,
+            "features": normalized.features
+        }),
+    )
+    .await;
+
+    let active = count_active_participants(pool, prog_uuid)
+        .await
+        .unwrap_or(0);
+    let dto = map_program_row(&updated, active, false);
+    (StatusCode::OK, Json(json!({ "program": dto }))).into_response()
+}
+
+pub async fn close_my_program_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    payload: Option<Json<CloseProgramRequest>>,
+) -> Response {
+    let identity =
+        match authenticate_request(&headers, &state, "POST", "/api/b2b/program/me/close").await {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+    let req = payload.map(|Json(r)| r).unwrap_or_default();
+    let clean_reason = match req.reason.as_deref() {
+        Some(r) if !r.trim().is_empty() => {
+            match sanitize_plain_text_field(
+                r,
+                2,
+                300,
+                "Motivo de encerramento inválido (entre 2 e 300 caracteres sem tags).",
+            ) {
+                Ok(s) => Some(s),
+                Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
+            }
+        }
+        _ => None,
+    };
+    let clean_transfer_target = match req.transfer_target_user_id.as_deref() {
+        Some(uid) if !uid.trim().is_empty() => {
+            let trimmed = uid.trim();
+            if trimmed == identity.uid
+                || trimmed.len() > 128
+                || !trimmed
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    "Identificador do sócio destinatário inválido.",
+                );
+            }
+            Some(trimmed.to_string())
+        }
+        _ => None,
+    };
+
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao iniciar transação de encerramento.",
+            )
+        }
+    };
+
+    let existing = match sqlx::query(
+        "SELECT id, closed_at \
+           FROM partner_programs \
+          WHERE owner_user_id = $1 \
+            FOR UPDATE",
+    )
+    .bind(&identity.uid)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao carregar programa para encerramento.",
+            )
+        }
+    };
+
+    let Some(existing) = existing else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "Programa parceiro não encontrado para esta conta.",
+        );
+    };
+
+    let prog_uuid: Uuid = existing.get("id");
+
+    if let Some(ref target_uid) = clean_transfer_target {
+        let target_exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM profiles WHERE id = $1")
+            .bind(target_uid)
+            .fetch_optional(&mut *tx)
+            .await
+            .ok()
+            .flatten();
+        if target_exists.is_none() {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Conta destinatária para transferência não encontrada.",
+            );
+        }
+    }
+
+    let revoked_res = match sqlx::query(
+        "UPDATE program_enrollments \
+            SET status = 'REVOKED', \
+                shared_categories = '[]'::jsonb, \
+                revoked_at = NOW(), \
+                updated_at = NOW() \
+          WHERE program_id = $1 AND status = 'ACTIVE'",
+    )
+    .bind(prog_uuid)
+    .execute(&mut *tx)
+    .await
+    {
+        Ok(res) => res.rows_affected(),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao revogar vínculos ativos do programa.",
+            )
+        }
+    };
+
+    if sqlx::query(
+        "UPDATE partner_programs \
+            SET closed_at = COALESCE(closed_at, NOW()), \
+                invite_paused = true, \
+                invite_code = NULL, \
+                transfer_target_user_id = $2, \
+                updated_at = NOW() \
+          WHERE id = $1",
+    )
+    .bind(prog_uuid)
+    .bind(&clean_transfer_target)
+    .execute(&mut *tx)
+    .await
+    .is_err()
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erro ao encerrar programa parceiro.",
+        );
+    }
+
+    let _ = record_audit(
+        &mut *tx,
+        Some(prog_uuid),
+        &identity.uid,
+        clean_transfer_target.as_deref().unwrap_or(&identity.uid),
+        "PROGRAM_CLOSED",
+        json!({
+            "revokedEnrollments": revoked_res,
+            "reason": clean_reason,
+            "transferTargetUserId": clean_transfer_target
+        }),
+    )
+    .await;
+
+    if tx.commit().await.is_err() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erro ao confirmar encerramento do programa.",
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "closed": true,
+            "revokedEnrollments": revoked_res,
+            "activeContext": personal_context(&identity.uid)
+        })),
+    )
+        .into_response()
+}
+
 pub async fn lookup_invite_handler(
     State(state): State<Arc<AppState>>,
     Path(raw_code): Path<String>,
@@ -1213,9 +2363,9 @@ pub async fn lookup_invite_handler(
 
     let row = match sqlx::query(
         "SELECT id::text AS id, company_name, program_name, primary_color, logo_url, \
-                invite_code, invite_paused, seat_limit \
+                invite_code, invite_paused, seat_limit, template_key, experience_config \
            FROM partner_programs \
-          WHERE UPPER(invite_code) = $1 AND approval_status = 'APPROVED'",
+          WHERE UPPER(invite_code) = $1 AND approval_status = 'APPROVED' AND closed_at IS NULL",
     )
     .bind(&code)
     .fetch_optional(pool)
@@ -1245,6 +2395,10 @@ pub async fn lookup_invite_handler(
     let seat_limit: i32 = row.get("seat_limit");
     let invite_paused: bool = row.get("invite_paused");
     let has_available_seats = active < i64::from(seat_limit) && !invite_paused;
+    let raw_tk: Option<String> = row.try_get("template_key").ok();
+    let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
+    let (template_key, experience_config) =
+        parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
 
     (
         StatusCode::OK,
@@ -1257,7 +2411,9 @@ pub async fn lookup_invite_handler(
                 "logoUrl": row.get::<Option<String>, _>("logo_url"),
                 "inviteCode": row.get::<Option<String>, _>("invite_code"),
                 "invitePaused": invite_paused,
-                "hasAvailableSeats": has_available_seats
+                "hasAvailableSeats": has_available_seats,
+                "templateKey": template_key,
+                "experienceConfig": experience_config
             }
         })),
     )
@@ -1295,7 +2451,7 @@ pub async fn admin_list_programs_handler(
         "SELECT p.id::text AS id, p.owner_user_id, p.company_name, p.program_name, p.cnpj, \
                 p.primary_color, p.logo_url, p.approval_status, p.review_note, p.reviewed_by, \
                 p.reviewed_at, p.invite_code, p.invite_paused, p.seat_limit, p.created_at, \
-                p.updated_at, \
+                p.updated_at, p.template_key, p.experience_config, p.closed_at, \
                 COALESCE((SELECT COUNT(*) FROM program_enrollments e \
                            WHERE e.program_id = p.id AND e.status = 'ACTIVE'), 0) AS active_participants \
            FROM partner_programs p \
@@ -1458,7 +2614,8 @@ pub async fn admin_review_program_handler(
           WHERE id = $1 \
          RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
                    primary_color, logo_url, approval_status, review_note, reviewed_by, \
-                   reviewed_at, invite_code, invite_paused, seat_limit, created_at, updated_at",
+                   reviewed_at, invite_code, invite_paused, seat_limit, created_at, updated_at, \
+                   template_key, experience_config, closed_at",
     )
     .bind(prog_uuid)
     .bind(next_status.as_str())
@@ -1549,9 +2706,9 @@ pub async fn join_program_handler(
 
     let program_row = match sqlx::query(
         "SELECT id, owner_user_id, company_name, program_name, primary_color, logo_url, \
-                approval_status, invite_paused, seat_limit \
+                approval_status, invite_paused, seat_limit, template_key, experience_config \
            FROM partner_programs \
-          WHERE UPPER(invite_code) = $1 \
+          WHERE UPPER(invite_code) = $1 AND closed_at IS NULL \
             FOR UPDATE",
     )
     .bind(&code)
@@ -1658,6 +2815,10 @@ pub async fn join_program_handler(
         );
     }
 
+    let raw_tk: Option<String> = program_row.try_get("template_key").ok();
+    let raw_cfg: Option<Value> = program_row.try_get("experience_config").ok();
+    let (tk, cfg) = parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
+
     let ctx = ContextDescriptor {
         mode: "PARTNER_PARTICIPANT".to_string(),
         user_id: identity.uid,
@@ -1668,6 +2829,9 @@ pub async fn join_program_handler(
         logo_url: program_row.get("logo_url"),
         approval_status: Some(status_str),
         shared_categories: categories,
+        template_key: Some(tk),
+        experience_config: Some(cfg),
+        family_share_enabled: false,
     };
 
     (StatusCode::OK, Json(json!({ "activeContext": ctx }))).into_response()
@@ -1711,19 +2875,24 @@ pub async fn update_enrollment_consent_handler(
     let categories_json = json!(categories);
     let updated = match sqlx::query(
         "UPDATE program_enrollments e \
-            SET shared_categories = $3, updated_at = NOW() \
+            SET shared_categories = $3, \
+                family_share_enabled = COALESCE($4, e.family_share_enabled), \
+                updated_at = NOW() \
            FROM partner_programs p \
           WHERE e.program_id = p.id \
             AND e.program_id = $1 \
             AND e.patient_user_id = $2 \
             AND e.status = 'ACTIVE' \
             AND p.approval_status = 'APPROVED' \
+            AND p.closed_at IS NULL \
          RETURNING p.id::text AS id, p.program_name, p.company_name, p.primary_color, \
-                   p.logo_url, p.approval_status",
+                   p.logo_url, p.approval_status, p.template_key, p.experience_config, \
+                   e.family_share_enabled",
     )
     .bind(prog_uuid)
     .bind(&identity.uid)
     .bind(&categories_json)
+    .bind(req.family_share_enabled)
     .fetch_optional(pool)
     .await
     {
@@ -1743,15 +2912,23 @@ pub async fn update_enrollment_consent_handler(
         );
     };
 
+    let family_share: bool = row.try_get("family_share_enabled").unwrap_or(false);
     let _ = record_audit(
         pool,
         Some(prog_uuid),
         &identity.uid,
         &identity.uid,
         "CONSENT_UPDATED",
-        json!({ "sharedCategories": categories }),
+        json!({
+            "sharedCategories": categories,
+            "familyShareEnabled": family_share
+        }),
     )
     .await;
+
+    let raw_tk: Option<String> = row.try_get("template_key").ok();
+    let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
+    let (tk, cfg) = parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
 
     let ctx = ContextDescriptor {
         mode: "PARTNER_PARTICIPANT".to_string(),
@@ -1763,6 +2940,9 @@ pub async fn update_enrollment_consent_handler(
         logo_url: row.get("logo_url"),
         approval_status: Some(row.get("approval_status")),
         shared_categories: categories,
+        template_key: Some(tk),
+        experience_config: Some(cfg),
+        family_share_enabled: family_share,
     };
 
     (StatusCode::OK, Json(json!({ "activeContext": ctx }))).into_response()
@@ -1863,10 +3043,10 @@ pub async fn update_invite_policy_handler(
     let updated = match sqlx::query(
         "UPDATE partner_programs \
             SET invite_paused = $2, updated_at = NOW() \
-          WHERE owner_user_id = $1 \
+          WHERE owner_user_id = $1 AND closed_at IS NULL \
          RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
                    primary_color, logo_url, approval_status, review_note, invite_code, \
-                   invite_paused, seat_limit",
+                   invite_paused, seat_limit, template_key, experience_config, closed_at",
     )
     .bind(&identity.uid)
     .bind(req.paused)
@@ -1948,7 +3128,7 @@ pub async fn regenerate_invite_code_handler(
     let existing = match sqlx::query(
         "SELECT id, program_name, approval_status, invite_code \
            FROM partner_programs \
-          WHERE owner_user_id = $1 \
+          WHERE owner_user_id = $1 AND closed_at IS NULL \
             FOR UPDATE",
     )
     .bind(&identity.uid)
@@ -2015,7 +3195,7 @@ pub async fn regenerate_invite_code_handler(
           WHERE id = $1 \
          RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
                    primary_color, logo_url, approval_status, review_note, invite_code, \
-                   invite_paused, seat_limit",
+                   invite_paused, seat_limit, template_key, experience_config, closed_at",
     )
     .bind(prog_uuid)
     .bind(&new_code)
@@ -2078,9 +3258,10 @@ pub async fn list_program_participants_handler(
 
     let program_row = match sqlx::query(
         "SELECT id::text AS id, owner_user_id, company_name, program_name, cnpj, primary_color, \
-                logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit \
+                logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit, \
+                template_key, experience_config, closed_at \
            FROM partner_programs \
-          WHERE owner_user_id = $1",
+          WHERE owner_user_id = $1 AND closed_at IS NULL",
     )
     .bind(&identity.uid)
     .fetch_optional(pool)
@@ -2443,13 +3624,14 @@ pub async fn get_participant_summary_handler(
 
     let access_row = match sqlx::query(
         "SELECT p.id AS program_id, p.owner_user_id, p.approval_status, p.program_name, \
-                p.company_name, e.status AS enrollment_status, e.shared_categories, \
+                p.company_name, p.template_key, p.experience_config, \
+                e.status AS enrollment_status, e.shared_categories, \
                 COALESCE(NULLIF(BTRIM(pr.full_name), ''), 'Participante') AS participant_name \
            FROM partner_programs p \
            LEFT JOIN program_enrollments e \
              ON e.program_id = p.id AND e.patient_user_id = $2 \
            LEFT JOIN profiles pr ON pr.id = e.patient_user_id \
-          WHERE p.owner_user_id = $1",
+          WHERE p.owner_user_id = $1 AND p.closed_at IS NULL",
     )
     .bind(&identity.uid)
     .bind(&target_patient_id)
@@ -2487,12 +3669,17 @@ pub async fn get_participant_summary_handler(
     }
 
     let prog_uuid: Uuid = row.get("program_id");
+    let raw_tk: Option<String> = row.try_get("template_key").ok();
+    let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
+    let (_, program_config) = parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
     let cats_val: Value = row
         .try_get::<Option<Value>, _>("shared_categories")
         .ok()
         .flatten()
         .unwrap_or_else(|| json!([]));
-    let shared_categories = parse_categories_json(&cats_val);
+    let consented_categories = parse_categories_json(&cats_val);
+    let shared_categories =
+        intersect_effective_categories(&program_config.enabled_metrics, &consented_categories);
     let period_days = clamp_summary_days(query.days);
 
     let steps_section = if shared_categories.iter().any(|c| c == "steps") {
@@ -2814,5 +4001,184 @@ mod tests {
         assert!(!is_valid_invite_code("AB"));
         assert!(!is_valid_invite_code("CARD' OR 1=1"));
         assert!(!is_valid_invite_code("../etc/passwd"));
+    }
+
+    #[test]
+    fn test_template_catalog_defaults_are_valid_and_safe() {
+        let catalog = template_catalog();
+        assert_eq!(catalog.len(), 7);
+
+        for item in &catalog {
+            let validated =
+                validate_and_normalize_experience_config(item.default_config.clone()).unwrap();
+            assert_eq!(validated.template_key, item.template_key);
+            assert!(!validated.enabled_metrics.is_empty());
+            assert!(!item.sample_safe_reminder.is_empty());
+        }
+
+        // SAUDE_CORPORATIVA protege contra exposicao ocupacional de medicamentos/exames ao RH
+        let corp = default_experience_config_for_template(TemplateKey::SaudeCorporativa);
+        assert_eq!(
+            corp.enabled_metrics,
+            vec!["steps".to_string(), "hydration".to_string()]
+        );
+        assert!(!corp.features.direct_partner_chat_enabled);
+        assert!(!corp.features.family_link_enabled);
+        assert!(!corp.features.appointments_enabled);
+
+        // CUIDADO_SENIOR_HOMECARE nasce com vinculo familiar e todos os modulos de rotina ativos
+        let senior = default_experience_config_for_template(TemplateKey::CuidadoSeniorHomecare);
+        assert!(senior.features.family_link_enabled);
+        assert!(senior.features.partner_reminders_enabled);
+        assert!(senior.features.appointments_enabled);
+        assert!(senior.features.direct_partner_chat_enabled);
+    }
+
+    #[test]
+    fn test_experience_config_rejects_xss_schemes_and_invalid_urls() {
+        let base = default_experience_config_for_template(TemplateKey::ClinicaGeral);
+
+        // XSS em welcome_headline
+        let mut bad_headline = base.clone();
+        bad_headline.welcome_headline = "<script>alert(1)</script>".to_string();
+        assert!(validate_and_normalize_experience_config(bad_headline).is_err());
+
+        // Esquema javascript: em welcome_message
+        let mut bad_scheme = base.clone();
+        bad_scheme.welcome_message = "Clique em javascript:alert(1)".to_string();
+        assert!(validate_and_normalize_experience_config(bad_scheme).is_err());
+
+        // URL HTTP nao segura em external_booking_url
+        let mut bad_url = base.clone();
+        bad_url.appointments_policy.external_booking_url =
+            Some("http://agenda.clinica.com".to_string());
+        assert!(validate_and_normalize_experience_config(bad_url).is_err());
+
+        // EXTERNAL_LINK_ONLY exige external_booking_url HTTPS quando appointments_enabled = true
+        let mut missing_ext = base.clone();
+        missing_ext.appointments_policy.booking_mode = "EXTERNAL_LINK_ONLY".to_string();
+        missing_ext.appointments_policy.external_booking_url = None;
+        assert!(validate_and_normalize_experience_config(missing_ext).is_err());
+
+        // Recepcionista IA exige Chat Direto ativo
+        let mut ai_without_chat = base.clone();
+        ai_without_chat.features.direct_partner_chat_enabled = false;
+        ai_without_chat.features.ai_receptionist_enabled = true;
+        assert!(validate_and_normalize_experience_config(ai_without_chat).is_err());
+
+        // Aceita JSONB snake_case do PostgreSQL (migration 091) e normaliza
+        let pg_json = json!({
+            "schema_version": 1,
+            "template_key": "NUTRICAO_BEM_ESTAR",
+            "welcome_headline": "Hábitos diários mais leves",
+            "welcome_message": "Acompanhe sua hidratação e passos.",
+            "enabled_metrics": ["hydration", "steps"],
+            "features": {
+                "assistant_chat_enabled": true,
+                "direct_partner_chat_enabled": true,
+                "ai_receptionist_enabled": true,
+                "family_link_enabled": false,
+                "partner_reminders_enabled": true,
+                "appointments_enabled": true,
+                "pre_consultation_pdf_enabled": true
+            }
+        });
+        let (tk, parsed) = parse_experience_config_json(Some("NUTRICAO_BEM_ESTAR"), Some(&pg_json));
+        assert_eq!(tk, "NUTRICAO_BEM_ESTAR");
+        assert!(parsed.features.direct_partner_chat_enabled);
+        assert!(parsed.features.ai_receptionist_enabled);
+    }
+
+    #[test]
+    fn test_module_guard_returns_409_when_feature_disabled_and_403_when_inactive() {
+        let cfg = default_experience_config_for_template(TemplateKey::ClinicaGeral);
+
+        // Em CLINICA_GERAL, lembretes estao habilitados (true) e chat direto desligado (false)
+        assert!(guard_program_module(
+            ApprovalStatus::Approved,
+            false,
+            &cfg,
+            ProgramModule::PartnerReminders
+        )
+        .is_ok());
+
+        let err_disabled = guard_program_module(
+            ApprovalStatus::Approved,
+            false,
+            &cfg,
+            ProgramModule::DirectPartnerChat,
+        )
+        .unwrap_err();
+        assert_eq!(err_disabled.0, StatusCode::CONFLICT);
+
+        // Programa fechado ou nao aprovado retorna 403
+        let err_closed = guard_program_module(
+            ApprovalStatus::Approved,
+            true,
+            &cfg,
+            ProgramModule::PartnerReminders,
+        )
+        .unwrap_err();
+        assert_eq!(err_closed.0, StatusCode::FORBIDDEN);
+
+        let err_draft = guard_program_module(
+            ApprovalStatus::Draft,
+            false,
+            &cfg,
+            ProgramModule::PartnerReminders,
+        )
+        .unwrap_err();
+        assert_eq!(err_draft.0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_dual_key_category_intersection_and_identity_mutation_lock() {
+        // Intersecao: empresario habilitou [steps, hydration], paciente consentiu [hydration, medications]
+        let enabled = vec!["steps".to_string(), "hydration".to_string()];
+        let consented = vec!["hydration".to_string(), "medications".to_string()];
+        assert_eq!(
+            intersect_effective_categories(&enabled, &consented),
+            vec!["hydration".to_string()]
+        );
+
+        // Programa aprovado nao permite trocar CNPJ ou razao social sem nova revisao (409)
+        assert!(check_approved_identity_mutation(
+            ApprovalStatus::Approved,
+            "Clínica A",
+            "Clínica A",
+            Some("12.345.678/0001-95"),
+            Some("12.345.678/0001-95"),
+        )
+        .is_ok());
+
+        let err_cnpj = check_approved_identity_mutation(
+            ApprovalStatus::Approved,
+            "Clínica A",
+            "Clínica A",
+            Some("12.345.678/0001-95"),
+            Some("98.765.432/0001-10"),
+        )
+        .unwrap_err();
+        assert_eq!(err_cnpj.0, StatusCode::CONFLICT);
+
+        let err_company = check_approved_identity_mutation(
+            ApprovalStatus::Approved,
+            "Clínica A",
+            "Outra Empresa LTDA",
+            Some("12.345.678/0001-95"),
+            Some("12.345.678/0001-95"),
+        )
+        .unwrap_err();
+        assert_eq!(err_company.0, StatusCode::CONFLICT);
+
+        // Em DRAFT ou CHANGES_REQUESTED a edicao de CNPJ e livre
+        assert!(check_approved_identity_mutation(
+            ApprovalStatus::Draft,
+            "Clínica A",
+            "Outra Empresa LTDA",
+            Some("12.345.678/0001-95"),
+            Some("98.765.432/0001-10"),
+        )
+        .is_ok());
     }
 }
