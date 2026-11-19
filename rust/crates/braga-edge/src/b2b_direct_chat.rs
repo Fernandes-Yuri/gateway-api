@@ -169,7 +169,7 @@ pub(crate) fn evaluate_is_off_hours(policy: &DirectChatPolicyDto, now_utc: DateT
     false
 }
 
-fn map_direct_message_row(row: &sqlx::postgres::PgRow) -> DirectChatMessageDto {
+pub(crate) fn map_direct_message_row(row: &sqlx::postgres::PgRow) -> DirectChatMessageDto {
     let created_at: DateTime<Utc> = row.get("created_at");
     let read_at: Option<DateTime<Utc>> = row.try_get("read_at").ok().flatten();
     DirectChatMessageDto {
@@ -184,7 +184,7 @@ fn map_direct_message_row(row: &sqlx::postgres::PgRow) -> DirectChatMessageDto {
     }
 }
 
-async fn emit_direct_message_notification(
+pub(crate) async fn emit_direct_message_notification(
     tx: &mut Transaction<'_, Postgres>,
     recipient_uid: &str,
     patient_uid: &str,
@@ -207,7 +207,7 @@ async fn emit_direct_message_notification(
     .await;
 }
 
-async fn load_thread_summary(
+pub(crate) async fn load_thread_summary(
     pool: &PgPool,
     program_id: Uuid,
     patient_uid: &str,
@@ -297,7 +297,7 @@ async fn query_direct_messages_page(
     Ok((messages, next_cursor, has_more))
 }
 
-async fn fetch_enrolled_program_for_chat(
+pub(crate) async fn fetch_enrolled_program_for_chat(
     pool: &PgPool,
     program_id: Uuid,
     patient_uid: &str,
@@ -357,7 +357,7 @@ async fn fetch_enrolled_program_for_chat(
     Ok((owner_uid, program_name, company_name, config))
 }
 
-async fn fetch_owner_program_and_participant_for_chat(
+pub(crate) async fn fetch_owner_program_and_participant_for_chat(
     pool: &PgPool,
     owner_uid: &str,
     patient_uid: &str,
@@ -427,14 +427,31 @@ async fn fetch_owner_program_and_participant_for_chat(
     Ok((program_id, program_name, company_name, config))
 }
 
+struct InsertDirectMessageParams<'a> {
+    program_id: Uuid,
+    patient_uid: &'a str,
+    sender_uid: &'a str,
+    sender_role: &'a str,
+    recipient_uid: &'a str,
+    initial_thread_mode: &'a str,
+    body: String,
+}
+
+async fn is_program_ai_paused(pool: &PgPool, program_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT COALESCE(ai_paused, false) FROM partner_programs WHERE id = $1",
+    )
+    .bind(program_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false)
+}
+
 async fn insert_direct_message_tx(
     pool: &PgPool,
-    program_id: Uuid,
-    patient_uid: &str,
-    sender_uid: &str,
-    sender_role: &str,
-    recipient_uid: &str,
-    body: String,
+    params: InsertDirectMessageParams<'_>,
 ) -> Result<DirectChatMessageDto, (StatusCode, &'static str)> {
     let mut tx = pool.begin().await.map_err(|_| {
         (
@@ -444,21 +461,29 @@ async fn insert_direct_message_tx(
     })?;
 
     // Garante existencia da thread e serializa rajadas simultaneas do mesmo participante.
-    sqlx::query(
+    let next_mode_sql = if params.sender_role == "PARTNER" {
+        "CASE WHEN program_direct_threads.handling_mode = 'WAITING_HUMAN' THEN 'HUMAN_ACTIVE' ELSE program_direct_threads.handling_mode END"
+    } else {
+        "program_direct_threads.handling_mode"
+    };
+    let upsert_sql = format!(
         "INSERT INTO program_direct_threads (program_id, patient_user_id, handling_mode) \
-         VALUES ($1, $2, 'AI_ACTIVE') \
-         ON CONFLICT (program_id, patient_user_id) DO UPDATE SET updated_at = NOW()",
-    )
-    .bind(program_id)
-    .bind(patient_uid)
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Erro ao preparar conversa.",
-        )
-    })?;
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (program_id, patient_user_id) DO UPDATE \
+            SET handling_mode = {next_mode_sql}, updated_at = NOW()"
+    );
+    sqlx::query(&upsert_sql)
+        .bind(params.program_id)
+        .bind(params.patient_uid)
+        .bind(params.initial_thread_mode)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao preparar conversa.",
+            )
+        })?;
 
     let recent_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM program_direct_messages \
@@ -466,8 +491,8 @@ async fn insert_direct_message_tx(
             AND sender_user_id = $2 \
             AND created_at > NOW() - interval '60 seconds'",
     )
-    .bind(program_id)
-    .bind(sender_uid)
+    .bind(params.program_id)
+    .bind(params.sender_uid)
     .fetch_one(&mut *tx)
     .await
     .unwrap_or(0);
@@ -486,11 +511,11 @@ async fn insert_direct_message_tx(
          RETURNING id, id::text AS message_id, program_id::text AS program_id, \
                    patient_user_id, sender_user_id, sender_role, body, created_at, read_at",
     )
-    .bind(program_id)
-    .bind(patient_uid)
-    .bind(sender_uid)
-    .bind(sender_role)
-    .bind(&body)
+    .bind(params.program_id)
+    .bind(params.patient_uid)
+    .bind(params.sender_uid)
+    .bind(params.sender_role)
+    .bind(&params.body)
     .fetch_one(&mut *tx)
     .await
     .map_err(|_| {
@@ -503,23 +528,23 @@ async fn insert_direct_message_tx(
     let msg_uuid: Uuid = inserted.get("id");
     emit_direct_message_notification(
         &mut tx,
-        recipient_uid,
-        patient_uid,
-        program_id,
+        params.recipient_uid,
+        params.patient_uid,
+        params.program_id,
         msg_uuid,
-        sender_uid,
+        params.sender_uid,
     )
     .await;
 
     let _ = record_audit(
         &mut *tx,
-        Some(program_id),
-        sender_uid,
-        patient_uid,
+        Some(params.program_id),
+        params.sender_uid,
+        params.patient_uid,
         "PARTNER_DIRECT_MESSAGE_SENT",
         json!({
             "messageId": msg_uuid.to_string(),
-            "senderRole": sender_role,
+            "senderRole": params.sender_role,
         }),
     )
     .await;
@@ -581,6 +606,7 @@ pub async fn list_enrollment_direct_messages_handler(
 
     let thread = load_thread_summary(pool, program_id, &identity.uid).await;
     let is_off_hours_now = evaluate_is_off_hours(&config.direct_chat_policy, Utc::now());
+    let ai_paused = is_program_ai_paused(pool, program_id).await;
 
     (
         StatusCode::OK,
@@ -589,7 +615,10 @@ pub async fn list_enrollment_direct_messages_handler(
             "programName": program_name,
             "companyName": company_name,
             "assistantChatEnabled": config.features.assistant_chat_enabled,
+            "aiReceptionistEnabled": config.features.ai_receptionist_enabled,
+            "aiPaused": ai_paused,
             "directChatPolicy": config.direct_chat_policy,
+            "aiReceptionistPolicy": config.ai_receptionist_policy,
             "isOffHoursNow": is_off_hours_now,
             "thread": thread,
             "messages": messages,
@@ -627,7 +656,7 @@ pub async fn send_enrollment_direct_message_handler(
         Ok(p) => p,
         Err((code, msg)) => return json_error(code, msg),
     };
-    let (owner_uid, _, _, config) =
+    let (owner_uid, program_name, company_name, config) =
         match fetch_enrolled_program_for_chat(pool, program_id, &identity.uid).await {
             Ok(v) => v,
             Err((code, msg)) => return json_error(code, msg),
@@ -641,27 +670,56 @@ pub async fn send_enrollment_direct_message_handler(
         );
     }
 
-    match insert_direct_message_tx(
+    let initial_mode = if !config.features.ai_receptionist_enabled
+        || config.ai_receptionist_policy.activation_mode == "MANUAL_ONLY"
+    {
+        "HUMAN_ACTIVE"
+    } else {
+        "AI_ACTIVE"
+    };
+
+    let dto = match insert_direct_message_tx(
         pool,
-        program_id,
-        &identity.uid,
-        &identity.uid,
-        "PATIENT",
-        &owner_uid,
-        body,
+        InsertDirectMessageParams {
+            program_id,
+            patient_uid: &identity.uid,
+            sender_uid: &identity.uid,
+            sender_role: "PATIENT",
+            recipient_uid: &owner_uid,
+            initial_thread_mode: initial_mode,
+            body,
+        },
     )
     .await
     {
-        Ok(dto) => (
-            StatusCode::CREATED,
-            Json(json!({
-                "message": dto,
-                "sentOffHours": is_off_hours
-            })),
-        )
-            .into_response(),
-        Err((code, msg)) => json_error(code, msg),
-    }
+        Ok(d) => d,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let ai_turn_req = crate::b2b_ai_receptionist::AiTurnRequest {
+        program_id,
+        owner_uid: &owner_uid,
+        program_name: &program_name,
+        company_name: &company_name,
+        patient_uid: &identity.uid,
+        config: &config,
+        is_off_hours_now: is_off_hours,
+    };
+    let ai_outcome =
+        crate::b2b_ai_receptionist::maybe_generate_and_persist_ai_reply(pool, &ai_turn_req).await;
+    let thread = load_thread_summary(pool, program_id, &identity.uid).await;
+
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "message": dto,
+            "sentOffHours": is_off_hours,
+            "aiReply": ai_outcome.ai_reply,
+            "aiFallbackReason": ai_outcome.fallback_reason,
+            "thread": thread
+        })),
+    )
+        .into_response()
 }
 
 /// Participante marca como lidas as respostas do parceiro/IA (`POST /api/b2b/enrollments/:program_id/messages/read`).
@@ -765,6 +823,7 @@ pub async fn list_owner_direct_messages_handler(
         };
 
     let thread = load_thread_summary(pool, program_id, patient_uid).await;
+    let ai_paused = is_program_ai_paused(pool, program_id).await;
 
     (
         StatusCode::OK,
@@ -772,7 +831,10 @@ pub async fn list_owner_direct_messages_handler(
             "programId": program_id.to_string(),
             "programName": program_name,
             "companyName": company_name,
+            "aiReceptionistEnabled": config.features.ai_receptionist_enabled,
+            "aiPaused": ai_paused,
             "directChatPolicy": config.direct_chat_policy,
+            "aiReceptionistPolicy": config.ai_receptionist_policy,
             "thread": thread,
             "messages": messages,
             "nextCursor": next_cursor,
@@ -825,12 +887,15 @@ pub async fn send_owner_direct_message_handler(
 
     match insert_direct_message_tx(
         pool,
-        program_id,
-        patient_uid,
-        &identity.uid,
-        "PARTNER",
-        patient_uid,
-        body,
+        InsertDirectMessageParams {
+            program_id,
+            patient_uid,
+            sender_uid: &identity.uid,
+            sender_role: "PARTNER",
+            recipient_uid: patient_uid,
+            initial_thread_mode: "HUMAN_ACTIVE",
+            body,
+        },
     )
     .await
     {

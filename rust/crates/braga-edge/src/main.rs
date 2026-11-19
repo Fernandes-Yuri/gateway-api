@@ -1,4 +1,5 @@
 mod b2b;
+mod b2b_ai_receptionist;
 mod b2b_appointments;
 mod b2b_direct_chat;
 mod b2b_engagement;
@@ -3296,6 +3297,10 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             "/api/b2b/program/me/participants/:patient_id/messages/read",
             post(b2b_direct_chat::mark_owner_direct_messages_read_handler),
         )
+        .route(
+            "/api/b2b/program/me/participants/:patient_id/chat-handoff",
+            post(b2b_ai_receptionist::owner_chat_handoff_handler),
+        )
         .route("/api/b2b/invite/:code", get(b2b::lookup_invite_handler))
         .route("/api/b2b/enrollments/join", post(b2b::join_program_handler))
         .route(
@@ -3336,6 +3341,10 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
         .route(
             "/api/b2b/enrollments/:program_id/messages/read",
             post(b2b_direct_chat::mark_enrollment_direct_messages_read_handler),
+        )
+        .route(
+            "/api/b2b/enrollments/:program_id/messages/request-human",
+            post(b2b_ai_receptionist::request_human_handoff_handler),
         )
         .route(
             "/api/b2b/enrollments/:program_id/leave",
@@ -3415,6 +3424,9 @@ mod tests {
         // Rotas de outros domínios, consultas médicas e canais aposentados
         assert!(!is_go_chat_route("/api/consultation/create"));
         assert!(!is_go_chat_route("/api/b2b/enrollments/prog-1/messages"));
+        assert!(!is_go_chat_route(
+            "/api/b2b/enrollments/prog-1/messages/request-human"
+        ));
         assert!(!is_go_chat_route(
             "/api/b2b/program/me/participants/patient-1/messages"
         ));
@@ -3773,6 +3785,11 @@ mod tests {
                 Some("{}"),
             ),
             (
+                "POST",
+                "/api/b2b/program/me/participants/patient-1/chat-handoff",
+                Some("{\"mode\":\"HUMAN_ACTIVE\"}"),
+            ),
+            (
                 "GET",
                 "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/messages",
                 None,
@@ -3785,6 +3802,11 @@ mod tests {
             (
                 "POST",
                 "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/messages/read",
+                Some("{}"),
+            ),
+            (
+                "POST",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/messages/request-human",
                 Some("{}"),
             ),
             (

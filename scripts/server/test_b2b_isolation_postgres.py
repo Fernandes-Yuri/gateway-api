@@ -887,6 +887,111 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNotNone(notif_owner)
 
+    async def test_b2b_20b_ai_handoff_for_update_quota_and_waiting_human(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO program_direct_threads (program_id, patient_user_id, handling_mode)
+                VALUES ($1, 'patient-1', 'AI_ACTIVE')
+                """,
+                self.prog_a,
+            )
+
+            # 1. Humano assume conversa (Assumir atendimento -> HUMAN_ACTIVE)
+            await conn.execute(
+                """
+                UPDATE program_direct_threads
+                   SET handling_mode = 'HUMAN_ACTIVE',
+                       taken_over_by = 'owner-a',
+                       taken_over_at = NOW(),
+                       handoff_note = 'Assumido pelo especialista',
+                       updated_at = NOW()
+                 WHERE program_id = $1 AND patient_user_id = 'patient-1'
+                """,
+                self.prog_a,
+            )
+
+            # Lock FOR UPDATE antes de inserir resposta IA deve descartar resposta se modo != AI_ACTIVE
+            async with conn.transaction():
+                locked_mode = await conn.fetchval(
+                    """
+                    SELECT handling_mode FROM program_direct_threads
+                     WHERE program_id = $1 AND patient_user_id = 'patient-1'
+                     FOR UPDATE
+                    """,
+                    self.prog_a,
+                )
+                self.assertEqual(locked_mode, "HUMAN_ACTIVE")
+
+            # 2. Devolver para Recepcionista IA -> AI_ACTIVE volta a responder e incrementa turns
+            await conn.execute(
+                """
+                UPDATE program_direct_threads
+                   SET handling_mode = 'AI_ACTIVE',
+                       taken_over_by = 'owner-a',
+                       taken_over_at = NOW(),
+                       handoff_note = 'Devolvido para IA',
+                       updated_at = NOW()
+                 WHERE program_id = $1 AND patient_user_id = 'patient-1'
+                """,
+                self.prog_a,
+            )
+            async with conn.transaction():
+                locked_mode_2 = await conn.fetchval(
+                    """
+                    SELECT handling_mode FROM program_direct_threads
+                     WHERE program_id = $1 AND patient_user_id = 'patient-1'
+                     FOR UPDATE
+                    """,
+                    self.prog_a,
+                )
+                self.assertEqual(locked_mode_2, "AI_ACTIVE")
+                await conn.execute(
+                    """
+                    UPDATE program_direct_threads
+                       SET ai_turns_today = ai_turns_today + 1
+                     WHERE program_id = $1 AND patient_user_id = 'patient-1'
+                    """,
+                    self.prog_a,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO program_direct_messages
+                        (program_id, patient_user_id, sender_user_id, sender_role, body)
+                    VALUES ($1, 'patient-1', 'owner-a', 'AI_RECEPTIONIST', 'Horario seg a sex 08h-18h.')
+                    """,
+                    self.prog_a,
+                )
+
+            monthly_ai = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM program_direct_messages
+                 WHERE program_id = $1
+                   AND sender_role = 'AI_RECEPTIONIST'
+                   AND created_at >= date_trunc('month', NOW())
+                """,
+                self.prog_a,
+            )
+            self.assertEqual(monthly_ai, 1)
+
+            # 3. Pedido humano coloca thread em WAITING_HUMAN sem tocar em vital_signs/medications
+            await conn.execute(
+                """
+                UPDATE program_direct_threads
+                   SET handling_mode = 'WAITING_HUMAN', updated_at = NOW()
+                 WHERE program_id = $1 AND patient_user_id = 'patient-1'
+                """,
+                self.prog_a,
+            )
+            mode_after_req = await conn.fetchval(
+                """
+                SELECT handling_mode FROM program_direct_threads
+                 WHERE program_id = $1 AND patient_user_id = 'patient-1'
+                """,
+                self.prog_a,
+            )
+            self.assertEqual(mode_after_req, "WAITING_HUMAN")
+
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:
             await conn.execute(
