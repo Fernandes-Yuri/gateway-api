@@ -3706,26 +3706,29 @@ pub async fn admin_review_program_handler(
         }
     }
 
-    let decision_tag: &'static str = match action {
-        ReviewAction::Approve => "APPROVED",
+    let maybe_decision_tag: Option<&'static str> = match action {
+        ReviewAction::Approve => Some("APPROVED"),
         ReviewAction::RequestChanges
         | ReviewAction::Demote
         | ReviewAction::Suspend
-        | ReviewAction::Reject => "CHANGES_REQUESTED",
+        | ReviewAction::Reject => Some("CHANGES_REQUESTED"),
+        ReviewAction::ToggleAi => None,
     };
-    emit_b2b_decision_alerts(
-        pool,
-        state.backend_tcp_addr.clone(),
-        B2BDecisionAlert {
-            program_id: prog_uuid,
-            owner_user_id,
-            program_name,
-            decision: decision_tag,
-            note: clean_note.to_string(),
-            invite_code: next_invite_code.unwrap_or_default(),
-        },
-    )
-    .await;
+    if let Some(decision_tag) = maybe_decision_tag {
+        emit_b2b_decision_alerts(
+            pool,
+            state.backend_tcp_addr.clone(),
+            B2BDecisionAlert {
+                program_id: prog_uuid,
+                owner_user_id,
+                program_name,
+                decision: decision_tag,
+                note: clean_note.to_string(),
+                invite_code: next_invite_code.unwrap_or_default(),
+            },
+        )
+        .await;
+    }
 
     let active = count_active_participants(pool, prog_uuid)
         .await
