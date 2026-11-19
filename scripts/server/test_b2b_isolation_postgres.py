@@ -1,10 +1,11 @@
-"""Testes B2B-13: Isolamento multi-tenant, anti-IDOR, retrocompatibilidade v1.9.6 e RDS Micro."""
+"""Testes B2B-13 & B2B-15: Isolamento multi-tenant, motor No-Code (091), LGPD delete_account e retrocompatibilidade v1.9.6."""
 import os
 import re
 import unittest
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 from urllib.parse import urlparse
 
 try:
@@ -12,9 +13,16 @@ try:
 except ImportError:
     asyncpg = None
 
+try:
+    from services import account_deletion
+except ImportError:
+    account_deletion = None
+
 ROOT = Path(__file__).resolve().parents[2]
 TEST_DSN = os.getenv("TEST_POSTGRES_URL")
 B2B_RUST_PATH = ROOT / "rust/crates/braga-edge/src/b2b.rs"
+MIG_091_PATH = ROOT / "migrations/091_b2b_nocode_experience_builder.sql"
+MIG_091_ROLLBACK_PATH = ROOT / "migrations/091_b2b_nocode_experience_builder_rollback.sql"
 
 
 class B2BStaticGuardsTest(unittest.TestCase):
@@ -28,20 +36,33 @@ class B2BStaticGuardsTest(unittest.TestCase):
         self.assertIn(".clamp(1, 200)", src)
         self.assertIn("LIMIT 31", src)
         self.assertIn("LIMIT 30", src)
+        self.assertIn("guard_program_module", src)
+        self.assertIn("intersect_effective_categories", src)
+        self.assertIn("validate_and_normalize_experience_config", src)
 
         forbidden_tables = re.compile(
-            r"\bFROM\s+(exams|exam_items|exam_cloud_consents|symptoms_diary)\b",
+            r"\bFROM\s+(exams|exam_items|exam_cloud_consents|symptoms_diary|family_messages)\b",
             re.IGNORECASE,
         )
         self.assertIsNone(
             forbidden_tables.search(src),
-            "O motor B2B em Rust nunca deve consultar exams ou symptoms_diary.",
+            "O motor B2B em Rust nunca deve consultar exams, symptoms_diary ou family_messages.",
         )
+
+    def test_migration_091_is_additive_reversible_and_unblocks_lgpd_deletion(self):
+        sql_up = MIG_091_PATH.read_text(encoding="utf-8")
+        sql_down = MIG_091_ROLLBACK_PATH.read_text(encoding="utf-8")
+        self.assertIn("ADD COLUMN IF NOT EXISTS template_key", sql_up)
+        self.assertIn("ADD COLUMN IF NOT EXISTS experience_config", sql_up)
+        self.assertIn("ON DELETE CASCADE", sql_up)
+        self.assertIn("trg_profiles_b2b_lgpd_cleanup", sql_up)
+        self.assertIn("DROP TRIGGER IF EXISTS trg_profiles_b2b_lgpd_cleanup", sql_down)
+        self.assertIn("DROP COLUMN IF EXISTS experience_config", sql_down)
 
 
 @unittest.skipUnless(TEST_DSN and asyncpg is not None, "PostgreSQL efemero exclusivo do CI")
 class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
-    """Prova isolamento estrito multi-tenant e retrocompatibilidade v1.9.6 no Postgres 16."""
+    """Prova isolamento estrito multi-tenant, No-Code 091, delete_account LGPD e retrocompatibilidade v1.9.6 no Postgres 16."""
 
     async def asyncSetUp(self):
         parsed = urlparse(TEST_DSN)
@@ -68,26 +89,31 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 )
                 for mig in (
                     "003_medication_schedules.sql",
+                    "010_medical_access_tokens.sql",
+                    "017_feedbacks.sql",
+                    "018_device_push_tokens_and_audit_schemas.sql",
+                    "031_care_os_prescriptions.sql",
+                    "032_medication_stock_adjustments.sql",
+                    "033_care_audit_trail.sql",
                     "054_vital_signs_oxygen.sql",
+                    "056_firebase_account_reconciliation.sql",
+                    "071_account_pause_and_mail.sql",
                     "080_clinical_sync_integrity.sql",
                     "081_vital_signs_readings_contract.sql",
+                    "090_b2b_partner_programs.sql",
+                    "091_b2b_nocode_experience_builder.sql",
                 ):
                     async with conn.transaction():
                         await conn.execute(
                             (ROOT / "migrations" / mig).read_text(encoding="utf-8-sig")
                         )
-                async with conn.transaction():
-                    await conn.execute(
-                        (ROOT / "migrations/090_b2b_partner_programs.sql").read_text(
-                            encoding="utf-8-sig"
-                        )
-                    )
 
                 await conn.execute(
                     """
                     INSERT INTO profiles (id, full_name) VALUES
                         ('owner-a', 'Responsavel Clinica A'),
                         ('owner-b', 'Responsavel Clinica B'),
+                        ('owner-draft', 'Responsavel Rascunho'),
                         ('patient-1', 'Paciente Um'),
                         ('patient-2', 'Paciente Dois')
                     """
@@ -104,22 +130,43 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 self.prog_b = await conn.fetchval(
                     """
                     INSERT INTO partner_programs
-                        (owner_user_id, program_name, company_name, cnpj, approval_status, invite_code, seat_limit)
+                        (owner_user_id, program_name, company_name, cnpj, approval_status, invite_code, seat_limit, template_key)
                     VALUES
-                        ('owner-b', 'Programa B', 'Clinica B', '98.765.432/0001-10', 'APPROVED', 'CLINB-2222', 5)
+                        ('owner-b', 'Programa B', 'Clinica B', '98.765.432/0001-10', 'APPROVED', 'CLINB-2222', 5, 'NUTRICAO_BEM_ESTAR')
+                    RETURNING id
+                    """
+                )
+                self.prog_draft = await conn.fetchval(
+                    """
+                    INSERT INTO partner_programs
+                        (owner_user_id, program_name, company_name, approval_status, template_key)
+                    VALUES
+                        ('owner-draft', 'Programa Rascunho', 'Clinica Rascunho', 'DRAFT', 'CUSTOM')
                     RETURNING id
                     """
                 )
                 await conn.execute(
                     """
                     INSERT INTO program_enrollments
-                        (program_id, patient_user_id, status, shared_categories)
+                        (program_id, patient_user_id, status, shared_categories, family_share_enabled)
                     VALUES
-                        ($1, 'patient-1', 'ACTIVE', '["steps"]'::jsonb),
-                        ($2, 'patient-2', 'ACTIVE', '["authorized_records"]'::jsonb)
+                        ($1, 'patient-1', 'ACTIVE', '["steps"]'::jsonb, true),
+                        ($2, 'patient-2', 'ACTIVE', '["authorized_records"]'::jsonb, false)
                     """,
                     self.prog_a,
                     self.prog_b,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO program_audit_logs
+                        (program_id, actor_user_id, target_user_id, action, metadata)
+                    VALUES
+                        ($1, 'owner-a', 'owner-a', 'PROGRAM_APPROVED', '{}'::jsonb),
+                        ($3, 'owner-draft', 'owner-draft', 'PROGRAM_CREATED', '{}'::jsonb)
+                    """,
+                    self.prog_a,
+                    self.prog_b,
+                    self.prog_draft,
                 )
         except Exception:
             await self.asyncTearDown()
@@ -138,13 +185,15 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as conn:
             rows_a = await conn.fetch(
                 """
-                SELECT e.patient_user_id
+                SELECT e.patient_user_id, e.family_share_enabled, p.template_key
                   FROM program_enrollments e
                   JOIN partner_programs p ON p.id = e.program_id
                  WHERE p.owner_user_id = 'owner-a' AND e.status = 'ACTIVE'
                 """
             )
             self.assertEqual([r["patient_user_id"] for r in rows_a], ["patient-1"])
+            self.assertTrue(rows_a[0]["family_share_enabled"])
+            self.assertEqual(rows_a[0]["template_key"], "CLINICA_GERAL")
 
             cross_check = await conn.fetchrow(
                 """
@@ -156,6 +205,12 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 """
             )
             self.assertIsNone(cross_check["status"])
+
+            with self.assertRaises(asyncpg.CheckViolationError):
+                await conn.execute(
+                    "UPDATE partner_programs SET template_key = 'INVALID_TEMPLATE' WHERE id = $1",
+                    self.prog_a,
+                )
 
             await conn.execute(
                 """
@@ -170,6 +225,42 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 self.prog_a,
             )
             self.assertEqual(active_count_a, 0)
+
+    async def test_lgpd_delete_account_succeeds_for_draft_and_approved_b2b_owners(self):
+        with patch.object(account_deletion, "cleanup_account_files", AsyncMock(return_value=True)):
+            res_draft = await account_deletion.delete_account(
+                self.pool, "owner-draft", actor="próprio titular"
+            )
+            self.assertTrue(res_draft["deleted"])
+
+            res_approved = await account_deletion.delete_account(
+                self.pool, "owner-a", actor="próprio titular"
+            )
+            self.assertTrue(res_approved["deleted"])
+
+        async with self.pool.acquire() as conn:
+            remaining_programs = await conn.fetch(
+                "SELECT owner_user_id FROM partner_programs ORDER BY owner_user_id"
+            )
+            self.assertEqual([r["owner_user_id"] for r in remaining_programs], ["owner-b"])
+
+            enrollments_a = await conn.fetchval(
+                "SELECT COUNT(*) FROM program_enrollments WHERE program_id = $1",
+                self.prog_a,
+            )
+            self.assertEqual(enrollments_a, 0)
+
+            patient_1_still_exists = await conn.fetchval(
+                "SELECT COUNT(*) FROM profiles WHERE id = 'patient-1'"
+            )
+            self.assertEqual(patient_1_still_exists, 1)
+
+            leaked_audit_actors = await conn.fetchval(
+                "SELECT COUNT(*) FROM program_audit_logs "
+                "WHERE actor_user_id IN ('owner-a', 'owner-draft') "
+                "   OR target_user_id IN ('owner-a', 'owner-draft')"
+            )
+            self.assertEqual(leaked_audit_actors, 0)
 
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:
@@ -200,11 +291,15 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 "idx_partner_programs_status_created",
                 "idx_program_enrollments_active_program",
                 "idx_program_enrollments_patient",
+                "idx_program_enrollments_program_consented_id",
                 "idx_program_audit_logs_program_created",
             ):
                 self.assertIn(expected_idx, indexes)
 
             async with conn.transaction():
+                await conn.execute(
+                    MIG_091_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
+                )
                 await conn.execute(
                     (ROOT / "migrations/090_b2b_partner_programs_rollback.sql").read_text(
                         encoding="utf-8-sig"
