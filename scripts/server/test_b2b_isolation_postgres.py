@@ -158,10 +158,9 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                         (program_id, actor_user_id, target_user_id, action, metadata)
                     VALUES
                         ($1, 'owner-a', 'owner-a', 'PROGRAM_APPROVED', '{}'::jsonb),
-                        ($3, 'owner-draft', 'owner-draft', 'PROGRAM_CREATED', '{}'::jsonb)
+                        ($2, 'owner-draft', 'owner-draft', 'PROGRAM_CREATED', '{}'::jsonb)
                     """,
                     self.prog_a,
-                    self.prog_b,
                     self.prog_draft,
                 )
         except Exception:
