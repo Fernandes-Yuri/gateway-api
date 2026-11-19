@@ -535,7 +535,7 @@ mod tests {
         body::Bytes,
         extract::{Path as AxumPath, State as AxumState},
         http::HeaderMap,
-        routing::{get, put},
+        routing::put,
         Router,
     };
     use image::{ImageBuffer, Rgba};
