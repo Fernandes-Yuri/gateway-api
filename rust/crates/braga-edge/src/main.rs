@@ -3193,6 +3193,15 @@ pub fn is_go_chat_route(path: &str) -> bool {
         || path.starts_with("/api/notifications/")
 }
 
+fn is_spoofable_client_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("x-internal-")
+        || matches!(
+            lower.as_str(),
+            "x-user-id" | "x-role" | "x-auth-uid" | "x-context-mode" | "x-program-role"
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3435,13 +3444,4 @@ mod tests {
             );
         }
     }
-}
-
-fn is_spoofable_client_header(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.starts_with("x-internal-")
-        || matches!(
-            lower.as_str(),
-            "x-user-id" | "x-role" | "x-auth-uid" | "x-context-mode" | "x-program-role"
-        )
 }
