@@ -562,8 +562,8 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO medications (user_id, name, dosage, schedule_times)
-                VALUES ('patient-1', 'Losartana', '50mg', '["08:00"]'::jsonb)
+                INSERT INTO medications (user_id, name, dosage_mg, schedule_time)
+                VALUES ('patient-1', 'Losartana', 50.0, '08:00')
                 """
             )
             rem_id = await conn.fetchval(
