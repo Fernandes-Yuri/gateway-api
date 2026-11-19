@@ -153,6 +153,7 @@ pub enum ReviewAction {
     Reject,
     Demote,
     Suspend,
+    ToggleAi,
 }
 
 impl ReviewAction {
@@ -161,8 +162,9 @@ impl ReviewAction {
             "approve" => Some(Self::Approve),
             "request_changes" => Some(Self::RequestChanges),
             "reject" => Some(Self::Reject),
-            "demote" => Some(Self::Demote),
+            "demote" | "demote_review" => Some(Self::Demote),
             "suspend" => Some(Self::Suspend),
+            "toggle_ai" | "toggle_ai_pause" => Some(Self::ToggleAi),
             _ => None,
         }
     }
@@ -459,6 +461,7 @@ pub struct PartnerProgramDto {
     pub review_note: Option<String>,
     pub invite_code: Option<String>,
     pub invite_paused: bool,
+    pub ai_paused: bool,
     pub seat_limit: i32,
     pub active_participants: i64,
     pub can_promote: bool,
@@ -520,6 +523,8 @@ pub struct AdminReviewRequest {
     pub note: Option<String>,
     pub reviewer: Option<String>,
     pub seat_limit: Option<i32>,
+    #[serde(alias = "ai_paused")]
+    pub ai_paused: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -714,7 +719,7 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-fn require_service_token(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {
+pub(crate) fn require_service_token(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {
     let expected = std::env::var("SERVICE_TOKEN")
         .unwrap_or_default()
         .trim()
@@ -886,6 +891,18 @@ pub fn validate_review_transition(
             }
             return Ok((ApprovalStatus::Suspended, "PROGRAM_SUSPENDED"));
         }
+        ReviewAction::ToggleAi => {
+            if !matches!(
+                current,
+                ApprovalStatus::Approved | ApprovalStatus::Suspended
+            ) {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "O controle de pausa da Recepcionista IA exige programa aprovado.",
+                ));
+            }
+            return Ok((current, "PROGRAM_AI_TOGGLED"));
+        }
         ReviewAction::Approve | ReviewAction::RequestChanges | ReviewAction::Reject => {
             if current != ApprovalStatus::PendingReview {
                 return Err((
@@ -929,7 +946,9 @@ pub fn validate_review_transition(
             }
             Ok((ApprovalStatus::Rejected, "PROGRAM_REJECTED"))
         }
-        ReviewAction::Demote | ReviewAction::Suspend => unreachable!(),
+        ReviewAction::Demote | ReviewAction::Suspend | ReviewAction::ToggleAi => {
+            unreachable!()
+        }
     }
 }
 
@@ -2051,6 +2070,7 @@ fn map_program_row(
         review_note: row.get("review_note"),
         invite_code: visible_invite,
         invite_paused,
+        ai_paused: row.try_get("ai_paused").unwrap_or(false),
         seat_limit: row.get("seat_limit"),
         active_participants,
         template_key,
@@ -2094,7 +2114,7 @@ pub async fn get_my_program_handler(
 
     let row = match sqlx::query(
         "SELECT id::text AS id, owner_user_id, company_name, program_name, cnpj, primary_color, \
-                logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit, \
+                logo_url, approval_status, review_note, invite_code, invite_paused, ai_paused, seat_limit, \
                 template_key, experience_config, closed_at, responsible_name, \
                 responsible_cpf_masked, responsible_role, responsible_phone, council_type, \
                 council_number, council_uf, city, state, terms_accepted_at, terms_version, \
@@ -2582,7 +2602,7 @@ pub async fn submit_my_program_handler(
 
     let existing = match sqlx::query(
         "SELECT id::text AS id, owner_user_id, company_name, program_name, cnpj, primary_color, \
-                logo_url, approval_status, review_note, invite_code, invite_paused, seat_limit, \
+                logo_url, approval_status, review_note, invite_code, invite_paused, ai_paused, seat_limit, \
                 template_key, experience_config, closed_at, responsible_name, \
                 responsible_cpf_hash, responsible_cpf_masked, responsible_role, responsible_phone, \
                 council_type, council_number, council_uf, city, state, terms_accepted_at, \
@@ -3417,7 +3437,7 @@ pub async fn admin_list_programs_handler(
     let rows = match sqlx::query(
         "SELECT p.id::text AS id, p.owner_user_id, p.company_name, p.program_name, p.cnpj, \
                 p.primary_color, p.logo_url, p.approval_status, p.review_note, p.reviewed_by, \
-                p.reviewed_at, p.invite_code, p.invite_paused, p.seat_limit, p.created_at, \
+                p.reviewed_at, p.invite_code, p.invite_paused, p.ai_paused, p.seat_limit, p.created_at, \
                 p.updated_at, p.template_key, p.experience_config, p.closed_at, \
                 p.responsible_name, p.responsible_cpf_masked, p.responsible_role, \
                 p.responsible_phone, p.council_type, p.council_number, p.council_uf, \
@@ -3482,7 +3502,7 @@ pub async fn admin_review_program_handler(
     let Some(action) = ReviewAction::parse(&req.action) else {
         return json_error(
             StatusCode::BAD_REQUEST,
-            "Ação inválida. Use approve, request_changes, reject, demote ou suspend.",
+            "Ação inválida. Use approve, request_changes, reject, demote, suspend ou toggle_ai.",
         );
     };
     let clean_note = req.note.as_deref().unwrap_or("").trim();
@@ -3510,7 +3530,7 @@ pub async fn admin_review_program_handler(
 
     let existing = match sqlx::query(
         "SELECT id, owner_user_id, program_name, approval_status, invite_code, invite_paused, \
-                seat_limit, auto_kyb_status, proof_documents \
+                ai_paused, seat_limit, auto_kyb_status, proof_documents \
            FROM partner_programs \
           WHERE id = $1 \
             FOR UPDATE",
@@ -3564,7 +3584,22 @@ pub async fn admin_review_program_handler(
     let next_invite_paused: bool = match action {
         ReviewAction::Demote | ReviewAction::Suspend | ReviewAction::Reject => true,
         ReviewAction::Approve => false,
-        ReviewAction::RequestChanges => existing.get("invite_paused"),
+        ReviewAction::RequestChanges | ReviewAction::ToggleAi => existing.get("invite_paused"),
+    };
+    let current_ai_paused: bool = existing.try_get("ai_paused").unwrap_or(false);
+    let next_ai_paused: bool = match action {
+        ReviewAction::ToggleAi => req.ai_paused.unwrap_or(!current_ai_paused),
+        ReviewAction::Suspend => true,
+        _ => current_ai_paused,
+    };
+    let effective_audit_action = if action == ReviewAction::ToggleAi {
+        if next_ai_paused {
+            "PROGRAM_AI_PAUSED"
+        } else {
+            "PROGRAM_AI_RESUMED"
+        }
+    } else {
+        audit_action
     };
 
     let existing_kyb_status: Option<String> = existing.try_get("auto_kyb_status").ok().flatten();
@@ -3573,7 +3608,7 @@ pub async fn admin_review_program_handler(
         ReviewAction::Approve | ReviewAction::Reject => {
             existing_kyb_status.or(Some("MANUAL_OVERRIDE".to_string()))
         }
-        ReviewAction::RequestChanges => existing_kyb_status,
+        ReviewAction::RequestChanges | ReviewAction::ToggleAi => existing_kyb_status,
     };
 
     let should_purge_proofs = matches!(action, ReviewAction::Approve | ReviewAction::Reject);
@@ -3607,11 +3642,12 @@ pub async fn admin_review_program_handler(
             SET approval_status = $2, review_note = $3, reviewed_by = $4, reviewed_at = NOW(), \
                 invite_code = $5, invite_paused = $6, seat_limit = $7, auto_kyb_status = $8, \
                 proof_documents = CASE WHEN $9 THEN '[]'::jsonb ELSE proof_documents END, \
+                ai_paused = $10, \
                 updated_at = NOW() \
           WHERE id = $1 \
          RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
                    primary_color, logo_url, approval_status, review_note, reviewed_by, \
-                   reviewed_at, invite_code, invite_paused, seat_limit, created_at, updated_at, \
+                   reviewed_at, invite_code, invite_paused, ai_paused, seat_limit, created_at, updated_at, \
                    template_key, experience_config, closed_at, responsible_name, \
                    responsible_cpf_masked, responsible_role, responsible_phone, council_type, \
                    council_number, council_uf, city, state, terms_accepted_at, terms_version, \
@@ -3626,6 +3662,7 @@ pub async fn admin_review_program_handler(
     .bind(next_seat_limit)
     .bind(&next_kyb_status)
     .bind(should_purge_proofs)
+    .bind(next_ai_paused)
     .fetch_one(&mut *tx)
     .await
     {
@@ -3643,10 +3680,11 @@ pub async fn admin_review_program_handler(
         Some(prog_uuid),
         &clean_reviewer,
         &owner_user_id,
-        audit_action,
+        effective_audit_action,
         json!({
             "previousStatus": current_status.as_str(),
             "approvalStatus": next_status.as_str(),
+            "aiPaused": next_ai_paused,
             "seatLimit": next_seat_limit,
             "proofsPurged": proof_keys_to_purge.len(),
         }),
@@ -6340,5 +6378,18 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(council_err.0, StatusCode::CONFLICT);
+
+        assert_eq!(
+            ReviewAction::parse("demote_review"),
+            Some(ReviewAction::Demote)
+        );
+        assert_eq!(
+            ReviewAction::parse("toggle_ai"),
+            Some(ReviewAction::ToggleAi)
+        );
+        let toggled =
+            validate_review_transition(ApprovalStatus::Approved, ReviewAction::ToggleAi, "", None)
+                .unwrap();
+        assert_eq!(toggled.0, ApprovalStatus::Approved);
     }
 }

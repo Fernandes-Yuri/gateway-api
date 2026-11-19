@@ -3,6 +3,7 @@
 //!   com bloqueio Nao-SaMD de posologia, cotas anti-spam e zero escrita em `medications`.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     extract::{Path, Query, State},
@@ -13,12 +14,14 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::b2b::{
     guard_program_module, json_error, parse_categories_json, parse_experience_config_json,
-    record_audit, require_pool, ApprovalStatus, ProgramModule, ALLOWED_SHARED_CATEGORIES,
+    record_audit, require_pool, require_service_token, ApprovalStatus, ProgramModule,
+    ALLOWED_SHARED_CATEGORIES,
 };
 use crate::{authenticate_request, AppState};
 
@@ -1100,6 +1103,330 @@ pub async fn set_enrollment_mute_handler(
         .into_response()
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportProgramAbuseRequest {
+    pub reason: String,
+    pub details: Option<String>,
+    #[serde(alias = "mute_also")]
+    pub mute_also: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAbuseReportsQuery {
+    pub status: Option<String>,
+    pub limit: Option<i64>,
+}
+
+pub(crate) fn validate_abuse_report_payload(
+    req: &ReportProgramAbuseRequest,
+) -> Result<(String, Option<String>), (StatusCode, &'static str)> {
+    let reason = req.reason.trim().to_string();
+    if reason.is_empty() || reason.chars().count() > 64 {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Informe o motivo da denúncia (até 64 caracteres).",
+        ));
+    }
+    let clean_details = req
+        .details
+        .as_deref()
+        .map(sanitize_non_https_urls)
+        .filter(|s| !s.is_empty());
+    if clean_details
+        .as_ref()
+        .is_some_and(|d| d.chars().count() > 500)
+    {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "A descrição da denúncia deve ter no máximo 500 caracteres.",
+        ));
+    }
+    Ok((reason, clean_details))
+}
+
+/// Denuncia UGC de programa parceiro (conformidade Google Play) com silenciamento opcional imediato (`POST /api/b2b/enrollments/:program_id/report`).
+pub async fn report_program_abuse_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(program_id): Path<String>,
+    Json(req): Json<ReportProgramAbuseRequest>,
+) -> Response {
+    let identity = match authenticate_request(
+        &headers,
+        &state,
+        "POST",
+        "/api/b2b/enrollments/:program_id/report",
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let prog_uuid = match Uuid::parse_str(program_id.trim()) {
+        Ok(u) => u,
+        Err(_) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Identificador do programa inválido.",
+            )
+        }
+    };
+    let (reason, details) = match validate_abuse_report_payload(&req) {
+        Ok(v) => v,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let enroll_row = match sqlx::query(
+        "SELECT status FROM program_enrollments WHERE program_id = $1 AND patient_user_id = $2",
+    )
+    .bind(prog_uuid)
+    .bind(&identity.uid)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return json_error(
+                StatusCode::FORBIDDEN,
+                "Apenas participantes vinculados podem reportar este programa.",
+            )
+        }
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao validar vínculo.",
+            )
+        }
+    };
+
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao abrir transação.",
+            )
+        }
+    };
+
+    let report_id: Uuid = match sqlx::query_scalar(
+        "INSERT INTO program_abuse_reports (program_id, reporter_user_id, reason, details) \
+         VALUES ($1, $2, $3, $4) \
+         RETURNING id",
+    )
+    .bind(prog_uuid)
+    .bind(&identity.uid)
+    .bind(&reason)
+    .bind(&details)
+    .fetch_one(&mut *tx)
+    .await
+    {
+        Ok(id) => id,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao registrar denúncia.",
+            )
+        }
+    };
+
+    let should_mute = req.mute_also.unwrap_or(true);
+    let enroll_status: String = enroll_row.get("status");
+    let mut is_muted = false;
+    if should_mute && enroll_status == "ACTIVE" {
+        let _ = sqlx::query(
+            "UPDATE program_enrollments \
+                SET muted_at = COALESCE(muted_at, NOW()), updated_at = NOW() \
+              WHERE program_id = $1 AND patient_user_id = $2 AND status = 'ACTIVE'",
+        )
+        .bind(prog_uuid)
+        .bind(&identity.uid)
+        .execute(&mut *tx)
+        .await;
+        is_muted = true;
+    }
+
+    let _ = record_audit(
+        &mut *tx,
+        Some(prog_uuid),
+        &identity.uid,
+        &identity.uid,
+        "PROGRAM_ABUSE_REPORTED",
+        json!({
+            "reportId": report_id.to_string(),
+            "reason": reason,
+            "muted": is_muted
+        }),
+    )
+    .await;
+
+    if tx.commit().await.is_err() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erro ao confirmar denúncia.",
+        );
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "reportId": report_id.to_string(),
+            "programId": prog_uuid.to_string(),
+            "muted": is_muted
+        })),
+    )
+        .into_response()
+}
+
+/// Lista denuncias UGC B2B para equipe de moderacao (`GET /api/admin/b2b/abuse-reports`).
+pub async fn admin_list_abuse_reports_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<AdminAbuseReportsQuery>,
+) -> Response {
+    if let Err((code, msg)) = require_service_token(&headers) {
+        return json_error(code, msg);
+    }
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+    let status_filter = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| matches!(*s, "OPEN" | "REVIEWED" | "DISMISSED"))
+        .map(ToString::to_string);
+    let limit = query.limit.unwrap_or(20).clamp(1, 50);
+
+    let rows = match sqlx::query(
+        "SELECT r.id::text AS report_id, r.program_id::text AS program_id, \
+                pr.program_name, pr.company_name, r.reporter_user_id, r.reason, \
+                r.details, r.status, r.created_at \
+           FROM program_abuse_reports r \
+           JOIN partner_programs pr ON pr.id = r.program_id \
+          WHERE ($1::text IS NULL OR r.status = $1) \
+          ORDER BY r.created_at DESC \
+          LIMIT $2",
+    )
+    .bind(status_filter)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao listar denúncias.",
+            )
+        }
+    };
+
+    let reports: Vec<Value> = rows
+        .into_iter()
+        .map(|row| {
+            let created_at: DateTime<Utc> = row.get("created_at");
+            json!({
+                "reportId": row.get::<String, _>("report_id"),
+                "programId": row.get::<String, _>("program_id"),
+                "programName": row.get::<String, _>("program_name"),
+                "companyName": row.get::<String, _>("company_name"),
+                "reporterUserId": row.get::<String, _>("reporter_user_id"),
+                "reason": row.get::<String, _>("reason"),
+                "details": row.try_get::<Option<String>, _>("details").ok().flatten(),
+                "status": row.get::<String, _>("status"),
+                "createdAt": created_at.to_rfc3339()
+            })
+        })
+        .collect();
+
+    (StatusCode::OK, Json(json!({ "reports": reports }))).into_response()
+}
+
+#[derive(Debug, Default)]
+pub struct B2BCleanupSummary {
+    pub reminders_purged: u64,
+    pub direct_messages_purged: u64,
+    pub cnpj_cache_purged: u64,
+}
+
+/// Expurga lotes limitados do buffer temporario B2B (protege o RDS db.t4g.micro sem locks longos).
+pub async fn cleanup_expired_b2b_buffers(pool: &PgPool) -> Result<B2BCleanupSummary, sqlx::Error> {
+    let rem = sqlx::query(
+        "DELETE FROM program_reminders \
+          WHERE id IN (SELECT id FROM program_reminders WHERE expires_at < NOW() LIMIT 500)",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    let msg = sqlx::query(
+        "DELETE FROM program_direct_messages \
+          WHERE id IN ( \
+              SELECT id FROM program_direct_messages \
+               WHERE created_at < NOW() - interval '7 days' \
+               LIMIT 500 \
+          )",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    let cache = sqlx::query(
+        "DELETE FROM cnpj_lookup_cache \
+          WHERE cnpj_digits IN ( \
+              SELECT cnpj_digits FROM cnpj_lookup_cache \
+               WHERE expires_at < NOW() \
+               LIMIT 500 \
+          )",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    Ok(B2BCleanupSummary {
+        reminders_purged: rem,
+        direct_messages_purged: msg,
+        cnpj_cache_purged: cache,
+    })
+}
+
+/// Tarefa leve em Tokio executando a limpeza de buffers expirados a cada 6 horas.
+pub async fn spawn_rds_buffer_cleanup_loop(pool: PgPool) {
+    let mut ticker = tokio::time::interval(Duration::from_secs(6 * 3600));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Evita disputar conexoes no primeiro segundo de boot do braga-edge.
+    ticker.tick().await;
+    loop {
+        ticker.tick().await;
+        match cleanup_expired_b2b_buffers(&pool).await {
+            Ok(summary) => {
+                if summary.reminders_purged > 0
+                    || summary.direct_messages_purged > 0
+                    || summary.cnpj_cache_purged > 0
+                {
+                    info!(
+                        reminders = summary.reminders_purged,
+                        direct_messages = summary.direct_messages_purged,
+                        cnpj_cache = summary.cnpj_cache_purged,
+                        "Limpeza periódica de buffers B2B concluída"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!("Falha na limpeza periódica de buffers B2B: {err}");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1156,5 +1483,27 @@ mod tests {
         assert!(!contains_unsafe_posology_text(
             "Lembrete: beber 400 ml de água e registrar passos antes do retorno."
         ));
+    }
+
+    #[test]
+    fn abuse_report_validation_rejects_empty_and_sanitizes_details() {
+        let empty = ReportProgramAbuseRequest {
+            reason: "   ".to_string(),
+            details: None,
+            mute_also: Some(true),
+        };
+        assert_eq!(
+            validate_abuse_report_payload(&empty).err().unwrap().0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+
+        let valid = ReportProgramAbuseRequest {
+            reason: "CONTEUDO_INADEQUADO".to_string(),
+            details: Some("Enviou link http://spam.local".to_string()),
+            mute_also: Some(true),
+        };
+        let (reason, details) = validate_abuse_report_payload(&valid).expect("Report valido");
+        assert_eq!(reason, "CONTEUDO_INADEQUADO");
+        assert!(details.unwrap().contains("[link removido]"));
     }
 }
