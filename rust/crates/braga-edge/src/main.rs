@@ -857,7 +857,7 @@ async fn ws_orb_handler(State(state): State<Arc<AppState>>, mut req: Request) ->
     let header_keys: Vec<HeaderName> = req
         .headers()
         .keys()
-        .filter(|k| k.as_str().starts_with("x-internal-"))
+        .filter(|k| is_spoofable_client_header(k.as_str()))
         .cloned()
         .collect();
     for k in header_keys {
@@ -996,10 +996,7 @@ async fn proxy_to_backend(
     let header_keys: Vec<HeaderName> = req
         .headers()
         .keys()
-        .filter(|k| {
-            let s = k.as_str();
-            s.starts_with("x-internal-") || s == "x-user-id" || s == "x-role" || s == "x-auth-uid"
-        })
+        .filter(|k| is_spoofable_client_header(k.as_str()))
         .cloned()
         .collect();
     for k in header_keys {
@@ -3196,6 +3193,15 @@ pub fn is_go_chat_route(path: &str) -> bool {
         || path.starts_with("/api/notifications/")
 }
 
+fn is_spoofable_client_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("x-internal-")
+        || matches!(
+            lower.as_str(),
+            "x-user-id" | "x-role" | "x-auth-uid" | "x-context-mode" | "x-program-role"
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3411,5 +3417,31 @@ mod tests {
         // 3. Verifica que /api/internal/stats expõe contadores de resiliência e RSS
         assert_eq!(state.rejected_503_count.load(Ordering::Relaxed), 1);
         assert_eq!(state.rate_limited_429_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_is_spoofable_client_header_blocks_identity_and_b2b_role_spoofing() {
+        for forbidden in [
+            "x-internal-uid",
+            "x-internal-admin",
+            "x-internal-program-id",
+            "x-user-id",
+            "x-role",
+            "x-auth-uid",
+            "x-context-mode",
+            "x-program-role",
+        ] {
+            assert!(
+                is_spoofable_client_header(forbidden),
+                "Header deve ser sanitizado: {forbidden}"
+            );
+        }
+
+        for allowed in ["authorization", "content-type", "x-braga-program-id"] {
+            assert!(
+                !is_spoofable_client_header(allowed),
+                "Header nao deve ser bloqueado na borda: {allowed}"
+            );
+        }
     }
 }
