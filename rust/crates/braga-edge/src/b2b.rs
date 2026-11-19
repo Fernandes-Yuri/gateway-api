@@ -2,6 +2,8 @@
 //! - B2B-04: Resolucao autoritativa e troca de contexto (JWT RS256 -> PostgreSQL)
 //! - B2B-07: Onboarding empresarial enxuto, personalizacao e previa de convite
 //! - B2B-09: Aprovacao manual assistida (SERVICE_TOKEN, maquina de estados e invite_code)
+//! - B2B-10: Vinculo do paciente por codigo e consentimento granular por categoria
+//! - B2B-11: Franquia atomica de participantes ativos (SELECT ... FOR UPDATE), pausa e regeneracao de codigo
 
 use std::sync::Arc;
 
@@ -20,6 +22,8 @@ use uuid::Uuid;
 use crate::{authenticate_request, AppState};
 
 pub const DEFAULT_PRIMARY_COLOR: &str = "#1A6B5C";
+pub const ALLOWED_SHARED_CATEGORIES: &[&str] =
+    &["steps", "hydration", "medications", "authorized_records"];
 const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +153,27 @@ pub struct AdminReviewRequest {
     pub note: Option<String>,
     pub reviewer: Option<String>,
     pub seat_limit: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinProgramRequest {
+    pub invite_code: String,
+    #[serde(default)]
+    pub shared_categories: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateConsentRequest {
+    #[serde(default)]
+    pub shared_categories: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInvitePolicyRequest {
+    pub paused: bool,
 }
 
 fn json_error(status: StatusCode, detail: &str) -> Response {
@@ -351,6 +376,69 @@ pub fn validate_review_transition(
             Ok((ApprovalStatus::Rejected, "PROGRAM_REJECTED"))
         }
     }
+}
+
+pub fn validate_shared_categories(raw: &[String]) -> Result<Vec<String>, &'static str> {
+    if raw.is_empty() {
+        return Err(
+            "Selecione ao menos uma categoria de registros para compartilhar com o programa.",
+        );
+    }
+    let mut normalized = Vec::with_capacity(raw.len());
+    for item in raw {
+        let key = item.trim().to_ascii_lowercase();
+        let Some(&canonical) = ALLOWED_SHARED_CATEGORIES.iter().find(|&&c| c == key) else {
+            return Err("Categoria de compartilhamento inválida.");
+        };
+        let s = canonical.to_string();
+        if !normalized.contains(&s) {
+            normalized.push(s);
+        }
+    }
+    if normalized.is_empty() {
+        return Err(
+            "Selecione ao menos uma categoria de registros para compartilhar com o programa.",
+        );
+    }
+    Ok(normalized)
+}
+
+pub fn check_enrollment_eligibility(
+    approval_status: ApprovalStatus,
+    invite_paused: bool,
+    owner_user_id: &str,
+    patient_user_id: &str,
+    already_active: bool,
+    active_count: i64,
+    seat_limit: i32,
+) -> Result<(), (StatusCode, &'static str)> {
+    if approval_status != ApprovalStatus::Approved {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Este programa ainda não está disponível para adesão.",
+        ));
+    }
+    if owner_user_id == patient_user_id {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Você já é o responsável por este programa e não ocupa vaga de participante.",
+        ));
+    }
+    if !already_active {
+        if invite_paused {
+            return Err((
+                StatusCode::CONFLICT,
+                "Novas adesões estão temporariamente pausadas pelo responsável do programa.",
+            ));
+        }
+        if active_count >= i64::from(seat_limit) {
+            return Err((
+                StatusCode::CONFLICT,
+                "O programa atingiu o limite de participantes da franquia atual.",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn require_pool(state: &AppState) -> Result<&PgPool, (StatusCode, &'static str)> {
@@ -1264,6 +1352,551 @@ pub async fn admin_review_program_handler(
         .into_response()
 }
 
+// =========================================================================
+// B2B-10 & B2B-11: Vinculo por Codigo, Consentimento Granular & Franquia Atomica
+// =========================================================================
+
+pub async fn join_program_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<JoinProgramRequest>,
+) -> Response {
+    let identity =
+        match authenticate_request(&headers, &state, "POST", "/api/b2b/enrollments/join").await {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+    let code = req.invite_code.trim().to_ascii_uppercase();
+    if !is_valid_invite_code(&code) {
+        return json_error(StatusCode::BAD_REQUEST, "Código do programa inválido.");
+    }
+    let categories = match validate_shared_categories(&req.shared_categories) {
+        Ok(c) => c,
+        Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
+    };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao iniciar transação de adesão.",
+            )
+        }
+    };
+
+    let program_row = match sqlx::query(
+        "SELECT id, owner_user_id, company_name, program_name, primary_color, logo_url, \
+                approval_status, invite_paused, seat_limit \
+           FROM partner_programs \
+          WHERE UPPER(invite_code) = $1 \
+            FOR UPDATE",
+    )
+    .bind(&code)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao consultar programa para adesão.",
+            )
+        }
+    };
+
+    let Some(program_row) = program_row else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "Programa não encontrado para o código informado.",
+        );
+    };
+
+    let prog_uuid: Uuid = program_row.get("id");
+    let owner_user_id: String = program_row.get("owner_user_id");
+    let status_str: String = program_row.get("approval_status");
+    let approval_status = ApprovalStatus::parse(&status_str).unwrap_or(ApprovalStatus::Draft);
+    let invite_paused: bool = program_row.get("invite_paused");
+    let seat_limit: i32 = program_row.get("seat_limit");
+
+    let existing_status: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM program_enrollments WHERE program_id = $1 AND patient_user_id = $2",
+    )
+    .bind(prog_uuid)
+    .bind(&identity.uid)
+    .fetch_optional(&mut *tx)
+    .await
+    .ok()
+    .flatten();
+
+    let already_active = existing_status.as_deref() == Some("ACTIVE");
+
+    let active_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM program_enrollments WHERE program_id = $1 AND status = 'ACTIVE'",
+    )
+    .bind(prog_uuid)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap_or(0);
+
+    if let Err((err_code, err_msg)) = check_enrollment_eligibility(
+        approval_status,
+        invite_paused,
+        &owner_user_id,
+        &identity.uid,
+        already_active,
+        active_count,
+        seat_limit,
+    ) {
+        return json_error(err_code, err_msg);
+    }
+
+    let categories_json = json!(categories);
+    if sqlx::query(
+        "INSERT INTO program_enrollments \
+            (program_id, patient_user_id, status, shared_categories, consented_at, revoked_at, updated_at) \
+         VALUES ($1, $2, 'ACTIVE', $3, NOW(), NULL, NOW()) \
+         ON CONFLICT (program_id, patient_user_id) DO UPDATE \
+            SET status = 'ACTIVE', \
+                shared_categories = EXCLUDED.shared_categories, \
+                consented_at = NOW(), \
+                revoked_at = NULL, \
+                updated_at = NOW()",
+    )
+    .bind(prog_uuid)
+    .bind(&identity.uid)
+    .bind(&categories_json)
+    .execute(&mut *tx)
+    .await
+    .is_err()
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erro ao registrar participação no programa.",
+        );
+    }
+
+    let _ = record_audit(
+        &mut *tx,
+        Some(prog_uuid),
+        &identity.uid,
+        &identity.uid,
+        "ENROLLMENT_JOINED",
+        json!({
+            "sharedCategories": categories,
+            "rejoinedOrUpdated": already_active
+        }),
+    )
+    .await;
+
+    if tx.commit().await.is_err() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erro ao confirmar adesão ao programa.",
+        );
+    }
+
+    let ctx = ContextDescriptor {
+        mode: "PARTNER_PARTICIPANT".to_string(),
+        user_id: identity.uid,
+        program_id: Some(prog_uuid.to_string()),
+        program_name: Some(program_row.get("program_name")),
+        company_name: Some(program_row.get("company_name")),
+        primary_color: Some(program_row.get("primary_color")),
+        logo_url: program_row.get("logo_url"),
+        approval_status: Some(status_str),
+        shared_categories: categories,
+    };
+
+    (StatusCode::OK, Json(json!({ "activeContext": ctx }))).into_response()
+}
+
+pub async fn update_enrollment_consent_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(program_id): Path<String>,
+    Json(req): Json<UpdateConsentRequest>,
+) -> Response {
+    let identity = match authenticate_request(
+        &headers,
+        &state,
+        "POST",
+        "/api/b2b/enrollments/:program_id/consent",
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let prog_uuid = match Uuid::parse_str(program_id.trim()) {
+        Ok(u) => u,
+        Err(_) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Identificador do programa inválido.",
+            )
+        }
+    };
+    let categories = match validate_shared_categories(&req.shared_categories) {
+        Ok(c) => c,
+        Err(msg) => return json_error(StatusCode::BAD_REQUEST, msg),
+    };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let categories_json = json!(categories);
+    let updated = match sqlx::query(
+        "UPDATE program_enrollments e \
+            SET shared_categories = $3, updated_at = NOW() \
+           FROM partner_programs p \
+          WHERE e.program_id = p.id \
+            AND e.program_id = $1 \
+            AND e.patient_user_id = $2 \
+            AND e.status = 'ACTIVE' \
+            AND p.approval_status = 'APPROVED' \
+         RETURNING p.id::text AS id, p.program_name, p.company_name, p.primary_color, \
+                   p.logo_url, p.approval_status",
+    )
+    .bind(prog_uuid)
+    .bind(&identity.uid)
+    .bind(&categories_json)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao atualizar preferências de compartilhamento.",
+            )
+        }
+    };
+
+    let Some(row) = updated else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "Vínculo ativo não encontrado para este programa.",
+        );
+    };
+
+    let _ = record_audit(
+        pool,
+        Some(prog_uuid),
+        &identity.uid,
+        &identity.uid,
+        "CONSENT_UPDATED",
+        json!({ "sharedCategories": categories }),
+    )
+    .await;
+
+    let ctx = ContextDescriptor {
+        mode: "PARTNER_PARTICIPANT".to_string(),
+        user_id: identity.uid,
+        program_id: Some(row.get("id")),
+        program_name: Some(row.get("program_name")),
+        company_name: Some(row.get("company_name")),
+        primary_color: Some(row.get("primary_color")),
+        logo_url: row.get("logo_url"),
+        approval_status: Some(row.get("approval_status")),
+        shared_categories: categories,
+    };
+
+    (StatusCode::OK, Json(json!({ "activeContext": ctx }))).into_response()
+}
+
+pub async fn leave_program_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(program_id): Path<String>,
+) -> Response {
+    let identity = match authenticate_request(
+        &headers,
+        &state,
+        "POST",
+        "/api/b2b/enrollments/:program_id/leave",
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let prog_uuid = match Uuid::parse_str(program_id.trim()) {
+        Ok(u) => u,
+        Err(_) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Identificador do programa inválido.",
+            )
+        }
+    };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let result = match sqlx::query(
+        "UPDATE program_enrollments \
+            SET status = 'REVOKED', \
+                shared_categories = '[]'::jsonb, \
+                revoked_at = NOW(), \
+                updated_at = NOW() \
+          WHERE program_id = $1 AND patient_user_id = $2 AND status = 'ACTIVE'",
+    )
+    .bind(prog_uuid)
+    .bind(&identity.uid)
+    .execute(pool)
+    .await
+    {
+        Ok(res) => res,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao encerrar vínculo com o programa.",
+            )
+        }
+    };
+
+    if result.rows_affected() > 0 {
+        let _ = record_audit(
+            pool,
+            Some(prog_uuid),
+            &identity.uid,
+            &identity.uid,
+            "ENROLLMENT_REVOKED",
+            json!({ "status": "REVOKED" }),
+        )
+        .await;
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({ "activeContext": personal_context(&identity.uid) })),
+    )
+        .into_response()
+}
+
+pub async fn update_invite_policy_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateInvitePolicyRequest>,
+) -> Response {
+    let identity = match authenticate_request(
+        &headers,
+        &state,
+        "POST",
+        "/api/b2b/program/me/invite-policy",
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let updated = match sqlx::query(
+        "UPDATE partner_programs \
+            SET invite_paused = $2, updated_at = NOW() \
+          WHERE owner_user_id = $1 \
+         RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
+                   primary_color, logo_url, approval_status, review_note, invite_code, \
+                   invite_paused, seat_limit",
+    )
+    .bind(&identity.uid)
+    .bind(req.paused)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao atualizar política de convite.",
+            )
+        }
+    };
+
+    let Some(row) = updated else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "Programa parceiro não encontrado para esta conta.",
+        );
+    };
+
+    let id_str: String = row.get("id");
+    let prog_uuid = Uuid::parse_str(&id_str).ok();
+    let active = match prog_uuid {
+        Some(u) => count_active_participants(pool, u).await.unwrap_or(0),
+        None => 0,
+    };
+
+    let audit_action = if req.paused {
+        "INVITE_PAUSED"
+    } else {
+        "INVITE_RESUMED"
+    };
+    let _ = record_audit(
+        pool,
+        prog_uuid,
+        &identity.uid,
+        &identity.uid,
+        audit_action,
+        json!({ "invitePaused": req.paused }),
+    )
+    .await;
+
+    let dto = map_program_row(&row, active, false);
+    (StatusCode::OK, Json(json!({ "program": dto }))).into_response()
+}
+
+pub async fn regenerate_invite_code_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let identity = match authenticate_request(
+        &headers,
+        &state,
+        "POST",
+        "/api/b2b/program/me/invite-code/regenerate",
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao iniciar transação de regeneração de código.",
+            )
+        }
+    };
+
+    let existing = match sqlx::query(
+        "SELECT id, program_name, approval_status, invite_code \
+           FROM partner_programs \
+          WHERE owner_user_id = $1 \
+            FOR UPDATE",
+    )
+    .bind(&identity.uid)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao carregar programa para regenerar código.",
+            )
+        }
+    };
+
+    let Some(existing) = existing else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "Programa parceiro não encontrado para esta conta.",
+        );
+    };
+
+    let status_str: String = existing.get("approval_status");
+    if status_str != "APPROVED" {
+        return json_error(
+            StatusCode::CONFLICT,
+            "O código de convite só pode ser regenerado para programas aprovados.",
+        );
+    }
+
+    let prog_uuid: Uuid = existing.get("id");
+    let program_name: String = existing.get("program_name");
+    let previous_code: Option<String> = existing.get("invite_code");
+    let mut new_code: Option<String> = None;
+
+    for _ in 0..8 {
+        let candidate = generate_invite_code(&program_name);
+        if previous_code.as_deref() == Some(candidate.as_str()) {
+            continue;
+        }
+        let collision: Option<i32> =
+            sqlx::query_scalar("SELECT 1 FROM partner_programs WHERE UPPER(invite_code) = $1")
+                .bind(&candidate)
+                .fetch_optional(&mut *tx)
+                .await
+                .ok()
+                .flatten();
+        if collision.is_none() {
+            new_code = Some(candidate);
+            break;
+        }
+    }
+
+    let Some(new_code) = new_code else {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Não foi possível gerar um novo código de convite único.",
+        );
+    };
+
+    let updated = match sqlx::query(
+        "UPDATE partner_programs \
+            SET invite_code = $2, updated_at = NOW() \
+          WHERE id = $1 \
+         RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
+                   primary_color, logo_url, approval_status, review_note, invite_code, \
+                   invite_paused, seat_limit",
+    )
+    .bind(prog_uuid)
+    .bind(&new_code)
+    .fetch_one(&mut *tx)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao salvar novo código de convite.",
+            )
+        }
+    };
+
+    let _ = record_audit(
+        &mut *tx,
+        Some(prog_uuid),
+        &identity.uid,
+        &identity.uid,
+        "INVITE_CODE_REGENERATED",
+        json!({ "inviteCode": new_code }),
+    )
+    .await;
+
+    if tx.commit().await.is_err() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erro ao confirmar novo código de convite.",
+        );
+    }
+
+    let active = count_active_participants(pool, prog_uuid)
+        .await
+        .unwrap_or(0);
+    let dto = map_program_row(&updated, active, false);
+    (StatusCode::OK, Json(json!({ "program": dto }))).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1340,5 +1973,106 @@ mod tests {
         .unwrap();
         assert_eq!(st_rej, ApprovalStatus::Rejected);
         assert_eq!(act_rej, "PROGRAM_REJECTED");
+    }
+
+    #[test]
+    fn test_validate_shared_categories_whitelist_and_dedup() {
+        assert!(validate_shared_categories(&[]).is_err());
+        assert!(validate_shared_categories(&["unknown_category".to_string()]).is_err());
+
+        let cats = validate_shared_categories(&[
+            " STEPS ".to_string(),
+            "hydration".to_string(),
+            "steps".to_string(),
+            "authorized_records".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(
+            cats,
+            vec![
+                "steps".to_string(),
+                "hydration".to_string(),
+                "authorized_records".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_check_enrollment_eligibility_seat_limit_and_pause() {
+        // Programa nao aprovado
+        let err_unapproved = check_enrollment_eligibility(
+            ApprovalStatus::PendingReview,
+            false,
+            "owner-1",
+            "patient-1",
+            false,
+            0,
+            10,
+        )
+        .unwrap_err();
+        assert_eq!(err_unapproved.0, StatusCode::FORBIDDEN);
+
+        // Responsavel tentando ocupar vaga do proprio programa
+        let err_owner = check_enrollment_eligibility(
+            ApprovalStatus::Approved,
+            false,
+            "owner-1",
+            "owner-1",
+            false,
+            0,
+            10,
+        )
+        .unwrap_err();
+        assert_eq!(err_owner.0, StatusCode::BAD_REQUEST);
+
+        // Convites pausados bloqueiam novo participante
+        let err_paused = check_enrollment_eligibility(
+            ApprovalStatus::Approved,
+            true,
+            "owner-1",
+            "patient-1",
+            false,
+            2,
+            10,
+        )
+        .unwrap_err();
+        assert_eq!(err_paused.0, StatusCode::CONFLICT);
+
+        // Limite de vagas atingido bloqueia novo participante
+        let err_full = check_enrollment_eligibility(
+            ApprovalStatus::Approved,
+            false,
+            "owner-1",
+            "patient-1",
+            false,
+            10,
+            10,
+        )
+        .unwrap_err();
+        assert_eq!(err_full.0, StatusCode::CONFLICT);
+
+        // Participante ja ativo pode reatualizar consentimento mesmo com franquia cheia ou pausada
+        assert!(check_enrollment_eligibility(
+            ApprovalStatus::Approved,
+            true,
+            "owner-1",
+            "patient-1",
+            true,
+            10,
+            10,
+        )
+        .is_ok());
+
+        // Novo participante elegivel com vaga disponivel
+        assert!(check_enrollment_eligibility(
+            ApprovalStatus::Approved,
+            false,
+            "owner-1",
+            "patient-1",
+            false,
+            9,
+            10,
+        )
+        .is_ok());
     }
 }

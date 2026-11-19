@@ -349,7 +349,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         app = app.route("/ws/orb", get(ws_orb_handler));
     }
 
-    // Frente B2B: Motor 100% em Rust (B2B-04, B2B-07, B2B-09+)
+    // Frente B2B: Motor 100% em Rust (B2B-04, B2B-07, B2B-09, B2B-10, B2B-11)
     if state.pool.is_some() {
         app = app
             .route("/api/b2b/contexts", get(b2b::get_contexts_handler))
@@ -367,7 +367,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "/api/b2b/program/me/submit",
                 post(b2b::submit_my_program_handler),
             )
+            .route(
+                "/api/b2b/program/me/invite-policy",
+                post(b2b::update_invite_policy_handler),
+            )
+            .route(
+                "/api/b2b/program/me/invite-code/regenerate",
+                post(b2b::regenerate_invite_code_handler),
+            )
             .route("/api/b2b/invite/:code", get(b2b::lookup_invite_handler))
+            .route("/api/b2b/enrollments/join", post(b2b::join_program_handler))
+            .route(
+                "/api/b2b/enrollments/:program_id/consent",
+                post(b2b::update_enrollment_consent_handler)
+                    .put(b2b::update_enrollment_consent_handler),
+            )
+            .route(
+                "/api/b2b/enrollments/:program_id/leave",
+                post(b2b::leave_program_handler),
+            )
             .route(
                 "/api/admin/b2b/programs",
                 get(b2b::admin_list_programs_handler),
