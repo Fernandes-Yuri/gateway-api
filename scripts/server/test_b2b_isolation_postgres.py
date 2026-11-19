@@ -59,6 +59,14 @@ class B2BStaticGuardsTest(unittest.TestCase):
         self.assertIn("DROP TRIGGER IF EXISTS trg_profiles_b2b_lgpd_cleanup", sql_down)
         self.assertIn("DROP COLUMN IF EXISTS experience_config", sql_down)
 
+        for number in (3, 10, 17, 18, 31, 32, 33, 54, 56, 71, 80, 81, 90, 91):
+            matches = [
+                f
+                for f in (ROOT / "migrations").glob(f"{number:03d}_*.sql")
+                if not f.stem.endswith("_rollback")
+            ]
+            self.assertEqual(len(matches), 1, f"Migration {number:03d} nao encontrada")
+
 
 @unittest.skipUnless(TEST_DSN and asyncpg is not None, "PostgreSQL efemero exclusivo do CI")
 class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
@@ -87,26 +95,14 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(
                     "CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)"
                 )
-                for mig in (
-                    "003_medication_schedules.sql",
-                    "010_medical_access_tokens.sql",
-                    "017_feedbacks.sql",
-                    "018_device_push_tokens_and_audit_schemas.sql",
-                    "031_care_os_prescriptions.sql",
-                    "032_medication_stock_adjustments.sql",
-                    "033_care_audit_trail.sql",
-                    "054_vital_signs_oxygen.sql",
-                    "056_firebase_account_reconciliation.sql",
-                    "071_account_pause_and_mail.sql",
-                    "080_clinical_sync_integrity.sql",
-                    "081_vital_signs_readings_contract.sql",
-                    "090_b2b_partner_programs.sql",
-                    "091_b2b_nocode_experience_builder.sql",
-                ):
+                for number in (3, 10, 17, 18, 31, 32, 33, 54, 56, 71, 80, 81, 90, 91):
+                    mig_file = next(
+                        f
+                        for f in (ROOT / "migrations").glob(f"{number:03d}_*.sql")
+                        if not f.stem.endswith("_rollback")
+                    )
                     async with conn.transaction():
-                        await conn.execute(
-                            (ROOT / "migrations" / mig).read_text(encoding="utf-8-sig")
-                        )
+                        await conn.execute(mig_file.read_text(encoding="utf-8-sig"))
 
                 await conn.execute(
                     """

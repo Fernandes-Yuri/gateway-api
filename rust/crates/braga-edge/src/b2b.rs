@@ -83,6 +83,7 @@ impl TemplateKey {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramModule {
     AssistantChat,
@@ -1236,6 +1237,7 @@ pub fn validate_and_normalize_experience_config(
     })
 }
 
+#[allow(dead_code)]
 pub fn guard_program_module(
     approval_status: ApprovalStatus,
     closed_at_present: bool,
@@ -2100,14 +2102,14 @@ pub async fn update_program_experience_handler(
             .unwrap_or(TemplateKey::ClinicaGeral),
     };
 
-    let candidate_config = if req.apply_template_defaults || req.experience_config.is_none() {
-        default_experience_config_for_template(target_tk)
-    } else {
-        let mut provided = req.experience_config.unwrap();
-        if req.template_key.is_some() {
-            provided.template_key = target_tk.as_str().to_string();
+    let candidate_config = match (req.apply_template_defaults, req.experience_config) {
+        (true, _) | (false, None) => default_experience_config_for_template(target_tk),
+        (false, Some(mut provided)) => {
+            if req.template_key.is_some() {
+                provided.template_key = target_tk.as_str().to_string();
+            }
+            provided
         }
-        provided
     };
 
     let normalized = match validate_and_normalize_experience_config(candidate_config) {
