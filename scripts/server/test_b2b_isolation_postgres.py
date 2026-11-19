@@ -62,7 +62,7 @@ class B2BStaticGuardsTest(unittest.TestCase):
         self.assertIn("DROP TRIGGER IF EXISTS trg_profiles_b2b_lgpd_cleanup", sql_down)
         self.assertIn("DROP COLUMN IF EXISTS experience_config", sql_down)
 
-        for number in (3, 10, 17, 18, 31, 32, 33, 54, 56, 71, 80, 81, 82, 90, 91):
+        for number in (3, 10, 17, 18, 31, 32, 33, 53, 54, 56, 71, 80, 81, 82, 90, 91):
             matches = [
                 f
                 for f in (ROOT / "migrations").glob(f"{number:03d}_*.sql")
@@ -178,7 +178,7 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(
                     "CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)"
                 )
-                for number in (3, 10, 17, 18, 31, 32, 33, 54, 56, 71, 80, 81, 82, 90, 91):
+                for number in (3, 10, 17, 18, 31, 32, 33, 53, 54, 56, 71, 80, 81, 82, 90, 91):
                     mig_file = next(
                         f
                         for f in (ROOT / "migrations").glob(f"{number:03d}_*.sql")
@@ -439,6 +439,85 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 notif_id,
             )
             self.assertEqual(outbox_count, 1)
+
+    async def test_b2b_17_composite_cursor_filters_and_biometrics_query(self):
+        async with self.pool.acquire() as conn:
+            tied_ts = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+            await conn.execute(
+                "INSERT INTO profiles (id, full_name) VALUES ('p-tie-1', 'Ana Tie Um'), ('p-tie-2', 'Bruno Tie Dois')"
+            )
+            await conn.execute(
+                """
+                INSERT INTO program_enrollments
+                    (program_id, patient_user_id, status, shared_categories, consented_at)
+                VALUES
+                    ($1, 'p-tie-1', 'ACTIVE', '["steps","authorized_records"]'::jsonb, $2),
+                    ($1, 'p-tie-2', 'ACTIVE', '["steps"]'::jsonb, $2)
+                """,
+                self.prog_a,
+                tied_ts,
+            )
+            # Valida desempate keyset (consented_at DESC, patient_user_id ASC)
+            page1 = await conn.fetch(
+                """
+                SELECT e.patient_user_id
+                  FROM program_enrollments e
+                  JOIN profiles pr ON pr.id = e.patient_user_id
+                 WHERE e.program_id = $1 AND e.status = 'ACTIVE'
+                   AND ($2::timestamptz IS NULL OR e.consented_at < $2 OR (e.consented_at = $2 AND e.patient_user_id > $3))
+                 ORDER BY e.consented_at DESC, e.patient_user_id ASC
+                 LIMIT 2
+                """,
+                self.prog_a,
+                None,
+                None,
+            )
+            self.assertEqual([r["patient_user_id"] for r in page1], ["patient-1", "p-tie-1"])
+            page2 = await conn.fetch(
+                """
+                SELECT e.patient_user_id
+                  FROM program_enrollments e
+                  JOIN profiles pr ON pr.id = e.patient_user_id
+                 WHERE e.program_id = $1 AND e.status = 'ACTIVE'
+                   AND ($2::timestamptz IS NULL OR e.consented_at < $2 OR (e.consented_at = $2 AND e.patient_user_id > $3))
+                 ORDER BY e.consented_at DESC, e.patient_user_id ASC
+                 LIMIT 2
+                """,
+                self.prog_a,
+                tied_ts,
+                "p-tie-1",
+            )
+            self.assertEqual([r["patient_user_id"] for r in page2], ["p-tie-2"])
+
+            # Filtro por categoria e busca por nome
+            filtered = await conn.fetch(
+                """
+                SELECT e.patient_user_id
+                  FROM program_enrollments e
+                  JOIN profiles pr ON pr.id = e.patient_user_id
+                 WHERE e.program_id = $1 AND e.status = 'ACTIVE'
+                   AND pr.full_name ILIKE $2 ESCAPE '!'
+                   AND e.shared_categories @> $3::jsonb
+                """,
+                self.prog_a,
+                "%Ana%",
+                '["authorized_records"]',
+            )
+            self.assertEqual([r["patient_user_id"] for r in filtered], ["p-tie-1"])
+
+            # Valida leitura real da tabela biometrics
+            await conn.execute(
+                """
+                INSERT INTO biometrics (user_id, weight_kg, height_m, imc, measured_at)
+                VALUES ('p-tie-1', 72.4, 1.75, 23.6, $1)
+                """,
+                tied_ts,
+            )
+            bio_row = await conn.fetchrow(
+                "SELECT weight_kg, height_m, imc FROM biometrics WHERE user_id = 'p-tie-1' ORDER BY measured_at DESC LIMIT 1"
+            )
+            self.assertAlmostEqual(bio_row["weight_kg"], 72.4, places=1)
+            self.assertAlmostEqual(bio_row["imc"], 23.6, places=1)
 
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:
