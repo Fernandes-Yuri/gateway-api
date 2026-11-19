@@ -1,3 +1,5 @@
+mod b2b;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -345,6 +347,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Fase 4: Orb WebSocket Transport
     if args.orb_ws_enabled {
         app = app.route("/ws/orb", get(ws_orb_handler));
+    }
+
+    // Frente B2B: Motor 100% em Rust (B2B-04, B2B-07, B2B-09+)
+    if state.pool.is_some() {
+        app = app
+            .route("/api/b2b/contexts", get(b2b::get_contexts_handler))
+            .route("/api/b2b/contexts/select", post(b2b::select_context_handler))
+            .route(
+                "/api/b2b/program/me",
+                get(b2b::get_my_program_handler)
+                    .put(b2b::save_my_program_handler)
+                    .post(b2b::save_my_program_handler),
+            )
+            .route(
+                "/api/b2b/program/me/submit",
+                post(b2b::submit_my_program_handler),
+            )
+            .route("/api/b2b/invite/:code", get(b2b::lookup_invite_handler))
+            .route(
+                "/api/admin/b2b/programs",
+                get(b2b::admin_list_programs_handler),
+            )
+            .route(
+                "/api/admin/b2b/programs/:program_id/review",
+                post(b2b::admin_review_program_handler),
+            );
     }
 
     let app = app

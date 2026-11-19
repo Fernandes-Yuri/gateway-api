@@ -119,3 +119,95 @@ jobs:
             aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "i-04728dd8094ed0e78" --query "StandardErrorContent" --output text
             exit 1
           fi
+
+  deploy-rust-edge:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Instalar Rust Toolchain estável
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache de dependências Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock', 'rust/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Compilar braga-edge (Release)
+        working-directory: rust
+        run: cargo build --release --bin braga-edge
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      - name: Publicar e instalar braga-edge na EC2 via S3 + SSM (com rollback automático)
+        env:
+          TARGET_COMMIT: ${{ github.sha }}
+        run: |
+          BUCKET="braga-saude-deploy-397759110014"
+          KEY="bin/braga-edge-${TARGET_COMMIT}"
+          aws s3 cp rust/target/release/braga-edge "s3://${BUCKET}/${KEY}"
+          export PRESIGNED_URL
+          PRESIGNED_URL=$(aws s3 presign "s3://${BUCKET}/${KEY}" --expires-in 900)
+
+          python3 - <<PY > /tmp/ssm_rust.json
+          import json, os
+          url = os.environ["PRESIGNED_URL"]
+          script = "\n".join([
+              "set -euo pipefail",
+              "BIN=/usr/local/bin/braga-edge",
+              "TS=$(date +%Y%m%d%H%M%S)",
+              "cp -a \"$BIN\" \"$BIN.bak-$TS\"",
+              f"curl -fsSL --max-time 120 {json.dumps(url)} -o /tmp/braga-edge.new",
+              "SIZE=$(stat -c %s /tmp/braga-edge.new); echo novo_binario_bytes=$SIZE",
+              "[ \"$SIZE\" -gt 1000000 ] || { echo FALHA_TAMANHO; exit 4; }",
+              "install -m 0755 /tmp/braga-edge.new \"$BIN\"",
+              "rm -f /tmp/braga-edge.new",
+              "systemctl restart braga-edge.service",
+              "sleep 3",
+              "if ! systemctl is-active --quiet braga-edge.service || ! curl -sf --max-time 5 http://127.0.0.1:8080/health >/dev/null; then",
+              "  systemctl stop braga-edge.service || true",
+              "  cp -a \"$BIN.bak-$TS\" \"$BIN\"",
+              "  systemctl start braga-edge.service",
+              "  echo ROLLBACK_EXECUTADO",
+              "  exit 6",
+              "fi",
+              "echo DEPLOY_RUST_OK backup=$BIN.bak-$TS",
+          ])
+          print(json.dumps({"commands": [script]}))
+          PY
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "i-04728dd8094ed0e78" \
+            --document-name "AWS-RunShellScript" \
+            --parameters file:///tmp/ssm_rust.json \
+            --timeout-seconds 180 \
+            --query "Command.CommandId" \
+            --output text)
+          rm -f /tmp/ssm_rust.json
+
+          echo "Comando SSM Rust disparado com ID: $COMMAND_ID"
+          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "i-04728dd8094ed0e78" || true
+
+          STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "i-04728dd8094ed0e78" --query "Status" --output text)
+          echo "Status final Rust: $STATUS"
+          aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "i-04728dd8094ed0e78" --query "StandardOutputContent" --output text
+
+          if [ "$STATUS" != "Success" ]; then
+            aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "i-04728dd8094ed0e78" --query "StandardErrorContent" --output text
+            exit 1
+          fi
