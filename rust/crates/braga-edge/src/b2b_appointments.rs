@@ -198,7 +198,7 @@ pub(crate) fn parse_future_utc_timestamp(
     Ok(parsed)
 }
 
-fn map_appointment_row(
+pub(crate) fn map_appointment_row(
     row: &sqlx::postgres::PgRow,
     include_patient_name: bool,
 ) -> ProgramAppointmentDto {

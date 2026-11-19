@@ -371,12 +371,14 @@ pub async fn create_program_reminder_handler(
         }
     };
 
-    let mut push_targets: Vec<(String, bool)> = Vec::new();
+    let mut push_targets: Vec<(String, bool, bool)> = Vec::new();
     let mut target_patient_name: Option<String> = None;
 
     if let Some(ref target_pid) = input.target_patient_id {
         let enroll_row = match sqlx::query(
-            "SELECT e.status, e.shared_categories, e.muted_at, pr.full_name \
+            "SELECT e.status, e.shared_categories, e.muted_at, \
+                    COALESCE(e.family_share_enabled, false) AS family_share_enabled, \
+                    pr.full_name \
                FROM program_enrollments e \
                LEFT JOIN profiles pr ON pr.id = e.patient_user_id \
               WHERE e.program_id = $1 AND e.patient_user_id = $2 \
@@ -441,12 +443,13 @@ pub async fn create_program_reminder_handler(
         }
 
         let muted_at: Option<DateTime<Utc>> = enroll_row.try_get("muted_at").ok().flatten();
+        let fam_share: bool = enroll_row.try_get("family_share_enabled").unwrap_or(false);
         target_patient_name = enroll_row
             .try_get::<Option<String>, _>("full_name")
             .ok()
             .flatten()
             .filter(|s| !s.trim().is_empty());
-        push_targets.push((target_pid.clone(), muted_at.is_none()));
+        push_targets.push((target_pid.clone(), muted_at.is_none(), fam_share));
     } else {
         let batch_today: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) \
@@ -468,7 +471,8 @@ pub async fn create_program_reminder_handler(
 
         let filter_cat_json = input.target_category.as_ref().map(|c| json!([c]));
         let rows = match sqlx::query(
-            "SELECT patient_user_id, muted_at \
+            "SELECT patient_user_id, muted_at, \
+                    COALESCE(family_share_enabled, false) AS family_share_enabled \
                FROM program_enrollments \
               WHERE program_id = $1 \
                 AND status = 'ACTIVE' \
@@ -497,7 +501,8 @@ pub async fn create_program_reminder_handler(
         for row in rows {
             let pid: String = row.get("patient_user_id");
             let muted_at: Option<DateTime<Utc>> = row.try_get("muted_at").ok().flatten();
-            push_targets.push((pid, muted_at.is_none()));
+            let fam_share: bool = row.try_get("family_share_enabled").unwrap_or(false);
+            push_targets.push((pid, muted_at.is_none(), fam_share));
         }
     }
 
@@ -529,7 +534,7 @@ pub async fn create_program_reminder_handler(
     let reminder_id: Uuid = inserted.get("id");
     let created_at: DateTime<Utc> = inserted.get("created_at");
 
-    for (patient_uid, can_push) in &push_targets {
+    for (patient_uid, can_push, fam_share) in &push_targets {
         if *can_push {
             emit_partner_reminder_notification(
                 &mut tx,
@@ -539,6 +544,29 @@ pub async fn create_program_reminder_handler(
                 &identity.uid,
             )
             .await;
+
+            if config.features.family_link_enabled && *fam_share {
+                if let Ok(caregivers) = sqlx::query_scalar::<_, String>(
+                    "SELECT caregiver_id \
+                       FROM family_bindings \
+                      WHERE patient_id = $1 AND status = 'ACTIVE'",
+                )
+                .bind(patient_uid)
+                .fetch_all(&mut *tx)
+                .await
+                {
+                    for caregiver_uid in caregivers {
+                        emit_partner_reminder_notification(
+                            &mut tx,
+                            &caregiver_uid,
+                            patient_uid,
+                            reminder_id,
+                            &identity.uid,
+                        )
+                        .await;
+                    }
+                }
+            }
         }
     }
 
@@ -708,6 +736,25 @@ pub async fn list_owner_reminders_handler(
     (StatusCode::OK, Json(json!({ "reminders": reminders }))).into_response()
 }
 
+pub(crate) fn map_enrollment_reminder_row(row: &sqlx::postgres::PgRow) -> ProgramReminderDto {
+    let created_at: DateTime<Utc> = row.get("created_at");
+    let ack_at: Option<DateTime<Utc>> = row.try_get("acknowledged_at").ok().flatten();
+    ProgramReminderDto {
+        reminder_id: row.get("reminder_id"),
+        program_id: row.get("program_id"),
+        target_patient_id: row.try_get("target_patient_id").ok().flatten(),
+        target_patient_name: None,
+        target_category: row.try_get("target_category").ok().flatten(),
+        reminder_type: row.get("reminder_type"),
+        title: row.get("title"),
+        body: row.get("body"),
+        created_at: created_at.to_rfc3339(),
+        acknowledged_count: if ack_at.is_some() { 1 } else { 0 },
+        acknowledged_at: ack_at.map(|d| d.to_rfc3339()),
+        acknowledged_by_uid: row.try_get("acknowledged_by_uid").ok().flatten(),
+    }
+}
+
 /// Participante lista os lembretes recebidos do programa ativo (`GET /api/b2b/enrollments/:program_id/reminders`).
 pub async fn list_enrollment_reminders_handler(
     State(state): State<Arc<AppState>>,
@@ -837,27 +884,7 @@ pub async fn list_enrollment_reminders_handler(
         }
     };
 
-    let reminders: Vec<ProgramReminderDto> = rows
-        .into_iter()
-        .map(|row| {
-            let created_at: DateTime<Utc> = row.get("created_at");
-            let ack_at: Option<DateTime<Utc>> = row.try_get("acknowledged_at").ok().flatten();
-            ProgramReminderDto {
-                reminder_id: row.get("reminder_id"),
-                program_id: row.get("program_id"),
-                target_patient_id: row.try_get("target_patient_id").ok().flatten(),
-                target_patient_name: None,
-                target_category: row.try_get("target_category").ok().flatten(),
-                reminder_type: row.get("reminder_type"),
-                title: row.get("title"),
-                body: row.get("body"),
-                created_at: created_at.to_rfc3339(),
-                acknowledged_count: if ack_at.is_some() { 1 } else { 0 },
-                acknowledged_at: ack_at.map(|d| d.to_rfc3339()),
-                acknowledged_by_uid: row.try_get("acknowledged_by_uid").ok().flatten(),
-            }
-        })
-        .collect();
+    let reminders: Vec<ProgramReminderDto> = rows.iter().map(map_enrollment_reminder_row).collect();
 
     (
         StatusCode::OK,

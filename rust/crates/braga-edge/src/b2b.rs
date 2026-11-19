@@ -533,6 +533,8 @@ pub struct JoinProgramRequest {
     pub invite_code: String,
     #[serde(default)]
     pub shared_categories: Vec<String>,
+    #[serde(alias = "family_share_enabled")]
+    pub family_share_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3845,13 +3847,15 @@ pub async fn join_program_handler(
     }
 
     let categories_json = json!(categories);
+    let family_share = req.family_share_enabled.unwrap_or(false);
     if sqlx::query(
         "INSERT INTO program_enrollments \
-            (program_id, patient_user_id, status, shared_categories, consented_at, revoked_at, updated_at) \
-         VALUES ($1, $2, 'ACTIVE', $3, NOW(), NULL, NOW()) \
+            (program_id, patient_user_id, status, shared_categories, family_share_enabled, consented_at, revoked_at, updated_at) \
+         VALUES ($1, $2, 'ACTIVE', $3, $4, NOW(), NULL, NOW()) \
          ON CONFLICT (program_id, patient_user_id) DO UPDATE \
             SET status = 'ACTIVE', \
                 shared_categories = EXCLUDED.shared_categories, \
+                family_share_enabled = EXCLUDED.family_share_enabled, \
                 consented_at = NOW(), \
                 revoked_at = NULL, \
                 updated_at = NOW()",
@@ -3859,6 +3863,7 @@ pub async fn join_program_handler(
     .bind(prog_uuid)
     .bind(&identity.uid)
     .bind(&categories_json)
+    .bind(family_share)
     .execute(&mut *tx)
     .await
     .is_err()
@@ -3877,6 +3882,7 @@ pub async fn join_program_handler(
         "ENROLLMENT_JOINED",
         json!({
             "sharedCategories": categories,
+            "familyShareEnabled": family_share,
             "rejoinedOrUpdated": already_active
         }),
     )
@@ -3905,7 +3911,7 @@ pub async fn join_program_handler(
         shared_categories: categories,
         template_key: Some(tk),
         experience_config: Some(cfg),
-        family_share_enabled: false,
+        family_share_enabled: family_share,
     };
 
     (StatusCode::OK, Json(json!({ "activeContext": ctx }))).into_response()

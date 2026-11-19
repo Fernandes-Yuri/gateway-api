@@ -3,6 +3,7 @@ mod b2b_ai_receptionist;
 mod b2b_appointments;
 mod b2b_direct_chat;
 mod b2b_engagement;
+mod b2b_family_link;
 mod b2b_kyb;
 mod b2b_storage;
 
@@ -3351,6 +3352,14 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             post(b2b::leave_program_handler),
         )
         .route(
+            "/api/b2b/family/patients/:patient_id/program-overview",
+            get(b2b_family_link::get_family_program_overview_handler),
+        )
+        .route(
+            "/api/b2b/family/patients/:patient_id/programs/:program_id/reminders/:reminder_id/ack",
+            post(b2b_family_link::acknowledge_family_program_reminder_handler),
+        )
+        .route(
             "/api/admin/b2b/programs",
             get(b2b::admin_list_programs_handler),
         )
@@ -3812,6 +3821,16 @@ mod tests {
             (
                 "POST",
                 "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/leave",
+                Some("{}"),
+            ),
+            (
+                "GET",
+                "/api/b2b/family/patients/patient-1/program-overview",
+                None,
+            ),
+            (
+                "POST",
+                "/api/b2b/family/patients/patient-1/programs/00000000-0000-0000-0000-000000000000/reminders/00000000-0000-0000-0000-000000000001/ack",
                 Some("{}"),
             ),
         ];

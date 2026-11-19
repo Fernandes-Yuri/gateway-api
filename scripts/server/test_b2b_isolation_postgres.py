@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TEST_DSN = os.getenv("TEST_POSTGRES_URL")
 B2B_RUST_PATH = ROOT / "rust/crates/braga-edge/src/b2b.rs"
 B2B_ENGAGEMENT_RUST_PATH = ROOT / "rust/crates/braga-edge/src/b2b_engagement.rs"
+B2B_FAMILY_LINK_RUST_PATH = ROOT / "rust/crates/braga-edge/src/b2b_family_link.rs"
 B2B_KYB_RUST_PATH = ROOT / "rust/crates/braga-edge/src/b2b_kyb.rs"
 MIG_091_PATH = ROOT / "migrations/091_b2b_nocode_experience_builder.sql"
 MIG_091_ROLLBACK_PATH = ROOT / "migrations/091_b2b_nocode_experience_builder_rollback.sql"
@@ -65,6 +66,18 @@ class B2BStaticGuardsTest(unittest.TestCase):
                 re.IGNORECASE,
             ),
             "Modulo de engajamento B2B nunca pode escrever em medications, consultations ou family_messages.",
+        )
+
+        fam_src = B2B_FAMILY_LINK_RUST_PATH.read_text(encoding="utf-8")
+        self.assertIn("require_family_access", fam_src)
+        self.assertIn("is_family_link_authorized", fam_src)
+        self.assertIsNone(
+            re.search(
+                r"\bFROM\s+(program_direct_messages|program_direct_threads|family_messages|exams|exam_items|symptoms_diary)\b",
+                fam_src,
+                re.IGNORECASE,
+            ),
+            "Visao familiar B2B-21 nunca pode expor chat 1:1 B2B nem chat/exames pessoais.",
         )
 
     def test_migration_092_is_additive_reversible_and_isolated(self):
@@ -991,6 +1004,193 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 self.prog_a,
             )
             self.assertEqual(mode_after_req, "WAITING_HUMAN")
+
+    async def test_b2b_21_family_link_double_key_and_caregiver_ack(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO profiles (id, full_name) VALUES
+                    ('caregiver-1', 'Cuidadora Maria'),
+                    ('stranger-1', 'Estranho Sem Vinculo')
+                ON CONFLICT DO NOTHING
+                """
+            )
+            await conn.execute(
+                """
+                INSERT INTO family_bindings
+                    (patient_id, caregiver_id, caregiver_name, caregiver_relation, connection_code, status, expires_at)
+                VALUES
+                    ('patient-1', 'caregiver-1', 'Cuidadora Maria', 'Filha', 'FAMB2101', 'ACTIVE', NOW() + interval '7 days'),
+                    ('patient-2', 'caregiver-1', 'Cuidadora Maria', 'Filha', 'FAMB2102', 'ACTIVE', NOW() + interval '7 days')
+                """
+            )
+
+            # 1. Trava dupla: prog_a tem family_link_enabled=false por padrao enquanto patient-1 tem family_share_enabled=true.
+            rem_id = await conn.fetchval(
+                """
+                INSERT INTO program_reminders
+                    (program_id, target_patient_id, target_category, reminder_type, title, body, created_by)
+                VALUES
+                    ($1, 'patient-1', 'steps', 'ROUTINE', 'Caminhada leve', 'Registre seus passos de hoje', 'owner-a')
+                RETURNING id
+                """,
+                self.prog_a,
+            )
+
+            suppressed = await conn.fetchval(
+                """
+                SELECT notification_emit(
+                    'caregiver-1',
+                    $1,
+                    $2,
+                    'PARTNER_REMINDER',
+                    'CARE',
+                    'b2b_reminder',
+                    $3,
+                    'patient-1',
+                    'owner-a',
+                    NOW(),
+                    NOW() + interval '7 days',
+                    '{}'::jsonb,
+                    true
+                )
+                """,
+                f"b2b_reminder:{rem_id}:caregiver-1:off",
+                f"b2b_reminder:{rem_id}",
+                str(rem_id),
+            )
+            self.assertIsNone(suppressed)
+
+            # 2. Habilita chave do programa (family_link_enabled = true): dupla-chave fecha para patient-1 (family_share=true)
+            #    mas continua fechada para patient-2 (family_share=false).
+            await conn.execute(
+                """
+                UPDATE partner_programs
+                   SET experience_config = jsonb_set(experience_config, '{features,family_link_enabled}', 'true'::jsonb)
+                 WHERE id = $1
+                """,
+                self.prog_a,
+            )
+            await conn.execute(
+                """
+                UPDATE partner_programs
+                   SET experience_config = jsonb_set(experience_config, '{features,family_link_enabled}', 'true'::jsonb)
+                 WHERE id = $1
+                """,
+                self.prog_b,
+            )
+
+            delivered = await conn.fetchval(
+                """
+                SELECT notification_emit(
+                    'caregiver-1',
+                    $1,
+                    $2,
+                    'PARTNER_REMINDER',
+                    'CARE',
+                    'b2b_reminder',
+                    $3,
+                    'patient-1',
+                    'owner-a',
+                    NOW(),
+                    NOW() + interval '7 days',
+                    '{}'::jsonb,
+                    true
+                )
+                """,
+                f"b2b_reminder:{rem_id}:caregiver-1:on",
+                f"b2b_reminder:{rem_id}",
+                str(rem_id),
+            )
+            self.assertIsNotNone(delivered)
+
+            rem_b = await conn.fetchval(
+                """
+                INSERT INTO program_reminders
+                    (program_id, target_patient_id, reminder_type, title, body, created_by)
+                VALUES
+                    ($1, 'patient-2', 'ROUTINE', 'Aviso B', 'Checklist diario', 'owner-b')
+                RETURNING id
+                """,
+                self.prog_b,
+            )
+            blocked_patient2 = await conn.fetchval(
+                """
+                SELECT notification_emit(
+                    'caregiver-1',
+                    $1,
+                    $2,
+                    'PARTNER_REMINDER',
+                    'CARE',
+                    'b2b_reminder',
+                    $3,
+                    'patient-2',
+                    'owner-b',
+                    NOW(),
+                    NOW() + interval '7 days',
+                    '{}'::jsonb,
+                    true
+                )
+                """,
+                f"b2b_reminder:{rem_b}:caregiver-1",
+                f"b2b_reminder:{rem_b}",
+                str(rem_b),
+            )
+            self.assertIsNone(blocked_patient2)
+
+            blocked_stranger = await conn.fetchval(
+                """
+                SELECT notification_emit(
+                    'stranger-1',
+                    $1,
+                    $2,
+                    'PARTNER_REMINDER',
+                    'CARE',
+                    'b2b_reminder',
+                    $3,
+                    'patient-1',
+                    'owner-a',
+                    NOW(),
+                    NOW() + interval '7 days',
+                    '{}'::jsonb,
+                    true
+                )
+                """,
+                f"b2b_reminder:{rem_id}:stranger-1",
+                f"b2b_reminder:{rem_id}",
+                str(rem_id),
+            )
+            self.assertIsNone(blocked_stranger)
+
+            # 3. Cuidador confirma leitura gravando acknowledged_by_uid = 'caregiver-1'
+            ack_by = await conn.fetchval(
+                """
+                INSERT INTO program_reminder_receipts (reminder_id, patient_user_id, acknowledged_by_uid)
+                VALUES ($1, 'patient-1', 'caregiver-1')
+                ON CONFLICT (reminder_id, patient_user_id) DO UPDATE
+                   SET acknowledged_by_uid = COALESCE(program_reminder_receipts.acknowledged_by_uid, EXCLUDED.acknowledged_by_uid)
+                RETURNING acknowledged_by_uid
+                """,
+                rem_id,
+            )
+            self.assertEqual(ack_by, "caregiver-1")
+
+            # 4. Visao do overview por SQL reflete dupla-chave e exclui patient-2
+            visible_progs = await conn.fetch(
+                """
+                SELECT e.program_id, e.patient_user_id
+                  FROM program_enrollments e
+                  JOIN partner_programs pr ON pr.id = e.program_id
+                  JOIN family_bindings fb
+                    ON fb.patient_id = e.patient_user_id
+                   AND fb.caregiver_id = 'caregiver-1'
+                   AND fb.status = 'ACTIVE'
+                 WHERE e.status = 'ACTIVE'
+                   AND COALESCE(e.family_share_enabled, false) = true
+                   AND COALESCE((pr.experience_config->'features'->>'family_link_enabled')::boolean, false) = true
+                """
+            )
+            self.assertEqual([(r["program_id"], r["patient_user_id"]) for r in visible_progs], [(self.prog_a, "patient-1")])
 
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:
