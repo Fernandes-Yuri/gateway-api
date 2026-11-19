@@ -4424,6 +4424,13 @@ pub async fn list_program_participants_handler(
                        AND pa.patient_user_id = e.patient_user_id \
                        AND pa.status = 'PENDING' \
                 ) AS pending_appointments_count, \
+                ( \
+                    SELECT COUNT(*) FROM program_direct_messages dm \
+                     WHERE dm.program_id = e.program_id \
+                       AND dm.patient_user_id = e.patient_user_id \
+                       AND dm.sender_role = 'PATIENT' \
+                       AND dm.read_at IS NULL \
+                ) AS unread_direct_messages_count, \
                 e.consented_at \
            FROM program_enrollments e \
            JOIN profiles pr ON pr.id = e.patient_user_id \
@@ -4452,9 +4459,27 @@ pub async fn list_program_participants_handler(
                            AND pa.status = 'PENDING' \
                     ) \
                 ) \
+                OR ( \
+                    $9::boolean \
+                    AND ( \
+                        EXISTS ( \
+                            SELECT 1 FROM program_direct_messages dm \
+                             WHERE dm.program_id = e.program_id \
+                               AND dm.patient_user_id = e.patient_user_id \
+                               AND dm.sender_role = 'PATIENT' \
+                               AND dm.read_at IS NULL \
+                        ) \
+                        OR EXISTS ( \
+                            SELECT 1 FROM program_direct_threads dt \
+                             WHERE dt.program_id = e.program_id \
+                               AND dt.patient_user_id = e.patient_user_id \
+                               AND dt.handling_mode = 'WAITING_HUMAN' \
+                        ) \
+                    ) \
+                ) \
             ) \
           ORDER BY e.consented_at DESC, e.patient_user_id ASC \
-          LIMIT $9",
+          LIMIT $10",
     )
     .bind(prog_uuid)
     .bind(cursor_dt)
@@ -4464,6 +4489,7 @@ pub async fn list_program_participants_handler(
     .bind(attention_only)
     .bind(&program_config.enabled_metrics)
     .bind(program_config.features.appointments_enabled)
+    .bind(program_config.features.direct_partner_chat_enabled)
     .bind(fetch_limit)
     .fetch_all(pool)
     .await
@@ -4514,6 +4540,13 @@ pub async fn list_program_participants_handler(
             0
         };
 
+        let raw_unread_dms: i64 = row.try_get("unread_direct_messages_count").unwrap_or(0);
+        let unread_direct_messages_count = if program_config.features.direct_partner_chat_enabled {
+            raw_unread_dms
+        } else {
+            0
+        };
+
         participants.push(PartnerParticipantItemDto {
             patient_user_id: patient_uid,
             display_name: row.get("display_name"),
@@ -4523,7 +4556,7 @@ pub async fn list_program_participants_handler(
             family_support_active,
             family_support_summary,
             pending_appointments_count,
-            unread_direct_messages_count: 0,
+            unread_direct_messages_count,
             consented_at: consented_iso,
         });
     }

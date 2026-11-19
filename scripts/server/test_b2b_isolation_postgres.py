@@ -803,6 +803,90 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(personal_count, 1)
 
+    async def test_b2b_20_direct_chat_isolation_read_at_and_no_family_leak(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO program_direct_threads (program_id, patient_user_id, handling_mode)
+                VALUES ($1, 'patient-1', 'AI_ACTIVE')
+                """,
+                self.prog_a,
+            )
+            msg_patient = await conn.fetchval(
+                """
+                INSERT INTO program_direct_messages
+                    (program_id, patient_user_id, sender_user_id, sender_role, body)
+                VALUES ($1, 'patient-1', 'patient-1', 'PATIENT', 'Posso remarcar para sexta?')
+                RETURNING id
+                """,
+                self.prog_a,
+            )
+            msg_partner = await conn.fetchval(
+                """
+                INSERT INTO program_direct_messages
+                    (program_id, patient_user_id, sender_user_id, sender_role, body)
+                VALUES ($1, 'patient-1', 'owner-a', 'PARTNER', 'Claro, confirmamos sexta às 14h.')
+                RETURNING id
+                """,
+                self.prog_a,
+            )
+            self.assertIsNotNone(msg_patient)
+            self.assertIsNotNone(msg_partner)
+
+            unread_before = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM program_direct_messages
+                 WHERE program_id = $1
+                   AND patient_user_id = 'patient-1'
+                   AND sender_role = 'PATIENT'
+                   AND read_at IS NULL
+                """,
+                self.prog_a,
+            )
+            self.assertEqual(unread_before, 1)
+
+            await conn.execute(
+                """
+                UPDATE program_direct_messages
+                   SET read_at = NOW()
+                 WHERE program_id = $1
+                   AND patient_user_id = 'patient-1'
+                   AND sender_role = 'PATIENT'
+                   AND read_at IS NULL
+                """,
+                self.prog_a,
+            )
+            unread_after = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM program_direct_messages
+                 WHERE program_id = $1
+                   AND patient_user_id = 'patient-1'
+                   AND sender_role = 'PATIENT'
+                   AND read_at IS NULL
+                """,
+                self.prog_a,
+            )
+            self.assertEqual(unread_after, 0)
+
+            # Chat direto B2B nunca escreve em family_messages
+            family_msg_count = await conn.fetchval("SELECT COUNT(*) FROM family_messages")
+            self.assertEqual(family_msg_count, 0)
+
+            # Push FCM PARTNER_DIRECT_MESSAGE funciona para dono e participante (sem PHI)
+            notif_owner = await conn.fetchval(
+                """
+                SELECT notification_emit(
+                    'owner-a', $1, $2, 'PARTNER_DIRECT_MESSAGE', 'CARE',
+                    'b2b_direct_thread', $3, 'patient-1', 'patient-1',
+                    NOW(), NOW() + interval '14 days', '{}'::jsonb, true
+                )
+                """,
+                f"b2b_dm:{msg_patient}:owner-a",
+                f"b2b_dm_thread:{self.prog_a}:patient-1",
+                str(self.prog_a),
+            )
+            self.assertIsNotNone(notif_owner)
+
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:
             await conn.execute(

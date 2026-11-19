@@ -1,5 +1,6 @@
 mod b2b;
 mod b2b_appointments;
+mod b2b_direct_chat;
 mod b2b_engagement;
 mod b2b_kyb;
 mod b2b_storage;
@@ -3286,6 +3287,15 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             "/api/b2b/program/me/appointments/:appointment_id",
             patch(b2b_appointments::update_owner_appointment_handler),
         )
+        .route(
+            "/api/b2b/program/me/participants/:patient_id/messages",
+            get(b2b_direct_chat::list_owner_direct_messages_handler)
+                .post(b2b_direct_chat::send_owner_direct_message_handler),
+        )
+        .route(
+            "/api/b2b/program/me/participants/:patient_id/messages/read",
+            post(b2b_direct_chat::mark_owner_direct_messages_read_handler),
+        )
         .route("/api/b2b/invite/:code", get(b2b::lookup_invite_handler))
         .route("/api/b2b/enrollments/join", post(b2b::join_program_handler))
         .route(
@@ -3317,6 +3327,15 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
         .route(
             "/api/b2b/enrollments/:program_id/appointments/:appointment_id/cancel",
             post(b2b_appointments::cancel_enrollment_appointment_handler),
+        )
+        .route(
+            "/api/b2b/enrollments/:program_id/messages",
+            get(b2b_direct_chat::list_enrollment_direct_messages_handler)
+                .post(b2b_direct_chat::send_enrollment_direct_message_handler),
+        )
+        .route(
+            "/api/b2b/enrollments/:program_id/messages/read",
+            post(b2b_direct_chat::mark_enrollment_direct_messages_read_handler),
         )
         .route(
             "/api/b2b/enrollments/:program_id/leave",
@@ -3395,6 +3414,10 @@ mod tests {
 
         // Rotas de outros domínios, consultas médicas e canais aposentados
         assert!(!is_go_chat_route("/api/consultation/create"));
+        assert!(!is_go_chat_route("/api/b2b/enrollments/prog-1/messages"));
+        assert!(!is_go_chat_route(
+            "/api/b2b/program/me/participants/patient-1/messages"
+        ));
         assert!(!is_go_chat_route("/api/catalog/search"));
         assert!(!is_go_chat_route("/api/whatsapp"));
         assert!(!is_go_chat_route("/api/catalog/nutrition"));
@@ -3732,6 +3755,36 @@ mod tests {
             (
                 "POST",
                 "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/appointments/00000000-0000-0000-0000-000000000001/cancel",
+                Some("{}"),
+            ),
+            (
+                "GET",
+                "/api/b2b/program/me/participants/patient-1/messages",
+                None,
+            ),
+            (
+                "POST",
+                "/api/b2b/program/me/participants/patient-1/messages",
+                Some("{\"body\":\"Ola\"}"),
+            ),
+            (
+                "POST",
+                "/api/b2b/program/me/participants/patient-1/messages/read",
+                Some("{}"),
+            ),
+            (
+                "GET",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/messages",
+                None,
+            ),
+            (
+                "POST",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/messages",
+                Some("{\"body\":\"Bom dia\"}"),
+            ),
+            (
+                "POST",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/messages/read",
                 Some("{}"),
             ),
             (
