@@ -9,6 +9,7 @@ User=ec2-user
 WorkingDirectory=/home/ec2-user/braga-gateway
 EnvironmentFile=-/run/braga-saude/gateway.env
 EnvironmentFile=-/etc/braga-saude/gateway.env
+EnvironmentFile=-/etc/braga-saude/r2-backup.env
 Environment=HOST=0.0.0.0
 Environment=PORT=8080
 Environment=BACKEND_SOCK=/run/braga-saude/backend.sock

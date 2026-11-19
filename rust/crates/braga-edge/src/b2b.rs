@@ -10,8 +10,11 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    extract::{FromRequest, Multipart, Path, Query, Request, State},
+    http::{
+        header::{CACHE_CONTROL, CONTENT_TYPE},
+        HeaderMap, HeaderName, StatusCode,
+    },
     response::{IntoResponse, Response},
     Json,
 };
@@ -19,8 +22,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
+use tracing::warn;
 use uuid::Uuid;
 
+use crate::b2b_storage::{
+    extract_logo_key_from_url, resolve_b2b_file_signing_secret, sanitize_logo_image_to_png,
+    validate_logo_filename, verify_b2b_file_signature, B2BObjectStorage, B2B_LOGO_STORAGE_PREFIX,
+    MAX_LOGO_BYTES,
+};
 use crate::{authenticate_request, AppState};
 
 pub const DEFAULT_PRIMARY_COLOR: &str = "#1A6B5C";
@@ -3868,6 +3877,362 @@ pub async fn remove_program_participant_handler(
         .into_response()
 }
 
+// =========================================================================
+// B2B-16B: Upload sanitizado de logo (S3 / Cloudflare R2) e entrega protegida
+// =========================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct SignedFileQuery {
+    pub exp: Option<i64>,
+    pub sig: Option<String>,
+}
+
+fn resolve_public_api_base_url() -> String {
+    if let Ok(val) = std::env::var("PUBLIC_API_BASE_URL") {
+        let trimmed = val.trim().trim_end_matches('/');
+        if trimmed.starts_with("https://") && trimmed.len() <= 256 {
+            return trimmed.to_string();
+        }
+    }
+    "https://api.bragasaude.online".to_string()
+}
+
+fn build_b2b_logo_url(program_id: Uuid, file_name: &str) -> String {
+    format!(
+        "{}/api/files/{}/{}/{}",
+        resolve_public_api_base_url(),
+        B2B_LOGO_STORAGE_PREFIX,
+        program_id,
+        file_name
+    )
+}
+
+async fn read_uploaded_logo_bytes(
+    mut multipart: Multipart,
+) -> Result<Vec<u8>, (StatusCode, &'static str)> {
+    while let Some(mut field) = multipart.next_field().await.map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Envie a imagem em formato multipart/form-data válido.",
+        )
+    })? {
+        let field_name = field.name().unwrap_or("");
+        if !field_name.is_empty() && field_name != "file" && field_name != "logo" {
+            continue;
+        }
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = field.chunk().await.map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "Falha ao ler os dados da imagem enviada.",
+            )
+        })? {
+            if buf.len().saturating_add(chunk.len()) > MAX_LOGO_BYTES {
+                return Err((
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "A logo deve ter no máximo 2 MB.",
+                ));
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        if !buf.is_empty() {
+            return Ok(buf);
+        }
+    }
+
+    Err((
+        StatusCode::BAD_REQUEST,
+        "Arquivo da logo ausente (use o campo file ou logo).",
+    ))
+}
+
+pub async fn upload_my_program_logo_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    request: Request,
+) -> Response {
+    let identity =
+        match authenticate_request(&headers, &state, "POST", "/api/b2b/program/me/logo").await {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let existing_row = match sqlx::query(
+        "SELECT id::text AS id, logo_url \
+           FROM partner_programs \
+          WHERE owner_user_id = $1 AND closed_at IS NULL",
+    )
+    .bind(&identity.uid)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                "Salve o rascunho do programa antes de enviar a logo.",
+            )
+        }
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao consultar programa para envio da logo.",
+            )
+        }
+    };
+
+    let program_id_str: String = existing_row.get("id");
+    let Ok(program_uuid) = Uuid::parse_str(&program_id_str) else {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Programa inválido.");
+    };
+    let old_logo_url: Option<String> = existing_row.try_get("logo_url").ok().flatten();
+
+    let multipart = match Multipart::from_request(request, &state).await {
+        Ok(mp) => mp,
+        Err(_) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Envie a imagem em formato multipart/form-data (campo file).",
+            )
+        }
+    };
+
+    let raw_bytes = match read_uploaded_logo_bytes(multipart).await {
+        Ok(b) => b,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let png_bytes =
+        match tokio::task::spawn_blocking(move || sanitize_logo_image_to_png(&raw_bytes)).await {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err((code, msg))) => return json_error(code, msg),
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Erro interno ao processar a imagem da logo.",
+                )
+            }
+        };
+
+    let storage = match B2BObjectStorage::from_env() {
+        Ok(st) => st,
+        Err(err_msg) => {
+            warn!("Storage B2B indisponível no upload de logo: {err_msg}");
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Armazenamento de mídia indisponível no momento.",
+            );
+        }
+    };
+
+    let file_name = format!("logo-{}.png", Uuid::new_v4().simple());
+    let storage_key = format!("{B2B_LOGO_STORAGE_PREFIX}/{program_uuid}/{file_name}");
+    if let Err(err_msg) = storage
+        .put_object(&storage_key, "image/png", &png_bytes)
+        .await
+    {
+        warn!("Falha ao gravar logo B2B no bucket: {err_msg}");
+        return json_error(
+            StatusCode::BAD_GATEWAY,
+            "Não foi possível armazenar a logo no repositório seguro.",
+        );
+    }
+
+    let logo_url = build_b2b_logo_url(program_uuid, &file_name);
+    let updated_row = match sqlx::query(
+        "UPDATE partner_programs \
+            SET logo_url = $2, updated_at = NOW() \
+          WHERE id = $1 AND owner_user_id = $3 AND closed_at IS NULL \
+         RETURNING id::text AS id, owner_user_id, company_name, program_name, cnpj, \
+                   primary_color, logo_url, approval_status, review_note, invite_code, \
+                   invite_paused, seat_limit, template_key, experience_config, closed_at",
+    )
+    .bind(program_uuid)
+    .bind(&logo_url)
+    .bind(&identity.uid)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) | Err(_) => {
+            let _ = storage.delete_object(&storage_key).await;
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao atualizar a URL da logo do programa.",
+            );
+        }
+    };
+
+    if let Some(prev_url) = old_logo_url {
+        if let Some(prev_key) = extract_logo_key_from_url(&prev_url, program_uuid) {
+            if prev_key != storage_key {
+                let _ = storage.delete_object(&prev_key).await;
+            }
+        }
+    }
+
+    let _ = record_audit(
+        pool,
+        Some(program_uuid),
+        &identity.uid,
+        &identity.uid,
+        "LOGO_UPDATED",
+        json!({
+            "file": file_name,
+            "bytes": png_bytes.len(),
+        }),
+    )
+    .await;
+
+    let active = count_active_participants(pool, program_uuid)
+        .await
+        .unwrap_or(0);
+    let dto = map_program_row(&updated_row, active, false);
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "logoUrl": logo_url,
+            "program": dto
+        })),
+    )
+        .into_response()
+}
+
+pub async fn get_b2b_logo_file_handler(
+    State(state): State<Arc<AppState>>,
+    Path((raw_program_id, raw_file)): Path<(String, String)>,
+    Query(query): Query<SignedFileQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let request_path = format!("/api/files/b2b-logos/{raw_program_id}/{raw_file}");
+    let has_auth_header = headers.contains_key(axum::http::header::AUTHORIZATION);
+    let has_signed_query = query.exp.is_some() && query.sig.is_some();
+
+    if has_auth_header {
+        if let Err(resp) = authenticate_request(&headers, &state, "GET", &request_path).await {
+            return resp;
+        }
+    } else if has_signed_query {
+        let Ok(pid) = Uuid::parse_str(raw_program_id.trim()) else {
+            return json_error(StatusCode::UNAUTHORIZED, "Assinatura de logo inválida.");
+        };
+        let (Some(exp), Some(sig)) = (query.exp, query.sig.as_deref()) else {
+            return json_error(StatusCode::UNAUTHORIZED, "Assinatura de logo incompleta.");
+        };
+        let Some(secret) = resolve_b2b_file_signing_secret() else {
+            return json_error(
+                StatusCode::UNAUTHORIZED,
+                "Autenticação obrigatória para acessar a logo.",
+            );
+        };
+        if validate_logo_filename(&raw_file).is_err()
+            || !verify_b2b_file_signature(
+                pid,
+                raw_file.trim(),
+                exp,
+                sig,
+                &secret,
+                Utc::now().timestamp(),
+            )
+        {
+            return json_error(
+                StatusCode::UNAUTHORIZED,
+                "Link assinado da logo inválido ou expirado.",
+            );
+        }
+    } else {
+        return json_error(
+            StatusCode::UNAUTHORIZED,
+            "Autenticação ou assinatura obrigatória para acessar a logo.",
+        );
+    }
+
+    let Ok(program_uuid) = Uuid::parse_str(raw_program_id.trim()) else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Identificador do programa inválido.",
+        );
+    };
+    let content_type = match validate_logo_filename(&raw_file) {
+        Ok(ct) => ct,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let expected_key = format!(
+        "{}/{}/{}",
+        B2B_LOGO_STORAGE_PREFIX,
+        program_uuid,
+        raw_file.trim()
+    );
+    let active_logo_url: Option<String> = match sqlx::query_scalar(
+        "SELECT logo_url FROM partner_programs WHERE id = $1 AND closed_at IS NULL",
+    )
+    .bind(program_uuid)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(url)) => url,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Logo não encontrada."),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao validar referência da logo.",
+            )
+        }
+    };
+
+    let matches_program_logo = active_logo_url
+        .as_deref()
+        .and_then(|url| extract_logo_key_from_url(url, program_uuid))
+        .is_some_and(|key| key == expected_key);
+    if !matches_program_logo {
+        return json_error(StatusCode::NOT_FOUND, "Logo não encontrada.");
+    }
+
+    let storage = match B2BObjectStorage::from_env() {
+        Ok(st) => st,
+        Err(_) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Armazenamento de mídia indisponível.",
+            )
+        }
+    };
+
+    let bytes = match storage.get_object(&expected_key).await {
+        Ok(Some(data)) => data,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Arquivo de logo não encontrado."),
+        Err(err_msg) => {
+            warn!("Falha ao baixar logo B2B do storage: {err_msg}");
+            return json_error(
+                StatusCode::BAD_GATEWAY,
+                "Erro ao recuperar logo do repositório de mídia.",
+            );
+        }
+    };
+
+    (
+        StatusCode::OK,
+        [
+            (CONTENT_TYPE, content_type),
+            (HeaderName::from_static("x-content-type-options"), "nosniff"),
+            (CACHE_CONTROL, "private, max-age=3600"),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4322,5 +4687,27 @@ mod tests {
             Some("98.765.432/0001-10"),
         )
         .is_ok());
+    }
+
+    #[test]
+    fn test_b2b_logo_url_and_key_extraction() {
+        let pid = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let url = build_b2b_logo_url(pid, "logo-abcd1234.png");
+        assert!(url.starts_with("https://"));
+        assert!(url.ends_with(
+            "/api/files/b2b-logos/11111111-1111-1111-1111-111111111111/logo-abcd1234.png"
+        ));
+        assert!(normalize_logo_url(Some(&url)).is_ok());
+
+        let extracted =
+            extract_logo_key_from_url(&format!("{url}?exp=1700000000&sig=deadbeef"), pid);
+        assert_eq!(
+            extracted.as_deref(),
+            Some("b2b-logos/11111111-1111-1111-1111-111111111111/logo-abcd1234.png")
+        );
+
+        let other_pid = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+        assert!(extract_logo_key_from_url(&url, other_pid).is_none());
+        assert!(extract_logo_key_from_url("https://example.com/logo.png", pid).is_none());
     }
 }

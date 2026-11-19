@@ -9,7 +9,7 @@ braga-crypto = { path = "../braga-crypto" }
 braga-identity = { path = "../braga-identity" }
 braga-limiter = { path = "../braga-limiter" }
 tokio = { version = "1.40", features = ["full"] }
-axum = { version = "0.7", features = ["ws", "macros"] }
+axum = { version = "0.7", features = ["ws", "macros", "multipart"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "trace", "set-header"] }
 hyper = { version = "1.4", features = ["full"] }
@@ -24,3 +24,9 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.10", features = ["serde", "v4", "v5"] }
 moka = { version = "0.12", features = ["future"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+subtle = "2.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
