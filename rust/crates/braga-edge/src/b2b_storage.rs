@@ -22,9 +22,13 @@ use uuid::Uuid;
 type HmacSha256 = Hmac<Sha256>;
 
 pub const MAX_LOGO_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_KYB_PROOF_BYTES: usize = 5 * 1024 * 1024;
 pub const B2B_LOGO_STORAGE_PREFIX: &str = "b2b-logos";
+pub const B2B_KYB_STORAGE_PREFIX: &str = "b2b-kyb";
 const MAX_IMAGE_DIMENSION: u32 = 4096;
+const MAX_PROOF_IMAGE_DIMENSION: u32 = 6000;
 const LOGO_TARGET_DIMENSION: u32 = 512;
+const PROOF_IMAGE_TARGET_DIMENSION: u32 = 1600;
 const MAX_DECODE_ALLOC_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SIGNED_URL_TTL_SECS: i64 = 30 * 86400;
 const EMPTY_PAYLOAD_SHA256: &str =
@@ -43,17 +47,20 @@ fn http_client() -> &'static Client {
     })
 }
 
-pub fn detect_allowed_image_format(raw: &[u8]) -> Result<ImageFormat, (StatusCode, &'static str)> {
+pub fn detect_allowed_image_format(
+    raw: &[u8],
+    max_bytes: usize,
+) -> Result<ImageFormat, (StatusCode, &'static str)> {
     if raw.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             "Envie um arquivo de imagem válido.",
         ));
     }
-    if raw.len() > MAX_LOGO_BYTES {
+    if raw.len() > max_bytes {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
-            "A logo deve ter no máximo 2 MB.",
+            "O arquivo excede o tamanho máximo permitido.",
         ));
     }
 
@@ -87,15 +94,18 @@ pub fn detect_allowed_image_format(raw: &[u8]) -> Result<ImageFormat, (StatusCod
     ))
 }
 
-/// Decodifica apenas PNG/JPEG/WebP dentro dos limites seguros de RAM e re-encoda para PNG limpo,
-/// eliminando blocos EXIF, GPS, XMP e payloads embutidos.
-pub fn sanitize_logo_image_to_png(raw: &[u8]) -> Result<Vec<u8>, (StatusCode, &'static str)> {
-    let format = detect_allowed_image_format(raw)?;
+fn sanitize_image_to_png_with_bounds(
+    raw: &[u8],
+    max_upload_bytes: usize,
+    max_dimension: u32,
+    target_dimension: u32,
+) -> Result<Vec<u8>, (StatusCode, &'static str)> {
+    let format = detect_allowed_image_format(raw, max_upload_bytes)?;
 
     let mut reader = ImageReader::with_format(Cursor::new(raw), format);
     let mut limits = Limits::default();
-    limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
-    limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
+    limits.max_image_width = Some(max_dimension);
+    limits.max_image_height = Some(max_dimension);
     limits.max_alloc = Some(MAX_DECODE_ALLOC_BYTES);
     reader.limits(limits);
 
@@ -106,16 +116,11 @@ pub fn sanitize_logo_image_to_png(raw: &[u8]) -> Result<Vec<u8>, (StatusCode, &'
         )
     })?;
 
-    let resized =
-        if decoded.width() > LOGO_TARGET_DIMENSION || decoded.height() > LOGO_TARGET_DIMENSION {
-            decoded.resize(
-                LOGO_TARGET_DIMENSION,
-                LOGO_TARGET_DIMENSION,
-                FilterType::Triangle,
-            )
-        } else {
-            decoded
-        };
+    let resized = if decoded.width() > target_dimension || decoded.height() > target_dimension {
+        decoded.resize(target_dimension, target_dimension, FilterType::Triangle)
+    } else {
+        decoded
+    };
 
     let mut png_bytes: Vec<u8> = Vec::with_capacity(64 * 1024);
     resized
@@ -127,14 +132,87 @@ pub fn sanitize_logo_image_to_png(raw: &[u8]) -> Result<Vec<u8>, (StatusCode, &'
             )
         })?;
 
-    if png_bytes.is_empty() || png_bytes.len() > MAX_LOGO_BYTES {
+    if png_bytes.is_empty() || png_bytes.len() > max_upload_bytes {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
-            "A imagem processada excedeu o limite permitido de 2 MB.",
+            "A imagem processada excedeu o limite de tamanho permitido.",
         ));
     }
 
     Ok(png_bytes)
+}
+
+/// Decodifica apenas PNG/JPEG/WebP dentro dos limites seguros de RAM e re-encoda para PNG limpo,
+/// eliminando blocos EXIF, GPS, XMP e payloads embutidos.
+pub fn sanitize_logo_image_to_png(raw: &[u8]) -> Result<Vec<u8>, (StatusCode, &'static str)> {
+    sanitize_image_to_png_with_bounds(
+        raw,
+        MAX_LOGO_BYTES,
+        MAX_IMAGE_DIMENSION,
+        LOGO_TARGET_DIMENSION,
+    )
+}
+
+pub struct PreparedProofMedia {
+    pub bytes: Vec<u8>,
+    pub content_type: &'static str,
+    pub extension: &'static str,
+}
+
+/// Prepara comprovante privado B2B-09B (PDF ou imagem PNG/JPEG/WebP sanitizada sem EXIF, ate 5 MB).
+pub fn prepare_kyb_proof_media(
+    raw: &[u8],
+) -> Result<PreparedProofMedia, (StatusCode, &'static str)> {
+    if raw.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "Arquivo de comprovante vazio."));
+    }
+    if raw.len() > MAX_KYB_PROOF_BYTES {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "O comprovante deve ter no máximo 5 MB.",
+        ));
+    }
+    if raw.starts_with(b"%PDF-1.") || raw.starts_with(b"%PDF-2.") {
+        return Ok(PreparedProofMedia {
+            bytes: raw.to_vec(),
+            content_type: "application/pdf",
+            extension: "pdf",
+        });
+    }
+    let png = sanitize_image_to_png_with_bounds(
+        raw,
+        MAX_KYB_PROOF_BYTES,
+        MAX_PROOF_IMAGE_DIMENSION,
+        PROOF_IMAGE_TARGET_DIMENSION,
+    )?;
+    Ok(PreparedProofMedia {
+        bytes: png,
+        content_type: "image/png",
+        extension: "png",
+    })
+}
+
+pub fn validate_kyb_proof_filename(file: &str) -> Result<&'static str, (StatusCode, &'static str)> {
+    let trimmed = file.trim();
+    if !(5..=96).contains(&trimmed.len())
+        || trimmed.starts_with('.')
+        || trimmed.contains("..")
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || !trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
+        return Err((StatusCode::BAD_REQUEST, "Nome de comprovante inválido."));
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.ends_with(".pdf") {
+        Ok("application/pdf")
+    } else if lower.ends_with(".png") {
+        Ok("image/png")
+    } else {
+        Err((StatusCode::BAD_REQUEST, "Extensão de comprovante inválida."))
+    }
 }
 
 pub fn validate_logo_filename(file: &str) -> Result<&'static str, (StatusCode, &'static str)> {
@@ -585,21 +663,34 @@ mod tests {
     #[test]
     fn sanitize_strips_exif_text_chunks_scales_oversize_and_blocks_svg() {
         assert!(matches!(
-            detect_allowed_image_format(b"<svg xmlns='x'><script>alert(1)</script></svg>"),
+            detect_allowed_image_format(
+                b"<svg xmlns='x'><script>alert(1)</script></svg>",
+                MAX_LOGO_BYTES
+            ),
             Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, _))
         ));
         assert!(matches!(
-            detect_allowed_image_format(b"<?xml version='1.0'?><svg/>"),
+            detect_allowed_image_format(b"<?xml version='1.0'?><svg/>", MAX_LOGO_BYTES),
             Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, _))
         ));
         assert!(matches!(
-            detect_allowed_image_format(b"%PDF-1.7 fake"),
+            detect_allowed_image_format(b"%PDF-1.7 fake", MAX_LOGO_BYTES),
             Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, _))
         ));
         assert!(matches!(
-            detect_allowed_image_format(&vec![0u8; MAX_LOGO_BYTES + 1]),
+            detect_allowed_image_format(&vec![0u8; MAX_LOGO_BYTES + 1], MAX_LOGO_BYTES),
             Err((StatusCode::PAYLOAD_TOO_LARGE, _))
         ));
+
+        let proof_pdf = prepare_kyb_proof_media(b"%PDF-1.4\n%test").unwrap();
+        assert_eq!(proof_pdf.content_type, "application/pdf");
+        assert_eq!(proof_pdf.extension, "pdf");
+        assert!(prepare_kyb_proof_media(b"<svg></svg>").is_err());
+        assert_eq!(
+            validate_kyb_proof_filename("proof-abc123.pdf").unwrap(),
+            "application/pdf"
+        );
+        assert!(validate_kyb_proof_filename("../hack.pdf").is_err());
 
         let marker = b"EXIF_GPS_SECRET_LAT_-23_LON_-46";
         let dirty_png = make_png_with_secret_text_chunk(800, 600, marker);

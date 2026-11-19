@@ -1457,3 +1457,41 @@ async def delete_user_data(body: DeleteAccountRequest, request: Request, _auth=D
     await auth_limit(pool, 'moderation_delete', email, 5, 60)
     from services.account_deletion import delete_account
     return await delete_account(pool, body.userId, actor=email, ip=get_client_ip(request))
+
+
+class B2BDecisionEmailRequest(BaseModel):
+    ownerUserId: str = Field(min_length=1, max_length=128)
+    programName: str = Field(min_length=1, max_length=160)
+    decision: str = Field(min_length=2, max_length=40)
+    note: str = Field(default="", max_length=800)
+    inviteCode: str = Field(default="", max_length=32)
+
+
+@router.post("/api/internal/b2b/notify-decision")
+async def notify_b2b_decision_internal(
+    body: B2BDecisionEmailRequest,
+    _auth=Depends(require_service_token),
+):
+    """Envia notificacao por e-mail sobre decisao Auto-KYB ou revisao B2B."""
+    from email_service import send_b2b_decision_email
+
+    target_email = ""
+    try:
+        from firebase_admin import auth as fb_auth
+
+        fb_user = await asyncio.to_thread(fb_auth.get_user, body.ownerUserId.strip())
+        target_email = (getattr(fb_user, "email", None) or "").strip()
+    except Exception:
+        target_email = ""
+
+    if not target_email:
+        return {"success": False, "skipped": "owner_email_unavailable"}
+
+    res = await send_b2b_decision_email(
+        to_email=target_email,
+        program_name=body.programName,
+        decision=body.decision,
+        note=body.note,
+        invite_code=body.inviteCode,
+    )
+    return {"success": bool(res.get("success"))}

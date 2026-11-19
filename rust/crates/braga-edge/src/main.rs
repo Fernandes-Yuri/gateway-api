@@ -1,4 +1,5 @@
 mod b2b;
+mod b2b_kyb;
 mod b2b_storage;
 
 use std::net::SocketAddr;
@@ -3238,6 +3239,15 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             post(b2b::submit_my_program_handler),
         )
         .route(
+            "/api/b2b/program/me/proofs",
+            post(b2b::upload_my_program_proof_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
+        .route(
+            "/api/b2b/program/me/proofs/:proof_id",
+            axum::routing::delete(b2b::delete_my_program_proof_handler),
+        )
+        .route(
             "/api/b2b/program/me/invite-policy",
             post(b2b::update_invite_policy_handler),
         )
@@ -3275,6 +3285,10 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
         .route(
             "/api/admin/b2b/programs/:program_id/review",
             post(b2b::admin_review_program_handler),
+        )
+        .route(
+            "/api/admin/b2b/programs/:program_id/proofs/:proof_id",
+            get(b2b::admin_download_program_proof_handler),
         )
 }
 
@@ -3592,6 +3606,8 @@ mod tests {
             ),
             ("POST", "/api/b2b/program/me/close", Some("{}")),
             ("POST", "/api/b2b/program/me/submit", Some("{}")),
+            ("POST", "/api/b2b/program/me/proofs", None),
+            ("DELETE", "/api/b2b/program/me/proofs/proof-1", None),
             (
                 "POST",
                 "/api/b2b/program/me/invite-policy",
@@ -3664,19 +3680,27 @@ mod tests {
         assert_eq!(bad_invite.status(), StatusCode::BAD_REQUEST);
 
         // Rotas administrativas exigem SERVICE_TOKEN (401 se configurado, 503 se ausente em teste)
-        let admin_resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/admin/b2b/programs")
-                    .header("authorization", "Bearer wrong-token")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            admin_resp.status() == StatusCode::UNAUTHORIZED
-                || admin_resp.status() == StatusCode::SERVICE_UNAVAILABLE
-        );
+        for admin_uri in [
+            "/api/admin/b2b/programs",
+            "/api/admin/b2b/programs/00000000-0000-0000-0000-000000000000/proofs/proof-1",
+        ] {
+            let admin_resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(admin_uri)
+                        .header("authorization", "Bearer wrong-token")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                admin_resp.status() == StatusCode::UNAUTHORIZED
+                    || admin_resp.status() == StatusCode::SERVICE_UNAVAILABLE,
+                "Rota admin {admin_uri} retornou {}",
+                admin_resp.status()
+            );
+        }
     }
 }
