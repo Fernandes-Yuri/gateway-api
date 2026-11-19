@@ -1,4 +1,5 @@
 mod b2b;
+mod b2b_appointments;
 mod b2b_engagement;
 mod b2b_kyb;
 mod b2b_storage;
@@ -16,7 +17,7 @@ use axum::http::header::{
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{any, get, patch, post};
 use axum::Router;
 use braga_contracts::{
     compute_imc, compute_occurrence_id, format_agent_closing, height_in_meters,
@@ -3277,6 +3278,14 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             get(b2b_engagement::list_owner_reminders_handler)
                 .post(b2b_engagement::create_program_reminder_handler),
         )
+        .route(
+            "/api/b2b/program/me/appointments",
+            get(b2b_appointments::list_owner_appointments_handler),
+        )
+        .route(
+            "/api/b2b/program/me/appointments/:appointment_id",
+            patch(b2b_appointments::update_owner_appointment_handler),
+        )
         .route("/api/b2b/invite/:code", get(b2b::lookup_invite_handler))
         .route("/api/b2b/enrollments/join", post(b2b::join_program_handler))
         .route(
@@ -3299,6 +3308,15 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
         .route(
             "/api/b2b/enrollments/:program_id/report",
             post(b2b_engagement::report_program_abuse_handler),
+        )
+        .route(
+            "/api/b2b/enrollments/:program_id/appointments",
+            get(b2b_appointments::list_enrollment_appointments_handler)
+                .post(b2b_appointments::create_enrollment_appointment_handler),
+        )
+        .route(
+            "/api/b2b/enrollments/:program_id/appointments/:appointment_id/cancel",
+            post(b2b_appointments::cancel_enrollment_appointment_handler),
         )
         .route(
             "/api/b2b/enrollments/:program_id/leave",
@@ -3665,6 +3683,12 @@ mod tests {
                 "/api/b2b/program/me/reminders",
                 Some("{\"title\":\"Hidratacao\",\"body\":\"Beba agua\"}"),
             ),
+            ("GET", "/api/b2b/program/me/appointments", None),
+            (
+                "PATCH",
+                "/api/b2b/program/me/appointments/00000000-0000-0000-0000-000000000001",
+                Some("{\"status\":\"CONFIRMED\",\"scheduledAt\":\"2099-01-01T14:00:00Z\"}"),
+            ),
             (
                 "POST",
                 "/api/b2b/enrollments/join",
@@ -3694,6 +3718,21 @@ mod tests {
                 "POST",
                 "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/report",
                 Some("{\"reason\":\"SPAM\"}"),
+            ),
+            (
+                "GET",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/appointments",
+                None,
+            ),
+            (
+                "POST",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/appointments",
+                Some("{\"modality\":\"REMOTE\",\"requestedSlotText\":\"Terca 14h\"}"),
+            ),
+            (
+                "POST",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/appointments/00000000-0000-0000-0000-000000000001/cancel",
+                Some("{}"),
             ),
             (
                 "POST",

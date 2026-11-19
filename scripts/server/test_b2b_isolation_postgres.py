@@ -3,7 +3,7 @@ import os
 import re
 import unittest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlparse
@@ -700,6 +700,108 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(remaining, 0)
             self.assertEqual(kept, 1)
+
+    async def test_b2b_19_appointments_conflict_outbox_and_consultations_isolation(self):
+        async with self.pool.acquire() as conn:
+            future_slot = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=2)
+            # Consulta pessoal preexistente em consultations nao pode ser alterada pela agenda B2B
+            await conn.execute(
+                """
+                INSERT INTO consultations (user_id, title, scheduled_date, status)
+                VALUES ('patient-1', 'Consulta pessoal', $1, 'CONFIRMED')
+                """,
+                future_slot,
+            )
+
+            appt_1 = await conn.fetchval(
+                """
+                INSERT INTO program_appointments
+                    (program_id, patient_user_id, modality, requested_slot_text, scheduled_at, status)
+                VALUES ($1, 'patient-1', 'REMOTE', 'Quinta 14h', $2, 'CONFIRMED')
+                RETURNING id
+                """,
+                self.prog_a,
+                future_slot,
+            )
+            appt_2 = await conn.fetchval(
+                """
+                INSERT INTO program_appointments
+                    (program_id, patient_user_id, modality, requested_slot_text, status)
+                VALUES ($1, 'patient-1', 'IN_PERSON', 'Quinta 14h15', 'PENDING')
+                RETURNING id
+                """,
+                self.prog_a,
+            )
+            self.assertIsNotNone(appt_1)
+            self.assertIsNotNone(appt_2)
+
+            # Janela de conflito 30 min detecta colisao para +15min e libera para +45min
+            overlap_15m = await conn.fetchval(
+                """
+                SELECT EXISTS(
+                    SELECT 1 FROM program_appointments
+                     WHERE program_id = $1
+                       AND id <> $2
+                       AND status = 'CONFIRMED'
+                       AND scheduled_at IS NOT NULL
+                       AND ABS(EXTRACT(EPOCH FROM (scheduled_at - $3))) < 1800.0
+                )
+                """,
+                self.prog_a,
+                appt_2,
+                future_slot + timedelta(minutes=15),
+            )
+            overlap_45m = await conn.fetchval(
+                """
+                SELECT EXISTS(
+                    SELECT 1 FROM program_appointments
+                     WHERE program_id = $1
+                       AND id <> $2
+                       AND status = 'CONFIRMED'
+                       AND scheduled_at IS NOT NULL
+                       AND ABS(EXTRACT(EPOCH FROM (scheduled_at - $3))) < 1800.0
+                )
+                """,
+                self.prog_a,
+                appt_2,
+                future_slot + timedelta(minutes=45),
+            )
+            self.assertTrue(overlap_15m)
+            self.assertFalse(overlap_45m)
+
+            # Notificacao Push FCM PARTNER_APPOINTMENT (082 AGENDA) funciona para dono e participante
+            item_owner = await conn.fetchval(
+                """
+                SELECT notification_emit(
+                    'owner-a', $1, $2, 'PARTNER_APPOINTMENT', 'AGENDA',
+                    'b2b_appointment', $3, 'patient-1', 'patient-1',
+                    NOW(), NOW() + interval '30 days', '{"status":"PENDING"}'::jsonb, true
+                )
+                """,
+                f"b2b_appt:{appt_2}:PENDING:owner-a",
+                f"b2b_appt:{appt_2}",
+                str(appt_2),
+            )
+            item_patient = await conn.fetchval(
+                """
+                SELECT notification_emit(
+                    'patient-1', $1, $2, 'PARTNER_APPOINTMENT', 'AGENDA',
+                    'b2b_appointment', $3, 'patient-1', 'owner-a',
+                    NOW(), NOW() + interval '30 days', '{"status":"CONFIRMED"}'::jsonb, true
+                )
+                """,
+                f"b2b_appt:{appt_1}:CONFIRMED:patient-1",
+                f"b2b_appt:{appt_1}",
+                str(appt_1),
+            )
+            self.assertIsNotNone(item_owner)
+            self.assertIsNotNone(item_patient)
+
+            # Tabela pessoal consultations permanece intacta (1 registro pessoal)
+            personal_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM consultations WHERE user_id = 'patient-1'"
+            )
+            self.assertEqual(personal_count, 1)
 
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:

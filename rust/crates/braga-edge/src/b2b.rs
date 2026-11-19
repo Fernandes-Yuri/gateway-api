@@ -4418,6 +4418,12 @@ pub async fn list_program_participants_handler(
                     SELECT 1 FROM family_bindings fb \
                      WHERE fb.patient_id = e.patient_user_id AND fb.status = 'ACTIVE' \
                 ) AS has_family_binding, \
+                ( \
+                    SELECT COUNT(*) FROM program_appointments pa \
+                     WHERE pa.program_id = e.program_id \
+                       AND pa.patient_user_id = e.patient_user_id \
+                       AND pa.status = 'PENDING' \
+                ) AS pending_appointments_count, \
                 e.consented_at \
            FROM program_enrollments e \
            JOIN profiles pr ON pr.id = e.patient_user_id \
@@ -4437,9 +4443,18 @@ pub async fn list_program_participants_handler(
                     SELECT 1 FROM unnest($7::text[]) AS req(cat) \
                      WHERE NOT (e.shared_categories @> jsonb_build_array(req.cat)) \
                 ) \
+                OR ( \
+                    $8::boolean \
+                    AND EXISTS ( \
+                        SELECT 1 FROM program_appointments pa \
+                         WHERE pa.program_id = e.program_id \
+                           AND pa.patient_user_id = e.patient_user_id \
+                           AND pa.status = 'PENDING' \
+                    ) \
+                ) \
             ) \
           ORDER BY e.consented_at DESC, e.patient_user_id ASC \
-          LIMIT $8",
+          LIMIT $9",
     )
     .bind(prog_uuid)
     .bind(cursor_dt)
@@ -4448,6 +4463,7 @@ pub async fn list_program_participants_handler(
     .bind(filter_category_json)
     .bind(attention_only)
     .bind(&program_config.enabled_metrics)
+    .bind(program_config.features.appointments_enabled)
     .bind(fetch_limit)
     .fetch_all(pool)
     .await
@@ -4491,6 +4507,13 @@ pub async fn list_program_participants_handler(
             None
         };
 
+        let raw_pending_appts: i64 = row.try_get("pending_appointments_count").unwrap_or(0);
+        let pending_appointments_count = if program_config.features.appointments_enabled {
+            raw_pending_appts
+        } else {
+            0
+        };
+
         participants.push(PartnerParticipantItemDto {
             patient_user_id: patient_uid,
             display_name: row.get("display_name"),
@@ -4499,7 +4522,7 @@ pub async fn list_program_participants_handler(
             missing_program_categories: missing,
             family_support_active,
             family_support_summary,
-            pending_appointments_count: 0,
+            pending_appointments_count,
             unread_direct_messages_count: 0,
             consented_at: consented_iso,
         });
