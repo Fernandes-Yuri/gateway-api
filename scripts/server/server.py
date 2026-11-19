@@ -41,6 +41,7 @@ from routers import emergency as emergency_router
 from routers import admin as admin_router
 from routers import care_os as care_os_router
 from routers import agent_relay as agent_relay_router
+from routers import b2b_context as b2b_context_router
 # Curadoria do dataset de fine-tuning do aplicativo.
 import core.dataset as dataset_module
 from core.dataset import (
@@ -222,7 +223,7 @@ async def user_moderation_middleware(request: Request, call_next):
 # 503/offline_mode em producao. (Detectado na revisao pre-push: os testes
 # locais passavam justamente por esperarem pool None offline.)
 _POOL_ROUTERS = (health_router, consultations_router, chat_router, auth_router,
-                 sync_router, admin_router, care_os_router)
+                 sync_router, admin_router, care_os_router, b2b_context_router)
 
 
 def _propagate_db_pool():
@@ -616,6 +617,9 @@ app.include_router(admin_router.router)
 
 care_os_router.configure_state(db_pool=None, public_base_url=PUBLIC_API_BASE_URL)
 app.include_router(care_os_router.router)
+
+b2b_context_router.configure_state(db_pool=None)
+app.include_router(b2b_context_router.router)
 
 app.include_router(agent_relay_router.router)
 
