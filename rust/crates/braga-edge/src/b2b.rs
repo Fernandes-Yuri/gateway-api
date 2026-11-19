@@ -2791,4 +2791,28 @@ mod tests {
             "Braga Voz (autoinformado)"
         );
     }
+
+    #[test]
+    fn test_zero_file_egress_and_invite_code_sanitization() {
+        // Nenhuma categoria relacionada a exames/arquivos ou diario privado e aceita
+        for forbidden in [
+            "exams",
+            "files",
+            "organizer",
+            "symptoms_diary",
+            "pdf_attachments",
+        ] {
+            assert!(
+                validate_shared_categories(&[forbidden.to_string()]).is_err(),
+                "Categoria fora do escopo B2B deve ser bloqueada: {forbidden}"
+            );
+        }
+
+        // Codigos maliciosos ou curtos devem ser rejeitados
+        assert!(is_valid_invite_code("CARD-4F9A"));
+        assert!(is_valid_invite_code("CLIN_2026"));
+        assert!(!is_valid_invite_code("AB"));
+        assert!(!is_valid_invite_code("CARD' OR 1=1"));
+        assert!(!is_valid_invite_code("../etc/passwd"));
+    }
 }
