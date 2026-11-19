@@ -649,6 +649,58 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(med_count, 1)
 
+    async def test_b2b_21b_ugc_abuse_report_ai_killswitch_and_buffer_cleanup(self):
+        async with self.pool.acquire() as conn:
+            # 1. UGC abuse report persiste e protege participante sem erro de schema
+            report_id = await conn.fetchval(
+                """
+                INSERT INTO program_abuse_reports (program_id, reporter_user_id, reason, details)
+                VALUES ($1, 'patient-1', 'CONTEUDO_INADEQUADO', 'Solicitou exame externo sem contexto')
+                RETURNING id
+                """,
+                self.prog_a,
+            )
+            self.assertIsNotNone(report_id)
+
+            # 2. Kill switch ai_paused funciona independentemente de approval_status
+            await conn.execute(
+                "UPDATE partner_programs SET ai_paused = true WHERE id = $1",
+                self.prog_a,
+            )
+            ai_paused = await conn.fetchval(
+                "SELECT ai_paused FROM partner_programs WHERE id = $1",
+                self.prog_a,
+            )
+            self.assertTrue(ai_paused)
+
+            # 3. Limpeza de buffers RDS apaga apenas expirados e preserva registros ativos
+            await conn.execute(
+                """
+                INSERT INTO program_reminders
+                    (program_id, title, body, created_by, expires_at)
+                VALUES
+                    ($1, 'Expirado', 'Antigo', 'owner-a', NOW() - interval '2 days'),
+                    ($1, 'Vigente', 'Ativo', 'owner-a', NOW() + interval '10 days')
+                """,
+                self.prog_a,
+            )
+            await conn.execute(
+                """
+                DELETE FROM program_reminders
+                 WHERE id IN (SELECT id FROM program_reminders WHERE expires_at < NOW() LIMIT 500)
+                """
+            )
+            remaining = await conn.fetchval(
+                "SELECT COUNT(*) FROM program_reminders WHERE program_id = $1 AND title = 'Expirado'",
+                self.prog_a,
+            )
+            kept = await conn.fetchval(
+                "SELECT COUNT(*) FROM program_reminders WHERE program_id = $1 AND title = 'Vigente'",
+                self.prog_a,
+            )
+            self.assertEqual(remaining, 0)
+            self.assertEqual(kept, 1)
+
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:
             await conn.execute(

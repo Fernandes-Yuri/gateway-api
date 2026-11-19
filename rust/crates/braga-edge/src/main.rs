@@ -222,6 +222,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limiter = StrictRateLimiter::new();
     if let Some(ref p) = pool {
         limiter.load_blocked_ips_from_db(p).await;
+        let b2b_cleanup_pool = p.clone();
+        tokio::spawn(async move {
+            b2b_engagement::spawn_rds_buffer_cleanup_loop(b2b_cleanup_pool).await;
+        });
     }
 
     // Inicia o socket Unix IPC para os handlers legados do Python
@@ -3293,12 +3297,20 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             post(b2b_engagement::set_enrollment_mute_handler),
         )
         .route(
+            "/api/b2b/enrollments/:program_id/report",
+            post(b2b_engagement::report_program_abuse_handler),
+        )
+        .route(
             "/api/b2b/enrollments/:program_id/leave",
             post(b2b::leave_program_handler),
         )
         .route(
             "/api/admin/b2b/programs",
             get(b2b::admin_list_programs_handler),
+        )
+        .route(
+            "/api/admin/b2b/abuse-reports",
+            get(b2b_engagement::admin_list_abuse_reports_handler),
         )
         .route(
             "/api/admin/b2b/programs/:program_id/review",
@@ -3680,6 +3692,11 @@ mod tests {
             ),
             (
                 "POST",
+                "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/report",
+                Some("{\"reason\":\"SPAM\"}"),
+            ),
+            (
+                "POST",
                 "/api/b2b/enrollments/00000000-0000-0000-0000-000000000000/leave",
                 Some("{}"),
             ),
@@ -3721,6 +3738,7 @@ mod tests {
         // Rotas administrativas exigem SERVICE_TOKEN (401 se configurado, 503 se ausente em teste)
         for admin_uri in [
             "/api/admin/b2b/programs",
+            "/api/admin/b2b/abuse-reports",
             "/api/admin/b2b/programs/00000000-0000-0000-0000-000000000000/proofs/proof-1",
         ] {
             let admin_resp = app
