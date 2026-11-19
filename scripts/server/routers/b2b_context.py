@@ -123,6 +123,7 @@ async def get_my_program(request: Request):
 
 
 @router.put("/api/b2b/program/me")
+@router.post("/api/b2b/program/me")
 async def save_my_program(request: Request, req: UpsertPartnerProgramRequest):
     """Cria ou atualiza a preparacao e identidade visual do programa do parceiro."""
     uid = await firebase_uid(request)
