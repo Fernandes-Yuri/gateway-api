@@ -22,7 +22,6 @@ class B2BStaticGuardsTest(unittest.TestCase):
 
     def test_rust_engine_enforces_rds_limits_and_zero_file_egress(self):
         src = B2B_RUST_PATH.read_text(encoding="utf-8")
-        # Locks transacionais e clamping obrigatorios em Rust
         self.assertIn("FOR UPDATE", src)
         self.assertIn(".clamp(1, 50)", src)
         self.assertIn(".clamp(1, 90)", src)
@@ -30,7 +29,6 @@ class B2BStaticGuardsTest(unittest.TestCase):
         self.assertIn("LIMIT 31", src)
         self.assertIn("LIMIT 30", src)
 
-        # Motor B2B nao consulta arquivos do Organizador pessoal nem diario sintomatico privado
         forbidden_tables = re.compile(
             r"\bFROM\s+(exams|exam_items|exam_cloud_consents|symptoms_diary)\b",
             re.IGNORECASE,
@@ -52,76 +50,92 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
 
         self.schema = "b2b_iso_" + uuid.uuid4().hex
         self.control = await asyncpg.connect(TEST_DSN)
-        await self.control.execute(f'CREATE SCHEMA "{self.schema}"')
+        self.pool = None
+        try:
+            await self.control.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA public')
+            await self.control.execute(f'CREATE SCHEMA "{self.schema}"')
 
-        async def setup(conn):
-            await conn.execute(f'SET search_path TO "{self.schema}", public')
+            async def setup(conn):
+                await conn.execute(f'SET search_path TO "{self.schema}", public')
 
-        self.pool = await asyncpg.create_pool(TEST_DSN, min_size=1, max_size=3, setup=setup)
-        async with self.pool.acquire() as conn:
-            await conn.execute((ROOT / "scripts/docker/init_schema.sql").read_text(encoding="utf-8"))
-            await conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)")
-            for mig in (
-                "003_medication_schedules.sql",
-                "054_vital_signs_oxygen.sql",
-                "080_clinical_sync_integrity.sql",
-                "081_vital_signs_readings_contract.sql",
-            ):
-                async with conn.transaction():
-                    await conn.execute((ROOT / "migrations" / mig).read_text(encoding="utf-8"))
-            async with conn.transaction():
+            self.pool = await asyncpg.create_pool(TEST_DSN, min_size=1, max_size=2, setup=setup)
+            async with self.pool.acquire() as conn:
                 await conn.execute(
-                    (ROOT / "migrations/090_b2b_partner_programs.sql").read_text(encoding="utf-8")
+                    (ROOT / "scripts/docker/init_schema.sql").read_text(encoding="utf-8-sig")
                 )
+                await conn.execute(
+                    "CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)"
+                )
+                for mig in (
+                    "003_medication_schedules.sql",
+                    "054_vital_signs_oxygen.sql",
+                    "080_clinical_sync_integrity.sql",
+                    "081_vital_signs_readings_contract.sql",
+                ):
+                    async with conn.transaction():
+                        await conn.execute(
+                            (ROOT / "migrations" / mig).read_text(encoding="utf-8-sig")
+                        )
+                async with conn.transaction():
+                    await conn.execute(
+                        (ROOT / "migrations/090_b2b_partner_programs.sql").read_text(
+                            encoding="utf-8-sig"
+                        )
+                    )
 
-            await conn.execute(
-                """
-                INSERT INTO profiles (id, full_name) VALUES
-                    ('owner-a', 'Responsavel Clinica A'),
-                    ('owner-b', 'Responsavel Clinica B'),
-                    ('patient-1', 'Paciente Um'),
-                    ('patient-2', 'Paciente Dois')
-                """
-            )
-            self.prog_a = await conn.fetchval(
-                """
-                INSERT INTO partner_programs
-                    (owner_user_id, program_name, company_name, cnpj, approval_status, invite_code, seat_limit)
-                VALUES
-                    ('owner-a', 'Programa A', 'Clinica A', '12.345.678/0001-95', 'APPROVED', 'CLINA-1111', 2)
-                RETURNING id
-                """
-            )
-            self.prog_b = await conn.fetchval(
-                """
-                INSERT INTO partner_programs
-                    (owner_user_id, program_name, company_name, cnpj, approval_status, invite_code, seat_limit)
-                VALUES
-                    ('owner-b', 'Programa B', 'Clinica B', '98.765.432/0001-10', 'APPROVED', 'CLINB-2222', 5)
-                RETURNING id
-                """
-            )
-            # Paciente 1 vinculado apenas a Clinica A com apenas passos consentidos
-            await conn.execute(
-                """
-                INSERT INTO program_enrollments
-                    (program_id, patient_user_id, status, shared_categories)
-                VALUES
-                    ($1, 'patient-1', 'ACTIVE', '["steps"]'::jsonb),
-                    ($2, 'patient-2', 'ACTIVE', '["authorized_records"]'::jsonb)
-                """,
-                self.prog_a,
-                self.prog_b,
-            )
+                await conn.execute(
+                    """
+                    INSERT INTO profiles (id, full_name) VALUES
+                        ('owner-a', 'Responsavel Clinica A'),
+                        ('owner-b', 'Responsavel Clinica B'),
+                        ('patient-1', 'Paciente Um'),
+                        ('patient-2', 'Paciente Dois')
+                    """
+                )
+                self.prog_a = await conn.fetchval(
+                    """
+                    INSERT INTO partner_programs
+                        (owner_user_id, program_name, company_name, cnpj, approval_status, invite_code, seat_limit)
+                    VALUES
+                        ('owner-a', 'Programa A', 'Clinica A', '12.345.678/0001-95', 'APPROVED', 'CLINA-1111', 2)
+                    RETURNING id
+                    """
+                )
+                self.prog_b = await conn.fetchval(
+                    """
+                    INSERT INTO partner_programs
+                        (owner_user_id, program_name, company_name, cnpj, approval_status, invite_code, seat_limit)
+                    VALUES
+                        ('owner-b', 'Programa B', 'Clinica B', '98.765.432/0001-10', 'APPROVED', 'CLINB-2222', 5)
+                    RETURNING id
+                    """
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO program_enrollments
+                        (program_id, patient_user_id, status, shared_categories)
+                    VALUES
+                        ($1, 'patient-1', 'ACTIVE', '["steps"]'::jsonb),
+                        ($2, 'patient-2', 'ACTIVE', '["authorized_records"]'::jsonb)
+                    """,
+                    self.prog_a,
+                    self.prog_b,
+                )
+        except Exception:
+            await self.asyncTearDown()
+            raise
 
     async def asyncTearDown(self):
-        await self.pool.close()
-        await self.control.execute(f'DROP SCHEMA "{self.schema}" CASCADE')
-        await self.control.close()
+        if self.pool is not None:
+            await self.pool.close()
+            self.pool = None
+        if self.control is not None:
+            await self.control.execute(f'DROP SCHEMA IF EXISTS "{self.schema}" CASCADE')
+            await self.control.close()
+            self.control = None
 
     async def test_multi_tenant_isolation_and_revocation(self):
         async with self.pool.acquire() as conn:
-            # Clinica A nao ve Paciente 2 ao listar participantes ou validar acesso
             rows_a = await conn.fetch(
                 """
                 SELECT e.patient_user_id
@@ -143,7 +157,6 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNone(cross_check["status"])
 
-            # Revogacao do Paciente 1 libera vaga na franquia e corta acesso da Clinica A
             await conn.execute(
                 """
                 UPDATE program_enrollments
@@ -160,7 +173,6 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:
-            # Simula gravacao tipica da v1.9.6 sem nenhum campo B2B (profiles/vitals/daily_metrics)
             await conn.execute(
                 """
                 INSERT INTO daily_metrics (user_id, date, steps, distance_meters, calories_burned, active_minutes)
@@ -177,7 +189,6 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNotNone(vital_id)
 
-            # Verifica criacao dos indices de protecao ao RDS Micro
             indexes = {
                 r["indexname"]
                 for r in await conn.fetch(
@@ -193,11 +204,10 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             ):
                 self.assertIn(expected_idx, indexes)
 
-            # Rollback da 090 preserva integralmente os registros pessoais da v1.9.6
             async with conn.transaction():
                 await conn.execute(
                     (ROOT / "migrations/090_b2b_partner_programs_rollback.sql").read_text(
-                        encoding="utf-8"
+                        encoding="utf-8-sig"
                     )
                 )
             steps_preserved = await conn.fetchval(
