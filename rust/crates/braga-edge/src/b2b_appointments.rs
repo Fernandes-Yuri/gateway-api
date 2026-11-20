@@ -383,7 +383,12 @@ async fn fetch_active_enrolled_program(
             "Erro ao consultar programa.",
         )
     })?
-    .ok_or((StatusCode::NOT_FOUND, "Programa parceiro não encontrado."))?;
+    // Programa de outro tenant e programa inexistente respondem o mesmo 403:
+    // nao ha oraculo de existencia de UUID de programa.
+    .ok_or((
+        StatusCode::FORBIDDEN,
+        "Vínculo ativo necessário para acessar agendamentos deste programa.",
+    ))?;
 
     let enroll_status: Option<String> = row.try_get("enrollment_status").ok().flatten();
     if enroll_status.as_deref() != Some("ACTIVE") {
