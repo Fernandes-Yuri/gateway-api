@@ -154,6 +154,9 @@ class DemoSeedPostgresTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(program["approval_status"], "APPROVED")
         self.assertEqual(program["seat_limit"], 50)
         self.assertEqual(program["primary_color"], "#00695C")
+        self.assertEqual(program["company_name"], "Horizonte")
+        self.assertEqual(program["program_name"], "Horizonte Cuida")
+        self.assertIsNone(program["logo_url"])
         config = json.loads(program["experience_config"])
         self.assertEqual(config["features"], dict.fromkeys(seed.FEATURES, True))
         self.assertTrue(config["ai_receptionist_policy"]["partner_faq_knowledge"])
@@ -182,7 +185,15 @@ class DemoSeedPostgresTest(unittest.IsolatedAsyncioTestCase):
         await self.conn.execute(
             "UPDATE program_direct_threads SET handling_mode='HUMAN_ACTIVE' WHERE program_id=$1", program["id"],
         )
+        await self.conn.execute(
+            "UPDATE partner_programs SET logo_url='https://bragasaude.online/images/logo.png' WHERE id=$1", program["id"],
+        )
         second = await seed.run(self.conn, ACCOUNTS)
+        self.assertIsNone(await self.conn.fetchval("SELECT logo_url FROM partner_programs WHERE id=$1", program["id"]))
+        await self.conn.execute("UPDATE partner_programs SET logo_url='https://example.test/horizonte.png' WHERE id=$1", program["id"])
+        await seed.run(self.conn, ACCOUNTS)
+        self.assertEqual(await self.conn.fetchval("SELECT logo_url FROM partner_programs WHERE id=$1", program["id"]),
+                         "https://example.test/horizonte.png")
         self.assertEqual(first["program_id"], second["program_id"])
         self.assertEqual(second["metrics_added"], {"daily_metrics": 0, "vital_signs": 0})
         self.assertEqual(await self.conn.fetchval(
