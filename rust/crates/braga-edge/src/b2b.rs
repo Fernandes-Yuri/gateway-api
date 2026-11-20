@@ -6457,4 +6457,51 @@ mod tests {
                 .unwrap();
         assert_eq!(toggled.0, ApprovalStatus::Approved);
     }
+
+    #[test]
+    fn test_b2b_22_all_seven_modules_enforce_409_when_disabled_and_403_when_suspended() {
+        let mut cfg = default_experience_config_for_template(TemplateKey::ClinicaGeral);
+        cfg.features = ProgramFeaturesDto {
+            assistant_chat_enabled: false,
+            direct_partner_chat_enabled: false,
+            ai_receptionist_enabled: false,
+            family_link_enabled: false,
+            partner_reminders_enabled: false,
+            appointments_enabled: false,
+            pre_consultation_pdf_enabled: false,
+        };
+        let modules = [
+            ProgramModule::AssistantChat,
+            ProgramModule::DirectPartnerChat,
+            ProgramModule::AiReceptionist,
+            ProgramModule::FamilyLink,
+            ProgramModule::PartnerReminders,
+            ProgramModule::Appointments,
+            ProgramModule::PreConsultationPdf,
+        ];
+        for module in modules {
+            let disabled = guard_program_module(ApprovalStatus::Approved, false, &cfg, module)
+                .expect_err("Modulo desligado deve retornar 409");
+            assert_eq!(disabled.0, StatusCode::CONFLICT);
+        }
+
+        cfg.features = ProgramFeaturesDto {
+            assistant_chat_enabled: true,
+            direct_partner_chat_enabled: true,
+            ai_receptionist_enabled: true,
+            family_link_enabled: true,
+            partner_reminders_enabled: true,
+            appointments_enabled: true,
+            pre_consultation_pdf_enabled: true,
+        };
+        for module in modules {
+            assert!(
+                guard_program_module(ApprovalStatus::Approved, false, &cfg, module).is_ok(),
+                "Modulo habilitado deve operar normalmente em programa aprovado"
+            );
+            let suspended = guard_program_module(ApprovalStatus::Suspended, false, &cfg, module)
+                .expect_err("Programa suspenso precisa bloquear todos os modulos com 403");
+            assert_eq!(suspended.0, StatusCode::FORBIDDEN);
+        }
+    }
 }

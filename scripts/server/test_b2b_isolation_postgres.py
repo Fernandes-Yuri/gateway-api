@@ -1250,6 +1250,128 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 await conn.fetchval("SELECT COUNT(*) FROM program_direct_messages"), 2
             )
 
+    async def test_b2b_22_lgpd_cascade_delete_and_multi_tenant_nocode_isolation(self):
+        async with self.pool.acquire() as conn:
+            # Popula todas as tabelas B2B para patient-1 (prog_a) e patient-2 (prog_b)
+            rem_a = await conn.fetchval(
+                """
+                INSERT INTO program_reminders
+                    (program_id, target_patient_id, target_category, reminder_type, title, body, created_by)
+                VALUES
+                    ($1, 'patient-1', 'steps', 'ROUTINE', 'Lembrete A', 'Meta passos', 'owner-a')
+                RETURNING id
+                """,
+                self.prog_a,
+            )
+            await conn.execute(
+                """
+                INSERT INTO program_reminder_receipts (reminder_id, patient_user_id, acknowledged_by_uid)
+                VALUES ($1, 'patient-1', 'patient-1')
+                """,
+                rem_a,
+            )
+            await conn.execute(
+                """
+                INSERT INTO program_appointments
+                    (program_id, patient_user_id, modality, requested_slot_text, status)
+                VALUES
+                    ($1, 'patient-1', 'REMOTE', 'Quinta 10h', 'PENDING'),
+                    ($2, 'patient-2', 'IN_PERSON', 'Sexta 11h', 'CONFIRMED')
+                """,
+                self.prog_a,
+                self.prog_b,
+            )
+            await conn.execute(
+                """
+                INSERT INTO program_direct_threads (program_id, patient_user_id, handling_mode)
+                VALUES ($1, 'patient-1', 'AI_ACTIVE'), ($2, 'patient-2', 'HUMAN_ACTIVE')
+                """,
+                self.prog_a,
+                self.prog_b,
+            )
+            await conn.execute(
+                """
+                INSERT INTO program_direct_messages
+                    (program_id, patient_user_id, sender_user_id, sender_role, body)
+                VALUES
+                    ($1, 'patient-1', 'patient-1', 'PATIENT', 'Msg paciente A'),
+                    ($1, 'patient-1', 'owner-a', 'PARTNER', 'Resposta clinica A'),
+                    ($2, 'patient-2', 'patient-2', 'PATIENT', 'Msg paciente B')
+                """,
+                self.prog_a,
+                self.prog_b,
+            )
+            await conn.execute(
+                """
+                INSERT INTO program_abuse_reports (program_id, reporter_user_id, reason)
+                VALUES ($1, 'patient-1', 'SPAM')
+                """,
+                self.prog_a,
+            )
+
+            # Exclusao LGPD do titular patient-1 remove em cascata todas as linhas dele sem quebrar FKs
+            await conn.execute("DELETE FROM profiles WHERE id = 'patient-1'")
+
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM program_enrollments WHERE patient_user_id = 'patient-1'"
+                ),
+                0,
+            )
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM program_reminder_receipts WHERE patient_user_id = 'patient-1'"
+                ),
+                0,
+            )
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM program_appointments WHERE patient_user_id = 'patient-1'"
+                ),
+                0,
+            )
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM program_direct_threads WHERE patient_user_id = 'patient-1'"
+                ),
+                0,
+            )
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM program_direct_messages WHERE patient_user_id = 'patient-1'"
+                ),
+                0,
+            )
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM program_abuse_reports WHERE reporter_user_id = 'patient-1'"
+                ),
+                0,
+            )
+
+            # Carteira isolada da Clinica B (prog_b / patient-2) permanece 100% preservada
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM program_enrollments WHERE program_id = $1 AND patient_user_id = 'patient-2'",
+                    self.prog_b,
+                ),
+                1,
+            )
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM program_appointments WHERE program_id = $1 AND patient_user_id = 'patient-2'",
+                    self.prog_b,
+                ),
+                1,
+            )
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM program_direct_messages WHERE program_id = $1 AND patient_user_id = 'patient-2'",
+                    self.prog_b,
+                ),
+                1,
+            )
+
     async def test_v196_backward_compatibility_and_clean_rollback(self):
         async with self.pool.acquire() as conn:
             await conn.execute(
