@@ -249,17 +249,19 @@ async def run(conn, accounts, *, reset=False, check=False):
         )
         program_id = await conn.fetchval(
             "INSERT INTO partner_programs(owner_user_id,program_name,company_name,primary_color,logo_url,"
-            "approval_status,invite_code,seat_limit,template_key,experience_config,review_note,reviewed_at) "
+            "approval_status,invite_code,seat_limit,template_key,experience_config,review_note,reviewed_at,"
+            "city,state) "
             "VALUES($1,'Horizonte Cuida','Horizonte','#00695C',"
             "NULL,'APPROVED',$2,50,'CLINICA_GERAL',$3::jsonb,"
-            "NULL,now()) "
+            "NULL,now(),'São Paulo','SP') "
             "ON CONFLICT(owner_user_id) DO UPDATE SET program_name=EXCLUDED.program_name,"
             "company_name=EXCLUDED.company_name,primary_color=EXCLUDED.primary_color,"
             "logo_url=CASE WHEN partner_programs.logo_url='https://bragasaude.online/images/logo.png' "
             "THEN NULL ELSE partner_programs.logo_url END,approval_status='APPROVED',"
             "invite_code=EXCLUDED.invite_code,seat_limit=50,template_key='CLINICA_GERAL',"
             "experience_config=EXCLUDED.experience_config,invite_paused=false,ai_paused=false,"
-            "review_note=EXCLUDED.review_note,reviewed_at=now(),updated_at=now() RETURNING id",
+            "review_note=EXCLUDED.review_note,city=EXCLUDED.city,state=EXCLUDED.state,"
+            "reviewed_at=now(),updated_at=now() RETURNING id",
             owner, INVITE_CODE, json.dumps(EXPERIENCE, ensure_ascii=False),
         )
         first, second = (accounts[email] for email in PATIENT_EMAILS)
