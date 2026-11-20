@@ -252,7 +252,7 @@ async def run(conn, accounts, *, reset=False, check=False):
             "approval_status,invite_code,seat_limit,template_key,experience_config,review_note,reviewed_at) "
             "VALUES($1,'Horizonte Cuida','Horizonte','#00695C',"
             "NULL,'APPROVED',$2,50,'CLINICA_GERAL',$3::jsonb,"
-            "'Conta de teste B2B-31; aprovação operacional de demonstração.',now()) "
+            "NULL,now()) "
             "ON CONFLICT(owner_user_id) DO UPDATE SET program_name=EXCLUDED.program_name,"
             "company_name=EXCLUDED.company_name,primary_color=EXCLUDED.primary_color,"
             "logo_url=CASE WHEN partner_programs.logo_url='https://bragasaude.online/images/logo.png' "
