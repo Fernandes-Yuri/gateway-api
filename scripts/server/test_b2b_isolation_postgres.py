@@ -36,6 +36,10 @@ MIG_092B_PATH = ROOT / "migrations/092b_b2b_business_session_mode.sql"
 MIG_092B_ROLLBACK_PATH = (
     ROOT / "migrations/092b_b2b_business_session_mode_rollback.sql"
 )
+MIG_093_PATH = ROOT / "migrations/093_b2b_owner_account_mode_backfill.sql"
+MIG_093_ROLLBACK_PATH = (
+    ROOT / "migrations/093_b2b_owner_account_mode_backfill_rollback.sql"
+)
 
 
 class B2BStaticGuardsTest(unittest.TestCase):
@@ -167,6 +171,23 @@ class B2BStaticGuardsTest(unittest.TestCase):
 
         sync_src = (ROOT / "scripts/server/routers/sync.py").read_text(encoding="utf-8")
         self.assertIn('"accountMode"', sync_src)
+
+    def test_migration_093_owner_account_mode_backfill_is_idempotent_and_reversible(self):
+        sql_up = MIG_093_PATH.read_text(encoding="utf-8")
+        sql_down = MIG_093_ROLLBACK_PATH.read_text(encoding="utf-8")
+        self.assertIn("SET LOCAL lock_timeout = '5s';", sql_up)
+        self.assertIn("SET LOCAL statement_timeout = '60s';", sql_up)
+        self.assertIn("account_mode = 'DUAL'", sql_up)
+        self.assertIn("account_mode = 'PERSONAL'", sql_up)
+        self.assertIn("owner_user_id", sql_up)
+        self.assertIn("closed_at IS NULL", sql_up)
+        self.assertIn("updated_at = NOW()", sql_up)
+        # Backfill de dados: nao altera schema nem o contrato de onboarding.
+        self.assertNotIn("ALTER TABLE", sql_up)
+        self.assertNotIn("user_role", sql_up)
+        self.assertNotIn("profiles_completion_check", sql_up)
+        self.assertIn("account_mode = 'PERSONAL'", sql_down)
+        self.assertIn("account_mode = 'DUAL'", sql_down)
 
     def test_b2b_r2_key_extraction_email_templates_and_internal_notify(self):
         import asyncio
@@ -338,6 +359,10 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                     self.prog_a,
                     self.prog_draft,
                 )
+                # 093 e backfill de dados: precisa rodar DEPOIS do seed de owners
+                # para refletir o estado snapshot (owner com programa aberto -> DUAL).
+                async with conn.transaction():
+                    await conn.execute(MIG_093_PATH.read_text(encoding="utf-8-sig"))
         except Exception:
             await self.asyncTearDown()
             raise
@@ -351,12 +376,134 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             await self.control.close()
             self.control = None
 
+    async def test_strict_b2b_access_uses_live_ownership_and_both_family_keys(self):
+        query = (ROOT / "rust/crates/braga-edge/src/sql/b2b_access.sql").read_text()
+        async with self.pool.acquire() as conn:
+            await conn.execute("INSERT INTO profiles (id, full_name) VALUES ('family', 'Familiar'), ('stranger', 'Estranho')")
+            access = await conn.fetchrow(query, "stranger")
+            self.assertFalse(any(access.values()))
+            access = await conn.fetchrow(query, "patient-1")
+            self.assertTrue(access["participant"])
+            self.assertFalse(access["owner"])
+            await conn.execute("UPDATE profiles SET account_mode = 'BUSINESS_ONLY' WHERE id = 'owner-a'")
+            access = await conn.fetchrow(query, "owner-a")
+            self.assertTrue(access["business_account"] and access["owner"])
+            await conn.execute("""
+                INSERT INTO family_bindings
+                    (patient_id, caregiver_id, caregiver_name, caregiver_relation, connection_code, status, expires_at)
+                VALUES ('patient-1', 'family', 'Familiar', 'Filha', 'KPI-FAM1', 'ACTIVE', NOW() + interval '7 days')
+            """)
+            self.assertFalse((await conn.fetchrow(query, "family"))["family"])
+            # Guard le as duas grafias: o default da migration 091 grava
+            # family_link_enabled (snake_case) e o Rust serializa familyLinkEnabled.
+            self.assertIn("family_link_enabled", query)
+            self.assertIn("familyLinkEnabled", query)
+            await conn.execute("""UPDATE partner_programs SET experience_config =
+                jsonb_set(experience_config, '{features,family_link_enabled}', 'true'::jsonb) WHERE id = $1""", self.prog_a)
+            self.assertTrue((await conn.fetchrow(query, "family"))["family"])
+            # camelCase prevalece quando as duas chaves existem.
+            await conn.execute("""UPDATE partner_programs SET experience_config = jsonb_set(
+                jsonb_set(experience_config, '{features,family_link_enabled}', 'false'::jsonb),
+                '{features,familyLinkEnabled}', 'true'::jsonb) WHERE id = $1""", self.prog_a)
+            self.assertTrue((await conn.fetchrow(query, "family"))["family"])
+            await conn.execute("""UPDATE partner_programs SET experience_config =
+                jsonb_set(experience_config, '{features,familyLinkEnabled}', 'false'::jsonb) WHERE id = $1""", self.prog_a)
+            self.assertFalse((await conn.fetchrow(query, "family"))["family"])
+            await conn.execute("""UPDATE partner_programs SET experience_config =
+                jsonb_set(experience_config, '{features,familyLinkEnabled}', 'true'::jsonb) WHERE id = $1""", self.prog_a)
+            self.assertTrue((await conn.fetchrow(query, "family"))["family"])
+            await conn.execute("UPDATE program_enrollments SET family_share_enabled = false WHERE program_id = $1", self.prog_a)
+            self.assertFalse((await conn.fetchrow(query, "family"))["family"])
+            await conn.execute("UPDATE program_enrollments SET status = 'REMOVED' WHERE program_id = $1", self.prog_a)
+            self.assertFalse((await conn.fetchrow(query, "patient-1"))["participant"])
+            await conn.execute("UPDATE partner_programs SET closed_at = NOW() WHERE id = $1", self.prog_a)
+            self.assertFalse((await conn.fetchrow(query, "owner-a"))["owner"])
+
+    async def test_wallet_kpis_are_global_bounded_and_exclude_other_tenants_and_old_consent(self):
+        import json
+        sql_dir = ROOT / "rust/crates/braga-edge/src/sql"
+        base = (sql_dir / "b2b_wallet.sql").read_text()
+        global_query = base + (sql_dir / "b2b_wallet_global.sql").read_text()
+        page_query = base + " SELECT * FROM metrics ORDER BY patient_user_id"
+        now = datetime(2026, 11, 20, 12, tzinfo=timezone.utc)
+        async with self.pool.acquire() as conn:
+            await conn.execute("""INSERT INTO program_enrollments (program_id, patient_user_id, status, shared_categories)
+                VALUES ($1, 'patient-2', 'ACTIVE', '[]'::jsonb)""", self.prog_a)
+            await conn.execute("UPDATE program_enrollments SET consented_at = $1", now - timedelta(days=30))
+            # Current + previous-week actions by the same participant. Company updates alone are not activity.
+            for days in (1, 8):
+                await conn.execute("""INSERT INTO program_appointments
+                    (program_id, patient_user_id, modality, requested_slot_text, status, scheduled_at, created_at, updated_at)
+                    VALUES ($1, 'patient-1', 'IN_PERSON', 'Manhã', 'CONFIRMED', $2, $3, $4)""",
+                    self.prog_a, now + timedelta(days=2), now - timedelta(days=days), now)
+            # A foreign tenant must never contribute even with the same patient ID.
+            await conn.execute("""INSERT INTO program_appointments
+                (program_id, patient_user_id, modality, requested_slot_text, created_at)
+                VALUES ($1, 'patient-2', 'IN_PERSON', 'Tarde', $2)""", self.prog_b, now)
+            reminder = await conn.fetchval("""INSERT INTO program_reminders
+                (program_id, target_category, title, body, created_by, created_at, expires_at)
+                VALUES ($1, 'steps', 'Rotina', 'Confira sua rotina', 'owner-a', $2, $3) RETURNING id""",
+                self.prog_a, now - timedelta(days=1), now + timedelta(days=1))
+            args = (self.prog_a, None, ["steps"], True, True, now)
+            rows = await conn.fetch(page_query, *args)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["active_days"], 1)
+            # date[] -> text[] com day anterior (UTC), 7 dias incluindo hoje.
+            self.assertEqual(rows[0]["activity_dates"], ["2026-11-19"])
+            self.assertEqual(rows[0]["pending_reminders"], 1)
+            self.assertEqual(rows[0]["upcoming_appointments"], 2)
+            self.assertEqual(rows[1]["active_days"], 0)
+            self.assertEqual(rows[1]["activity_dates"], [])
+            self.assertEqual(rows[1]["pending_reminders"], 0)  # no category consent
+            kpis = json.loads(await conn.fetchval(global_query, *args))
+            self.assertEqual((kpis["activeUsers"], kpis["inactiveUsers"]), (1, 1))
+            self.assertEqual(kpis["retentionRate"], 100.0)
+            self.assertEqual(kpis["appointmentsConfirmed"], 2)
+            # Page IDs bound details without affecting the independent global query.
+            page = await conn.fetch(page_query, self.prog_a, ["patient-2"], ["steps"], True, True, now)
+            self.assertEqual([r["patient_user_id"] for r in page], ["patient-2"])
+            await conn.execute("""INSERT INTO program_reminder_receipts
+                (reminder_id, patient_user_id, acknowledged_at, acknowledged_by_uid)
+                VALUES ($1, 'patient-1', $2, 'patient-1')""", reminder, now)
+            self.assertEqual(json.loads(await conn.fetchval(global_query, *args))["remindersRead"], 1)
+            # Revoked consent excludes category-targeted reminders immediately.
+            await conn.execute("UPDATE program_enrollments SET shared_categories = '[]'::jsonb WHERE program_id = $1", self.prog_a)
+            self.assertEqual(json.loads(await conn.fetchval(global_query, *args))["remindersRead"], 0)
+            # Re-enrollment must not expose actions predating the new consent.
+            await conn.execute("UPDATE program_enrollments SET consented_at = $2 WHERE program_id = $1", self.prog_a, now)
+            kpis = json.loads(await conn.fetchval(global_query, *args))
+            self.assertEqual(kpis["activeUsers"], 0)
+            self.assertIsNone(kpis["retentionRate"])
+            empty = json.loads(await conn.fetchval(global_query, self.prog_draft, None, ["steps"], True, True, now))
+            self.assertEqual(empty["activeUsers"], 0)
+            self.assertEqual(empty["inactiveUsers"], 0)
+            self.assertIsNone(empty["retentionRate"])
+
     async def test_b2b_30_account_mode_defaults_and_check_constraint(self):
         async with self.pool.acquire() as conn:
-            mode = await conn.fetchval(
-                "SELECT account_mode FROM profiles WHERE id = 'owner-a'"
+            # 093 faz backfill dos owners com programa aberto para DUAL; o default
+            # PERSONAL permanece para todas as outras contas.
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT account_mode FROM profiles WHERE id = 'patient-1'"
+                ),
+                "PERSONAL",
             )
-            self.assertEqual(mode, "PERSONAL")
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT account_mode FROM profiles WHERE id = 'owner-a'"
+                ),
+                "DUAL",
+            )
+            # 093 roda de novo sem efeito extra (idempotente).
+            async with conn.transaction():
+                await conn.execute(MIG_093_PATH.read_text(encoding="utf-8-sig"))
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT account_mode FROM profiles WHERE id = 'owner-a'"
+                ),
+                "DUAL",
+            )
 
             await conn.execute(
                 "INSERT INTO profiles (id, full_name, user_role, account_mode) "
@@ -384,6 +531,57 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                     "SELECT account_mode FROM profiles WHERE id = 'biz-1'"
                 ),
                 "DUAL",
+            )
+
+    async def test_migration_093_backfills_only_open_program_owners(self):
+        sql_up = MIG_093_PATH.read_text(encoding="utf-8-sig")
+        sql_down = MIG_093_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
+        async with self.pool.acquire() as conn:
+            # Owner de programa ENCERRADO nao e backfilled.
+            await conn.execute(
+                "INSERT INTO profiles (id, full_name) VALUES ('owner-closed', 'Responsavel Encerrado')"
+            )
+            await conn.execute(
+                """
+                INSERT INTO partner_programs
+                    (owner_user_id, program_name, company_name, approval_status, closed_at)
+                VALUES ('owner-closed', 'Programa Encerrado', 'Clinica Encerrada', 'APPROVED', NOW())
+                """
+            )
+            async with conn.transaction():
+                await conn.execute(sql_up)
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT account_mode FROM profiles WHERE id = 'owner-closed'"
+                ),
+                "PERSONAL",
+            )
+            # Reaplicar e idempotente e nao rebaixa um DUAL escolhido pelo usuario.
+            await conn.execute(
+                "UPDATE profiles SET account_mode = 'DUAL' WHERE id = 'patient-1'"
+            )
+            async with conn.transaction():
+                await conn.execute(sql_up)
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT account_mode FROM profiles WHERE id = 'patient-1'"
+                ),
+                "DUAL",
+            )
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT account_mode FROM profiles WHERE id = 'owner-a'"
+                ),
+                "DUAL",
+            )
+            # Rollback best-effort: owners com programa aberto voltam a PERSONAL.
+            async with conn.transaction():
+                await conn.execute(sql_down)
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT account_mode FROM profiles WHERE id = 'owner-a'"
+                ),
+                "PERSONAL",
             )
 
     async def test_multi_tenant_isolation_and_revocation(self):

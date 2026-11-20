@@ -1,4 +1,5 @@
 mod b2b;
+mod b2b_access;
 mod b2b_ai_receptionist;
 mod b2b_appointments;
 mod b2b_direct_chat;
@@ -362,7 +363,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Frente B2B: Motor 100% em Rust (B2B-04, B2B-07, B2B-09, B2B-10, B2B-11, B2B-12)
     if state.pool.is_some() {
-        app = mount_b2b_routes(app);
+        app = mount_b2b_routes(app, state.clone());
     }
 
     let app = app
@@ -3211,8 +3212,29 @@ pub fn is_go_chat_route(path: &str) -> bool {
         || path.starts_with("/api/notifications/")
 }
 
-fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
-    router
+fn mount_b2b_routes(router: Router<Arc<AppState>>, state: Arc<AppState>) -> Router<Arc<AppState>> {
+    let routes = Router::new()
+        .route("/api/session/contexts", get(b2b::get_contexts_handler))
+        .route("/api/session/context", post(b2b::select_context_handler))
+        .route(
+            "/api/session/account-mode",
+            post(b2b::update_account_mode_handler),
+        )
+        .route(
+            "/api/programs/invite/:code",
+            get(b2b::lookup_invite_handler),
+        )
+        .route("/api/programs/join", post(b2b::join_program_handler))
+        .route(
+            "/api/business/registration/templates",
+            get(b2b::list_templates_handler),
+        )
+        .route(
+            "/api/business/registration",
+            get(b2b::get_my_program_handler)
+                .post(b2b::save_my_program_handler)
+                .put(b2b::save_my_program_handler),
+        )
         .route("/api/b2b/contexts", get(b2b::get_contexts_handler))
         .route(
             "/api/b2b/contexts/select",
@@ -3379,6 +3401,12 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             "/api/admin/b2b/programs/:program_id/proofs/:proof_id",
             get(b2b::admin_download_program_proof_handler),
         )
+        .route(
+            "/api/b2b/*unmatched",
+            axum::routing::any(|| async { StatusCode::NOT_FOUND }),
+        )
+        .layer(middleware::from_fn_with_state(state, b2b_access::guard));
+    router.merge(routes)
 }
 
 fn is_spoofable_client_header(name: &str) -> bool {
@@ -3672,11 +3700,30 @@ mod tests {
             edge_rate_limit_per_min: 0,
         });
 
-        let app = mount_b2b_routes(Router::new()).with_state(state);
+        let app = mount_b2b_routes(Router::new(), state.clone()).with_state(state);
 
         // Todas as rotas B2B autenticadas devem bloquear acesso anonimo com 401
         let protected = [
             ("GET", "/api/b2b/contexts", None),
+            ("GET", "/api/b2b/unknown", None),
+            ("GET", "/api/session/contexts", None),
+            (
+                "POST",
+                "/api/session/context",
+                Some("{\"mode\":\"PERSONAL\"}"),
+            ),
+            (
+                "POST",
+                "/api/session/account-mode",
+                Some("{\"mode\":\"BUSINESS_ONLY\"}"),
+            ),
+            ("GET", "/api/business/registration", None),
+            ("GET", "/api/business/registration/templates", None),
+            (
+                "POST",
+                "/api/programs/join",
+                Some("{\"inviteCode\":\"CLINA-1111\",\"sharedCategories\":[\"steps\"]}"),
+            ),
             (
                 "POST",
                 "/api/b2b/contexts/select",
@@ -3864,12 +3911,36 @@ mod tests {
             );
         }
 
+        // Previa de convite e URL de capacidade publica: o app Android legado
+        // chama /api/b2b/invite/ sem bearer token (AuthInterceptor). Sem pool no
+        // teste, o handler responde 503 em vez de 401 para codigo valido.
+        for invite_uri in [
+            "/api/b2b/invite/CLINA-1111",
+            "/api/programs/invite/CLINA-1111",
+        ] {
+            let invite_resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(invite_uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                invite_resp.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Previa de convite {invite_uri} deve ser publica e atingir o handler"
+            );
+        }
+
         // Previa publica rejeita codigo malformado com 400 antes mesmo de consultar o RDS
         let bad_invite = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/b2b/invite/!invalid!")
+                    .uri("/api/programs/invite/!invalid!")
                     .body(Body::empty())
                     .unwrap(),
             )

@@ -635,6 +635,10 @@ pub struct PartnerParticipantItemDto {
     pub pending_appointments_count: i64,
     pub unread_direct_messages_count: i64,
     pub consented_at: Option<String>,
+    pub activity_dates_last_7_days: Vec<String>,
+    pub pending_reminders_count: i64,
+    pub upcoming_appointments_count: i64,
+    pub consent_status: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1726,7 +1730,10 @@ pub async fn get_contexts_handler(
         }
     };
 
-    for row in owner_rows {
+    for row in owner_rows
+        .into_iter()
+        .filter(|_| account_mode != ACCOUNT_MODE_PERSONAL)
+    {
         let raw_tk: Option<String> = row.try_get("template_key").ok();
         let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
         let (tk, cfg) = parse_experience_config_json(raw_tk.as_deref(), raw_cfg.as_ref());
@@ -1771,7 +1778,10 @@ pub async fn get_contexts_handler(
         }
     };
 
-    for row in participant_rows {
+    for row in participant_rows
+        .into_iter()
+        .filter(|_| account_mode != ACCOUNT_MODE_BUSINESS_ONLY)
+    {
         let cats: Value = row.get("shared_categories");
         let raw_tk: Option<String> = row.try_get("template_key").ok();
         let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
@@ -1956,6 +1966,34 @@ pub async fn select_context_handler(
             Ok(id) => id,
             Err(resp) => return resp,
         };
+    let pool = match require_pool(&state) {
+        Ok(pool) => pool,
+        Err((code, message)) => return json_error(code, message),
+    };
+    let account_mode =
+        match sqlx::query_scalar::<_, String>("SELECT account_mode FROM profiles WHERE id = $1")
+            .bind(&identity.uid)
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(mode) => mode.unwrap_or_else(|| ACCOUNT_MODE_PERSONAL.to_string()),
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Erro ao validar modo de conta.",
+                )
+            }
+        };
+    if (account_mode == ACCOUNT_MODE_PERSONAL && req.mode.eq_ignore_ascii_case("PARTNER_OWNER"))
+        || (account_mode == ACCOUNT_MODE_BUSINESS_ONLY
+            && !req.mode.eq_ignore_ascii_case("PARTNER_OWNER"))
+    {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "O modo da conta não permite este contexto.",
+        );
+    }
+
     let mode = req.mode.trim().to_ascii_uppercase();
     if mode == "PERSONAL" {
         return (
@@ -2763,6 +2801,22 @@ pub async fn save_my_program_handler(
 
     let id_str: String = row.get("id");
     let prog_uuid = Uuid::parse_str(&id_str).ok();
+    if audit_action == "PROGRAM_CREATED" {
+        // Fallback server-side de primeiro acesso: o fluxo OTP do app novo
+        // ignora falhas do POST /account-mode e, sem esta promocao, a conta
+        // ficaria 403 para sempre em /api/business/registration e nos recursos
+        // de gestao. Idempotente: so promove PERSONAL -> BUSINESS_ONLY.
+        if let Err(err) = sqlx::query(
+            "UPDATE profiles SET account_mode = 'BUSINESS_ONLY', updated_at = NOW() \
+              WHERE id = $1 AND account_mode = 'PERSONAL'",
+        )
+        .bind(&identity.uid)
+        .execute(pool)
+        .await
+        {
+            warn!(error = %err, "falha ao promover account_mode para BUSINESS_ONLY");
+        }
+    }
     let active = match prog_uuid {
         Some(u) => count_active_participants(pool, u).await.unwrap_or(0),
         None => 0,
@@ -3282,7 +3336,7 @@ pub async fn update_program_experience_handler(
 
     let Some(existing) = existing else {
         return json_error(
-            StatusCode::NOT_FOUND,
+            StatusCode::FORBIDDEN,
             "Programa parceiro não encontrado para esta conta.",
         );
     };
@@ -3449,7 +3503,7 @@ pub async fn close_my_program_handler(
 
     let Some(existing) = existing else {
         return json_error(
-            StatusCode::NOT_FOUND,
+            StatusCode::FORBIDDEN,
             "Programa parceiro não encontrado para esta conta.",
         );
     };
@@ -4196,7 +4250,7 @@ pub async fn update_enrollment_consent_handler(
 
     let Some(row) = updated else {
         return json_error(
-            StatusCode::NOT_FOUND,
+            StatusCode::FORBIDDEN,
             "Vínculo ativo não encontrado para este programa.",
         );
     };
@@ -4353,7 +4407,7 @@ pub async fn update_invite_policy_handler(
 
     let Some(row) = updated else {
         return json_error(
-            StatusCode::NOT_FOUND,
+            StatusCode::FORBIDDEN,
             "Programa parceiro não encontrado para esta conta.",
         );
     };
@@ -4435,7 +4489,7 @@ pub async fn regenerate_invite_code_handler(
 
     let Some(existing) = existing else {
         return json_error(
-            StatusCode::NOT_FOUND,
+            StatusCode::FORBIDDEN,
             "Programa parceiro não encontrado para esta conta.",
         );
     };
@@ -4567,7 +4621,7 @@ pub async fn list_program_participants_handler(
 
     let Some(program_row) = program_row else {
         return json_error(
-            StatusCode::NOT_FOUND,
+            StatusCode::FORBIDDEN,
             "Nenhum programa parceiro vinculado a esta conta.",
         );
     };
@@ -4718,6 +4772,56 @@ pub async fn list_program_participants_handler(
         }
     };
 
+    // Global totals ignore cursor/search; page details stay bounded to <= 50 IDs.
+    let now = Utc::now();
+    let wallet_sql = include_str!("sql/b2b_wallet.sql");
+    let global_sql = format!("{wallet_sql} {}", include_str!("sql/b2b_wallet_global.sql"));
+    let wallet_kpis: Value = match sqlx::query_scalar(&global_sql)
+        .bind(prog_uuid)
+        .bind(Option::<Vec<String>>::None)
+        .bind(&program_config.enabled_metrics)
+        .bind(program_config.features.partner_reminders_enabled)
+        .bind(program_config.features.appointments_enabled)
+        .bind(now)
+        .fetch_one(pool)
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao consultar indicadores do programa.",
+            )
+        }
+    };
+    let page_ids: Vec<String> = rows
+        .iter()
+        .take(limit as usize)
+        .map(|row| row.get("patient_user_id"))
+        .collect();
+    let page_sql = format!("{wallet_sql} SELECT * FROM metrics");
+    let page_metrics = match sqlx::query(&page_sql)
+        .bind(prog_uuid)
+        .bind(&page_ids)
+        .bind(&program_config.enabled_metrics)
+        .bind(program_config.features.partner_reminders_enabled)
+        .bind(program_config.features.appointments_enabled)
+        .bind(now)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| (row.get::<String, _>("patient_user_id"), row))
+            .collect::<std::collections::HashMap<_, _>>(),
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao consultar indicadores dos participantes.",
+            )
+        }
+    };
+
     let has_more = rows.len() > limit as usize;
     let slice_len = if has_more { limit as usize } else { rows.len() };
     let mut participants = Vec::with_capacity(slice_len);
@@ -4762,6 +4866,26 @@ pub async fn list_program_participants_handler(
             0
         };
 
+        let consent_status = if effective.is_empty() {
+            "NONE"
+        } else if missing.is_empty() {
+            "COMPLETE"
+        } else {
+            "PARTIAL"
+        }
+        .to_string();
+        // A carteira sempre devolve uma linha por membro ACTIVE; o fallback
+        // abaixo evita sumir com o participante caso o vinculo seja encerrado
+        // entre as duas consultas (consistencia eventual de leitura).
+        let (activity_dates, pending_reminders_count, upcoming_appointments_count) =
+            match page_metrics.get(&patient_uid) {
+                Some(metrics) => (
+                    metrics.get("activity_dates"),
+                    metrics.get("pending_reminders"),
+                    metrics.get("upcoming_appointments"),
+                ),
+                None => (Vec::new(), 0_i64, 0_i64),
+            };
         participants.push(PartnerParticipantItemDto {
             patient_user_id: patient_uid,
             display_name: row.get("display_name"),
@@ -4773,6 +4897,10 @@ pub async fn list_program_participants_handler(
             pending_appointments_count,
             unread_direct_messages_count,
             consented_at: consented_iso,
+            activity_dates_last_7_days: activity_dates,
+            pending_reminders_count,
+            upcoming_appointments_count,
+            consent_status,
         });
     }
 
@@ -4786,6 +4914,7 @@ pub async fn list_program_participants_handler(
         Json(json!({
             "program": program_dto,
             "participants": participants,
+            "kpis": wallet_kpis,
             "nextCursor": next_cursor,
             "hasMore": has_more
         })),
@@ -5268,7 +5397,7 @@ pub async fn remove_program_participant_handler(
 
     let Some(program_row) = program_row else {
         return json_error(
-            StatusCode::NOT_FOUND,
+            StatusCode::FORBIDDEN,
             "Nenhum programa parceiro vinculado a esta conta.",
         );
     };
@@ -5461,7 +5590,7 @@ pub async fn upload_my_program_logo_handler(
         Ok(Some(r)) => r,
         Ok(None) => {
             return json_error(
-                StatusCode::NOT_FOUND,
+                StatusCode::FORBIDDEN,
                 "Salve o rascunho do programa antes de enviar a logo.",
             )
         }
@@ -5759,7 +5888,7 @@ pub async fn upload_my_program_proof_handler(
         Ok(Some(r)) => r,
         Ok(None) => {
             return json_error(
-                StatusCode::NOT_FOUND,
+                StatusCode::FORBIDDEN,
                 "Salve os dados do programa antes de anexar comprovantes.",
             )
         }
@@ -5945,7 +6074,7 @@ pub async fn delete_my_program_proof_handler(
     .await
     {
         Ok(Some(r)) => r,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Programa não encontrado."),
+        Ok(None) => return json_error(StatusCode::FORBIDDEN, "Programa não encontrado."),
         Err(_) => {
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,

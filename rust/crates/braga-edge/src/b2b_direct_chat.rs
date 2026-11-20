@@ -315,7 +315,12 @@ pub(crate) async fn fetch_enrolled_program_for_chat(
             "Erro ao consultar programa.",
         )
     })?
-    .ok_or((StatusCode::NOT_FOUND, "Programa parceiro não encontrado."))?;
+    // Programa de outro tenant e programa inexistente respondem o mesmo 403:
+    // nao ha oraculo de existencia de UUID de programa.
+    .ok_or((
+        StatusCode::FORBIDDEN,
+        "Vínculo ativo necessário para acessar o chat direto.",
+    ))?;
 
     let enroll_status: Option<String> = row.try_get("enrollment_status").ok().flatten();
     if enroll_status.as_deref() != Some("ACTIVE") {
