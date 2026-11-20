@@ -32,6 +32,10 @@ MIG_092_PATH = ROOT / "migrations/092_b2b_reminders_appointments_direct_chat.sql
 MIG_092_ROLLBACK_PATH = (
     ROOT / "migrations/092_b2b_reminders_appointments_direct_chat_rollback.sql"
 )
+MIG_092B_PATH = ROOT / "migrations/092b_b2b_business_session_mode.sql"
+MIG_092B_ROLLBACK_PATH = (
+    ROOT / "migrations/092b_b2b_business_session_mode_rollback.sql"
+)
 
 
 class B2BStaticGuardsTest(unittest.TestCase):
@@ -138,6 +142,32 @@ class B2BStaticGuardsTest(unittest.TestCase):
         self.assertIn("receitaws.com.br", kyb_src)
         self.assertNotIn("responsible_cpf varchar", sql_up)
 
+    def test_migration_092b_business_session_mode_is_additive_reversible(self):
+        sql_up = MIG_092B_PATH.read_text(encoding="utf-8")
+        sql_down = MIG_092B_ROLLBACK_PATH.read_text(encoding="utf-8")
+        sql_up_code = "\n".join(
+            line for line in sql_up.splitlines() if not line.lstrip().startswith("--")
+        )
+        self.assertIn("SET LOCAL lock_timeout = '5s';", sql_up)
+        self.assertIn("ADD COLUMN IF NOT EXISTS account_mode", sql_up)
+        self.assertIn("DEFAULT 'PERSONAL'", sql_up)
+        self.assertIn("profiles_account_mode_check", sql_up)
+        self.assertIn("'BUSINESS_ONLY'", sql_up)
+        self.assertIn("'DUAL'", sql_up)
+        self.assertNotIn("user_role", sql_up_code)
+        self.assertNotIn("profiles_completion_check", sql_up_code)
+        self.assertIn("DROP CONSTRAINT IF EXISTS profiles_account_mode_check", sql_down)
+        self.assertIn("DROP COLUMN IF EXISTS account_mode", sql_down)
+
+        b2b_src = B2B_RUST_PATH.read_text(encoding="utf-8")
+        self.assertIn("update_account_mode_handler", b2b_src)
+        self.assertIn("default_session_mode", b2b_src)
+        self.assertIn('"accountMode"', b2b_src)
+        self.assertIn("is_account_mode_transition_allowed", b2b_src)
+
+        sync_src = (ROOT / "scripts/server/routers/sync.py").read_text(encoding="utf-8")
+        self.assertIn('"accountMode"', sync_src)
+
     def test_b2b_r2_key_extraction_email_templates_and_internal_notify(self):
         import asyncio
         from types import SimpleNamespace
@@ -228,6 +258,12 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(
                     "CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)"
                 )
+                # 001 traz basic_profile_complete, self_care_complete e profiles_completion_check
+                await conn.execute(
+                    (ROOT / "migrations/001_profile_and_family.sql").read_text(
+                        encoding="utf-8-sig"
+                    )
+                )
                 for number in (3, 10, 17, 18, 31, 32, 33, 53, 54, 56, 71, 80, 81, 82, 90, 91):
                     mig_file = next(
                         f
@@ -240,6 +276,8 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                     await conn.execute(MIG_091B_PATH.read_text(encoding="utf-8-sig"))
                 async with conn.transaction():
                     await conn.execute(MIG_092_PATH.read_text(encoding="utf-8-sig"))
+                async with conn.transaction():
+                    await conn.execute(MIG_092B_PATH.read_text(encoding="utf-8-sig"))
 
                 await conn.execute(
                     """
@@ -312,6 +350,41 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             await self.control.execute(f'DROP SCHEMA IF EXISTS "{self.schema}" CASCADE')
             await self.control.close()
             self.control = None
+
+    async def test_b2b_30_account_mode_defaults_and_check_constraint(self):
+        async with self.pool.acquire() as conn:
+            mode = await conn.fetchval(
+                "SELECT account_mode FROM profiles WHERE id = 'owner-a'"
+            )
+            self.assertEqual(mode, "PERSONAL")
+
+            await conn.execute(
+                "INSERT INTO profiles (id, full_name, user_role, account_mode) "
+                "VALUES ('biz-1', '', NULL, 'BUSINESS_ONLY')"
+            )
+            biz = await conn.fetchrow(
+                "SELECT account_mode, user_role, basic_profile_complete, self_care_complete "
+                "FROM profiles WHERE id = 'biz-1'"
+            )
+            self.assertEqual(biz["account_mode"], "BUSINESS_ONLY")
+            self.assertIsNone(biz["user_role"])
+            self.assertFalse(biz["basic_profile_complete"])
+            self.assertFalse(biz["self_care_complete"])
+
+            with self.assertRaises(Exception):
+                await conn.execute(
+                    "UPDATE profiles SET account_mode = 'HACKER' WHERE id = 'biz-1'"
+                )
+
+            await conn.execute(
+                "UPDATE profiles SET account_mode = 'DUAL' WHERE id = 'biz-1'"
+            )
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT account_mode FROM profiles WHERE id = 'biz-1'"
+                ),
+                "DUAL",
+            )
 
     async def test_multi_tenant_isolation_and_revocation(self):
         async with self.pool.acquire() as conn:
@@ -1407,6 +1480,9 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(expected_idx, indexes)
 
             async with conn.transaction():
+                await conn.execute(
+                    MIG_092B_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
+                )
                 await conn.execute(
                     MIG_092_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
                 )

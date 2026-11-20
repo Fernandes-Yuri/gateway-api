@@ -3218,6 +3218,10 @@ fn mount_b2b_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             "/api/b2b/contexts/select",
             post(b2b::select_context_handler),
         )
+        .route(
+            "/api/b2b/account-mode",
+            post(b2b::update_account_mode_handler),
+        )
         .route("/api/b2b/templates", get(b2b::list_templates_handler))
         .route(
             "/api/b2b/program/me",
@@ -3677,6 +3681,11 @@ mod tests {
                 "POST",
                 "/api/b2b/contexts/select",
                 Some("{\"mode\":\"PERSONAL\"}"),
+            ),
+            (
+                "POST",
+                "/api/b2b/account-mode",
+                Some("{\"mode\":\"BUSINESS_ONLY\"}"),
             ),
             ("GET", "/api/b2b/templates", None),
             ("GET", "/api/b2b/program/me", None),

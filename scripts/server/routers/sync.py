@@ -363,6 +363,9 @@ async def get_profile(user_id: str, uid: str = Depends(firebase_uid)):
             d["created_at"] = d["created_at"].isoformat()
         if d.get("updated_at"):
             d["updated_at"] = d["updated_at"].isoformat()
+        # B2B-30: alias camelCase aditivo da sessao empresarial
+        # (coluna account_mode da migration 092b; cliente v1.9.6 ignora).
+        d["accountMode"] = d.get("account_mode") or "PERSONAL"
         return d
 
 

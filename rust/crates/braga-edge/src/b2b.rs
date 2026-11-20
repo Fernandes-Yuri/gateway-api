@@ -401,6 +401,57 @@ pub struct SelectContextRequest {
     pub program_id: Option<String>,
 }
 
+// ---------------------------------------------------------------------
+// B2B-30: Sessao Empresarial Pura (account_mode)
+// ---------------------------------------------------------------------
+
+pub const ACCOUNT_MODE_PERSONAL: &str = "PERSONAL";
+pub const ACCOUNT_MODE_BUSINESS_ONLY: &str = "BUSINESS_ONLY";
+pub const ACCOUNT_MODE_DUAL: &str = "DUAL";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAccountModeRequest {
+    pub mode: String,
+}
+
+/// Transicao permitida de account_mode?
+///
+/// - `PERSONAL -> BUSINESS_ONLY`: somente conta recem-criada ("Para minha
+///   empresa") que ainda nao concluiu o onboarding pessoal de saude
+///   (`basic_profile_complete = false`), evitando que um paciente ativo
+///   perca subitamente a sessao pessoal.
+/// - `BUSINESS_ONLY -> DUAL`: dono da empresa ativa explicitamente o espaco
+///   pessoal de saude (aba Empresa).
+/// - `PERSONAL -> DUAL`: usuario pessoal que criou um programa B2B.
+/// - `DUAL -> BUSINESS_ONLY` e `DUAL -> PERSONAL`: desativacao explicita de
+///   uma das sessoes pelo proprio titular.
+pub fn is_account_mode_transition_allowed(
+    current: &str,
+    target: &str,
+    basic_profile_complete: bool,
+) -> bool {
+    if current == target {
+        return true;
+    }
+    match (current, target) {
+        (ACCOUNT_MODE_PERSONAL, ACCOUNT_MODE_BUSINESS_ONLY) => !basic_profile_complete,
+        (ACCOUNT_MODE_PERSONAL | ACCOUNT_MODE_BUSINESS_ONLY, ACCOUNT_MODE_DUAL)
+        | (ACCOUNT_MODE_DUAL, ACCOUNT_MODE_BUSINESS_ONLY | ACCOUNT_MODE_PERSONAL) => true,
+        _ => false,
+    }
+}
+
+/// Modo inicial de sessao devolvido por `GET /api/b2b/contexts`:
+/// contas `BUSINESS_ONLY` caem direto na Sessao Clinica (`PARTNER_OWNER`).
+pub fn default_session_mode(account_mode: &str) -> &'static str {
+    if account_mode == ACCOUNT_MODE_BUSINESS_ONLY {
+        "PARTNER_OWNER"
+    } else {
+        "PERSONAL"
+    }
+}
+
 fn default_personal_mode() -> String {
     "PERSONAL".to_string()
 }
@@ -1637,6 +1688,21 @@ pub async fn get_contexts_handler(
         Err((code, msg)) => return json_error(code, msg),
     };
 
+    // B2B-30: modo de conta (PERSONAL / BUSINESS_ONLY / DUAL) — campo aditivo
+    // e opcional para o cliente v1.9.6, que simplesmente ignora a chave nova.
+    let account_mode: String = match sqlx::query("SELECT account_mode FROM profiles WHERE id = $1")
+        .bind(&identity.uid)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => row
+            .try_get::<Option<String>, _>("account_mode")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| ACCOUNT_MODE_PERSONAL.to_string()),
+        _ => ACCOUNT_MODE_PERSONAL.to_string(),
+    };
+
     let mut contexts = vec![personal_context(&identity.uid)];
 
     let owner_rows = match sqlx::query(
@@ -1730,8 +1796,151 @@ pub async fn get_contexts_handler(
     (
         StatusCode::OK,
         Json(json!({
-            "defaultMode": "PERSONAL",
+            "accountMode": account_mode,
+            "defaultMode": default_session_mode(&account_mode),
             "contexts": contexts
+        })),
+    )
+        .into_response()
+}
+
+/// B2B-30: `POST /api/b2b/account-mode`
+///
+/// Permite ao proprio titular autenticado (JWT RS256):
+///   (a) marcar conta recem-criada em "Para minha empresa" como
+///       `BUSINESS_ONLY` (sem exigir peso/altura do onboarding pessoal);
+///   (b) evoluir `BUSINESS_ONLY -> DUAL` (ativar espaco pessoal opcional);
+///   (c) evoluir `PERSONAL -> DUAL` ao criar um programa B2B;
+///   (d) desativar explicitamente uma das sessoes a partir de `DUAL`.
+pub async fn update_account_mode_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateAccountModeRequest>,
+) -> Response {
+    let identity =
+        match authenticate_request(&headers, &state, "POST", "/api/b2b/account-mode").await {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+    let target = req.mode.trim().to_ascii_uppercase();
+    if !matches!(
+        target.as_str(),
+        ACCOUNT_MODE_PERSONAL | ACCOUNT_MODE_BUSINESS_ONLY | ACCOUNT_MODE_DUAL
+    ) {
+        return json_error(StatusCode::BAD_REQUEST, "Modo de conta inválido.");
+    }
+    let pool = match require_pool(&state) {
+        Ok(p) => p,
+        Err((code, msg)) => return json_error(code, msg),
+    };
+
+    let existing_opt = match sqlx::query(
+        "SELECT account_mode, basic_profile_complete FROM profiles WHERE id = $1",
+    )
+    .bind(&identity.uid)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(row) => row,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao consultar o modo da conta.",
+            )
+        }
+    };
+
+    let row = match existing_opt {
+        Some(row) => row,
+        None => {
+            // Conta recem-autenticada no Firebase (ex.: Google Sign-In) que
+            // ainda nao enviou /api/sync/profile: cria perfil minimo compativel
+            // com `profiles_completion_check` e `profiles_mode_check`.
+            match sqlx::query(
+                "INSERT INTO profiles (id, full_name, user_role, account_mode) \
+                 VALUES ($1, '', NULL, $2) \
+                 ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(&identity.uid)
+            .bind(&target)
+            .execute(pool)
+            .await
+            {
+                Ok(res) if res.rows_affected() > 0 => {
+                    return (
+                        StatusCode::OK,
+                        Json(json!({
+                            "accountMode": target,
+                            "defaultMode": default_session_mode(&target),
+                        })),
+                    )
+                        .into_response();
+                }
+                Ok(_) => {
+                    match sqlx::query(
+                        "SELECT account_mode, basic_profile_complete FROM profiles WHERE id = $1",
+                    )
+                    .bind(&identity.uid)
+                    .fetch_optional(pool)
+                    .await
+                    {
+                        Ok(Some(row)) => row,
+                        _ => {
+                            return json_error(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "Erro ao consultar o modo da conta.",
+                            )
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn!(error = %err, "falha ao inicializar account_mode");
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Erro ao inicializar o modo da conta.",
+                    );
+                }
+            }
+        }
+    };
+    let current: String = row
+        .try_get::<Option<String>, _>("account_mode")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| ACCOUNT_MODE_PERSONAL.to_string());
+    let basic_profile_complete: bool = row
+        .try_get::<Option<bool>, _>("basic_profile_complete")
+        .ok()
+        .flatten()
+        .unwrap_or(false);
+
+    if !is_account_mode_transition_allowed(&current, &target, basic_profile_complete) {
+        return json_error(
+            StatusCode::CONFLICT,
+            "Transição de modo de conta não permitida para o estado atual do perfil.",
+        );
+    }
+
+    if current != target {
+        if let Err(err) = sqlx::query("UPDATE profiles SET account_mode = $2 WHERE id = $1")
+            .bind(&identity.uid)
+            .bind(&target)
+            .execute(pool)
+            .await
+        {
+            warn!(error = %err, "falha ao atualizar account_mode");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao atualizar o modo da conta.",
+            );
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "accountMode": target,
+            "defaultMode": default_session_mode(&target),
         })),
     )
         .into_response()
@@ -6503,5 +6712,67 @@ mod tests {
                 .expect_err("Programa suspenso precisa bloquear todos os modulos com 403");
             assert_eq!(suspended.0, StatusCode::FORBIDDEN);
         }
+    }
+
+    #[test]
+    fn test_account_mode_transitions_b2b_30() {
+        // Conta nova ("Para minha empresa") ainda sem onboarding pessoal:
+        // PERSONAL -> BUSINESS_ONLY liberado.
+        assert!(is_account_mode_transition_allowed(
+            ACCOUNT_MODE_PERSONAL,
+            ACCOUNT_MODE_BUSINESS_ONLY,
+            false
+        ));
+        // Paciente ativo (perfil pessoal concluido) NAO pode virar
+        // BUSINESS_ONLY: precisaria de DUAL para preservar a sessao pessoal.
+        assert!(!is_account_mode_transition_allowed(
+            ACCOUNT_MODE_PERSONAL,
+            ACCOUNT_MODE_BUSINESS_ONLY,
+            true
+        ));
+        // Evolucoes explicitas para DUAL.
+        assert!(is_account_mode_transition_allowed(
+            ACCOUNT_MODE_PERSONAL,
+            ACCOUNT_MODE_DUAL,
+            true
+        ));
+        assert!(is_account_mode_transition_allowed(
+            ACCOUNT_MODE_BUSINESS_ONLY,
+            ACCOUNT_MODE_DUAL,
+            false
+        ));
+        // Desativacao explicita de uma sessao a partir de DUAL.
+        assert!(is_account_mode_transition_allowed(
+            ACCOUNT_MODE_DUAL,
+            ACCOUNT_MODE_BUSINESS_ONLY,
+            true
+        ));
+        assert!(is_account_mode_transition_allowed(
+            ACCOUNT_MODE_DUAL,
+            ACCOUNT_MODE_PERSONAL,
+            true
+        ));
+        // BUSINESS_ONLY nunca volta a PERSONAL puro (sessao clinica e a base).
+        assert!(!is_account_mode_transition_allowed(
+            ACCOUNT_MODE_BUSINESS_ONLY,
+            ACCOUNT_MODE_PERSONAL,
+            false
+        ));
+        // Idempotente.
+        assert!(is_account_mode_transition_allowed(
+            ACCOUNT_MODE_BUSINESS_ONLY,
+            ACCOUNT_MODE_BUSINESS_ONLY,
+            false
+        ));
+    }
+
+    #[test]
+    fn test_default_session_mode_b2b_30() {
+        assert_eq!(
+            default_session_mode(ACCOUNT_MODE_BUSINESS_ONLY),
+            "PARTNER_OWNER"
+        );
+        assert_eq!(default_session_mode(ACCOUNT_MODE_PERSONAL), "PERSONAL");
+        assert_eq!(default_session_mode(ACCOUNT_MODE_DUAL), "PERSONAL");
     }
 }
