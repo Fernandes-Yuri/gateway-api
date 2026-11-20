@@ -27,7 +27,7 @@ FEATURES = (
 EXPERIENCE = {
     "schema_version": 1,
     "template_key": "CLINICA_GERAL",
-    "welcome_headline": "Clínica Braga - Programa de teste",
+    "welcome_headline": "Horizonte Cuida",
     "welcome_message": "Espaço de teste para acompanhar sua rotina e conversar com a equipe.",
     "enabled_metrics": METRICS,
     "features": dict.fromkeys(FEATURES, True),
@@ -37,7 +37,7 @@ EXPERIENCE = {
         "allow_off_hours_queue": True,
     },
     "ai_receptionist_policy": {
-        "persona_name": "Recepção Braga Teste",
+        "persona_name": "Recepção Horizonte",
         "activation_mode": "ALWAYS_FIRST",
         "greeting_message": "Olá! Posso ajudar com horários e agendamentos deste programa de teste.",
         "partner_faq_knowledge": (
@@ -242,20 +242,21 @@ async def run(conn, accounts, *, reset=False, check=False):
             await audit(conn, existing["id"], owner, "DEMO_RESET", counts)
             return {"mode": "reset", "program_exists": True, "deleted": counts}
         await conn.execute(
-            "INSERT INTO profiles(id,full_name,user_role,account_mode) VALUES($1,'Clínica Braga Teste',NULL,"
-            "'BUSINESS_ONLY') ON CONFLICT(id) DO UPDATE SET account_mode='BUSINESS_ONLY',"
+            "INSERT INTO profiles(id,full_name,user_role,account_mode) VALUES($1,'Horizonte Teste',NULL,"
+            "'BUSINESS_ONLY') ON CONFLICT(id) DO UPDATE SET full_name=EXCLUDED.full_name,account_mode='BUSINESS_ONLY',"
             "user_role=NULL,caregiver_mode=NULL,basic_profile_complete=false,self_care_complete=false,"
             "self_care_setup_pending=false,updated_at=now()", owner,
         )
         program_id = await conn.fetchval(
             "INSERT INTO partner_programs(owner_user_id,program_name,company_name,primary_color,logo_url,"
             "approval_status,invite_code,seat_limit,template_key,experience_config,review_note,reviewed_at) "
-            "VALUES($1,'Clínica Braga Teste','Programa de teste B2B-31','#00695C',"
-            "'https://bragasaude.online/images/logo.png','APPROVED',$2,50,'CLINICA_GERAL',$3::jsonb,"
+            "VALUES($1,'Horizonte Cuida','Horizonte','#00695C',"
+            "NULL,'APPROVED',$2,50,'CLINICA_GERAL',$3::jsonb,"
             "'Conta de teste B2B-31; aprovação operacional de demonstração.',now()) "
             "ON CONFLICT(owner_user_id) DO UPDATE SET program_name=EXCLUDED.program_name,"
             "company_name=EXCLUDED.company_name,primary_color=EXCLUDED.primary_color,"
-            "logo_url=COALESCE(partner_programs.logo_url,EXCLUDED.logo_url),approval_status='APPROVED',"
+            "logo_url=CASE WHEN partner_programs.logo_url='https://bragasaude.online/images/logo.png' "
+            "THEN NULL ELSE partner_programs.logo_url END,approval_status='APPROVED',"
             "invite_code=EXCLUDED.invite_code,seat_limit=50,template_key='CLINICA_GERAL',"
             "experience_config=EXCLUDED.experience_config,invite_paused=false,ai_paused=false,"
             "review_note=EXCLUDED.review_note,reviewed_at=now(),updated_at=now() RETURNING id",

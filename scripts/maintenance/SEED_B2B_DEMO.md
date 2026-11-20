@@ -18,7 +18,9 @@ claims ou usuários fictícios. O titular pode ganhar seu perfil PostgreSQL
 empresarial, sem obrigar preenchimento pessoal.
 
 O seed configura `TEST-B2B1`, `APPROVED`, 50 vagas, `CLINICA_GERAL`, cor `#00695C`,
-logo público Braga (preserva logo existente), sete módulos ativos e FAQ de teste.
+marca Horizonte / Horizonte Cuida, monograma H quando não há logo próprio, sete
+módulos ativos e FAQ de teste. Remove apenas o antigo logo padrão Braga; preserva
+um logo personalizado existente. A marca técnica fica no rodapé do aplicativo.
 Os pacientes recebem quatro e duas categorias, respectivamente. O vínculo
 familiar só habilita o compartilhamento do primeiro quando o segundo já é seu
 cuidador ativo, conforme a direção autorizada pelo backend.
