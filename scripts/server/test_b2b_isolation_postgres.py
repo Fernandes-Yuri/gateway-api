@@ -258,6 +258,12 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(
                     "CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY)"
                 )
+                # 001 traz basic_profile_complete, self_care_complete e profiles_completion_check
+                await conn.execute(
+                    (ROOT / "migrations/001_profile_and_family.sql").read_text(
+                        encoding="utf-8-sig"
+                    )
+                )
                 for number in (3, 10, 17, 18, 31, 32, 33, 53, 54, 56, 71, 80, 81, 82, 90, 91):
                     mig_file = next(
                         f
