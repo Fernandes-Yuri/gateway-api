@@ -259,9 +259,22 @@ async def run(conn, accounts, *, reset=False, check=False):
             "THEN NULL ELSE partner_programs.logo_url END,approval_status='APPROVED',"
             "invite_code=EXCLUDED.invite_code,seat_limit=50,template_key='CLINICA_GERAL',"
             "experience_config=EXCLUDED.experience_config,invite_paused=false,ai_paused=false,"
-            "review_note=EXCLUDED.review_note,reviewed_at=now(),updated_at=now() RETURNING id",
+            "review_note=EXCLUDED.review_note,"
+            "reviewed_at=now(),updated_at=now() RETURNING id",
             owner, INVITE_CODE, json.dumps(EXPERIENCE, ensure_ascii=False),
         )
+        # Cidade/UF do programa demo: só grava quando a coluna existe (compatível
+        # com schemas de teste que não aplicam a migration 091b).
+        has_city_column = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'partner_programs' "
+            "AND column_name = 'city')"
+        )
+        if has_city_column:
+            await conn.execute(
+                "UPDATE partner_programs SET city = 'São Paulo', state = 'SP', updated_at = now() WHERE id = $1",
+                program_id,
+            )
         first, second = (accounts[email] for email in PATIENT_EMAILS)
         family_share = await conn.fetchval(
             "SELECT EXISTS(SELECT 1 FROM family_bindings WHERE status='ACTIVE' "
