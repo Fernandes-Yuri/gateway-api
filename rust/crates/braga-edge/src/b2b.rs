@@ -4960,7 +4960,7 @@ async fn load_steps_section(
           WHERE user_id = $1 \
             AND date BETWEEN (now() AT TIME ZONE 'America/Sao_Paulo')::date - ($2::int - 1) AND (now() AT TIME ZONE 'America/Sao_Paulo')::date \
           ORDER BY date DESC \
-          LIMIT $2",
+          LIMIT 31",
     )
     .bind(patient_id)
     .bind(days)
@@ -5029,7 +5029,7 @@ async fn load_hydration_section(
             AND measured_at BETWEEN (((now() AT TIME ZONE 'America/Sao_Paulo')::date - ($2::int - 1))::timestamp AT TIME ZONE 'America/Sao_Paulo') AND NOW() \
           GROUP BY 1 \
           ORDER BY 1 DESC \
-          LIMIT $2",
+          LIMIT 31",
     )
     .bind(patient_id)
     .bind(days)
