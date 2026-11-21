@@ -1,6 +1,8 @@
 -- $1 program, $2 optional page IDs, $3 enabled categories, $4 reminders,
--- $5 appointments, $6 request time. Dias de calendario America/Sao_Paulo
--- (mesma base do detalhe do participante), hoje incluido.
+-- $5 appointments, $6 request time, $7 direct chat enabled (apenas o SELECT
+-- global em b2b_wallet_global.sql usa $7; a pagina de participantes nao).
+-- Dias de calendario America/Sao_Paulo (mesma base do detalhe do participante),
+-- hoje incluido.
 -- Only program interactions; never reads personal health records or chat buffers.
 WITH members AS MATERIALIZED (
     SELECT e.patient_user_id, e.consented_at, e.shared_categories
@@ -8,7 +10,8 @@ WITH members AS MATERIALIZED (
     WHERE e.program_id = $1 AND e.status = 'ACTIVE'
       AND ($2::text[] IS NULL OR e.patient_user_id = ANY($2))
 ), visible_reminders AS MATERIALIZED (
-    SELECT e.patient_user_id, r.id, r.expires_at, rc.acknowledged_at, rc.acknowledged_by_uid
+    SELECT e.patient_user_id, r.id, r.expires_at, rc.acknowledged_at,
+           rc.acknowledged_by_uid
     FROM members e
     JOIN program_reminders r ON r.program_id = $1
       AND (r.target_patient_id IS NULL OR r.target_patient_id = e.patient_user_id)
@@ -50,6 +53,30 @@ WITH members AS MATERIALIZED (
             ((($6::timestamptz AT TIME ZONE 'America/Sao_Paulo')::date - 6)::timestamp AT TIME ZONE 'America/Sao_Paulo')
             AND acknowledged_at <= $6) AS read
     FROM visible_reminders GROUP BY patient_user_id
+), reminders_total AS (
+    -- Denominador de "% lido": lembretes entregues no recorte de 7 dias que
+    -- existiram para o membro (criados no periodo) OU que foram lidos nele.
+    -- Inclui lembrete expirado/nao lido (conta como enviado) e leitura atrasada
+    -- de lembrete antigo (que o KPI `remindersRead` ja contabiliza), mantendo
+    -- read <= total. Respeita consentimento/categoria/feature como a carteira.
+    SELECT e.patient_user_id, count(*)::bigint AS total
+    FROM members e
+    JOIN program_reminders r ON r.program_id = $1
+      AND (r.target_patient_id IS NULL OR r.target_patient_id = e.patient_user_id)
+      AND r.created_at >= e.consented_at AND r.created_at <= $6
+      AND (r.target_category IS NULL OR (
+          e.shared_categories @> jsonb_build_array(r.target_category)
+          AND r.target_category = ANY($3::text[])))
+      AND $4::boolean
+    WHERE r.created_at >=
+          ((($6::timestamptz AT TIME ZONE 'America/Sao_Paulo')::date - 6)::timestamp AT TIME ZONE 'America/Sao_Paulo')
+       OR EXISTS (
+          SELECT 1 FROM program_reminder_receipts rc
+           WHERE rc.reminder_id = r.id
+             AND rc.patient_user_id = e.patient_user_id
+             AND rc.acknowledged_at >=
+                 ((($6::timestamptz AT TIME ZONE 'America/Sao_Paulo')::date - 6)::timestamp AT TIME ZONE 'America/Sao_Paulo'))
+    GROUP BY e.patient_user_id
 ), bookings AS (
     SELECT patient_user_id,
         count(*) FILTER (WHERE status = 'CONFIRMED' AND scheduled_at >= $6
@@ -68,11 +95,13 @@ WITH members AS MATERIALIZED (
         COALESCE(a.previous_week, false) AS previous_week,
         COALESCE(r.pending, 0)::bigint AS pending_reminders,
         COALESCE(r.read, 0)::bigint AS reminders_read,
+        COALESCE(rt.total, 0)::bigint AS reminders_total,
         COALESCE(b.upcoming, 0)::bigint AS upcoming_appointments,
         COALESCE(b.confirmed, 0)::bigint AS appointments_confirmed,
         COALESCE(b.previous_confirmed, 0)::bigint AS previous_confirmed
     FROM members e
     LEFT JOIN activity a USING (patient_user_id)
     LEFT JOIN reminders r USING (patient_user_id)
+    LEFT JOIN reminders_total rt USING (patient_user_id)
     LEFT JOIN bookings b USING (patient_user_id)
 )

@@ -222,7 +222,7 @@ pub async fn get_family_program_overview_handler(
         let appointments = if appointments_enabled {
             match sqlx::query(
                 "SELECT id::text AS appointment_id, program_id::text AS program_id, patient_user_id, \
-                        modality, requested_slot_text, scheduled_at, patient_note, partner_note, \
+                        modality, requested_slot_text, requested_period, scheduled_at, patient_note, partner_note, \
                         status, created_at, updated_at \
                    FROM program_appointments \
                   WHERE program_id = $1 \

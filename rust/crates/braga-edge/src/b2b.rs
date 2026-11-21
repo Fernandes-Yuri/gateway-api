@@ -390,6 +390,16 @@ pub struct ContextDescriptor {
     pub shared_categories: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template_key: Option<String>,
+    /// Janela de atendimento humano (cabecalho "Atendimento" do app).
+    /// Top-level aditivo: `experienceConfig.directChatPolicy.serviceHoursLabel`
+    /// continua sendo a fonte e permanece no payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_hours_label: Option<String>,
+    /// Disponibilidade para marcar consulta (cabecalho "Agendamento").
+    /// Top-level aditivo: `experienceConfig.appointmentsPolicy.availabilitiesSummary`
+    /// continua no payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub appointments_summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experience_config: Option<ProgramExperienceConfigDto>,
     pub family_share_enabled: bool,
@@ -520,6 +530,13 @@ pub struct PartnerProgramDto {
     pub can_promote: bool,
     pub template_key: String,
     pub experience_config: ProgramExperienceConfigDto,
+    /// Atalhos aditivos para a UI rotular "Atendimento" x "Agendamento" sem
+    /// depender de `experienceConfig` aninhado. Os campos antigos continuam
+    /// intactos e sao a fonte canonica.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_hours_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub appointments_summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub responsible_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -649,6 +666,11 @@ pub struct PartnerParticipantItemDto {
     pub pending_reminders_count: i64,
     pub upcoming_appointments_count: i64,
     pub consent_status: String,
+    /// Versao do consentimento vigente no vinculo (migration 094). Aditivo e
+    /// opcional: vinculos legados ficam com a chave ausente e o cliente cai no
+    /// chip de `consentStatus`. Nao e PII.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consent_version: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -772,6 +794,8 @@ fn personal_context(uid: &str) -> ContextDescriptor {
         approval_status: None,
         shared_categories: Vec::new(),
         template_key: None,
+        service_hours_label: None,
+        appointments_summary: None,
         experience_config: None,
         family_share_enabled: false,
     }
@@ -1760,6 +1784,8 @@ pub async fn get_contexts_handler(
             approval_status: Some(row.get("approval_status")),
             shared_categories: Vec::new(),
             template_key: Some(tk),
+            service_hours_label: Some(cfg.direct_chat_policy.service_hours_label.clone()),
+            appointments_summary: Some(cfg.appointments_policy.availabilities_summary.clone()),
             experience_config: Some(cfg),
             family_share_enabled: false,
         });
@@ -1810,6 +1836,8 @@ pub async fn get_contexts_handler(
             approval_status: Some(row.get("approval_status")),
             shared_categories: parse_categories_json(&cats),
             template_key: Some(tk),
+            service_hours_label: Some(cfg.direct_chat_policy.service_hours_label.clone()),
+            appointments_summary: Some(cfg.appointments_policy.availabilities_summary.clone()),
             experience_config: Some(cfg),
             family_share_enabled: family_share,
         });
@@ -2061,6 +2089,8 @@ pub async fn select_context_handler(
                 approval_status: Some(row.get("approval_status")),
                 shared_categories: Vec::new(),
                 template_key: Some(tk),
+                service_hours_label: Some(cfg.direct_chat_policy.service_hours_label.clone()),
+                appointments_summary: Some(cfg.appointments_policy.availabilities_summary.clone()),
                 experience_config: Some(cfg),
                 family_share_enabled: false,
             }
@@ -2098,6 +2128,8 @@ pub async fn select_context_handler(
                 approval_status: Some(row.get("approval_status")),
                 shared_categories: parse_categories_json(&cats),
                 template_key: Some(tk),
+                service_hours_label: Some(cfg.direct_chat_policy.service_hours_label.clone()),
+                appointments_summary: Some(cfg.appointments_policy.availabilities_summary.clone()),
                 experience_config: Some(cfg),
                 family_share_enabled: family_share,
             }
@@ -2335,6 +2367,18 @@ fn map_program_row(
         seat_limit: row.get("seat_limit"),
         active_participants,
         template_key,
+        service_hours_label: Some(
+            experience_config
+                .direct_chat_policy
+                .service_hours_label
+                .clone(),
+        ),
+        appointments_summary: Some(
+            experience_config
+                .appointments_policy
+                .availabilities_summary
+                .clone(),
+        ),
         experience_config,
         responsible_name: row.try_get("responsible_name").ok().flatten(),
         responsible_cpf_masked: row.try_get("responsible_cpf_masked").ok().flatten(),
@@ -4198,6 +4242,8 @@ pub async fn join_program_handler(
         approval_status: Some(status_str),
         shared_categories: categories,
         template_key: Some(tk),
+        service_hours_label: Some(cfg.direct_chat_policy.service_hours_label.clone()),
+        appointments_summary: Some(cfg.appointments_policy.availabilities_summary.clone()),
         experience_config: Some(cfg),
         family_share_enabled: family_share,
     };
@@ -4333,6 +4379,8 @@ pub async fn update_enrollment_consent_handler(
         approval_status: Some(row.get("approval_status")),
         shared_categories: categories,
         template_key: Some(tk),
+        service_hours_label: Some(cfg.direct_chat_policy.service_hours_label.clone()),
+        appointments_summary: Some(cfg.appointments_policy.availabilities_summary.clone()),
         experience_config: Some(cfg),
         family_share_enabled: family_share,
     };
@@ -4750,7 +4798,7 @@ pub async fn list_program_participants_handler(
                        AND dm.sender_role = 'PATIENT' \
                        AND dm.read_at IS NULL \
                 ) AS unread_direct_messages_count, \
-                e.consented_at \
+                e.consented_at, e.consent_version \
            FROM program_enrollments e \
            JOIN profiles pr ON pr.id = e.patient_user_id \
           WHERE e.program_id = $1 \
@@ -4823,6 +4871,8 @@ pub async fn list_program_participants_handler(
     };
 
     // Global totals ignore cursor/search; page details stay bounded to <= 50 IDs.
+    // O $7 (chat direto) so e consumido pelo SELECT global; a pagina continua
+    // com 6 binds e nao enxerga a coluna/flag nova.
     let now = Utc::now();
     let wallet_sql = include_str!("sql/b2b_wallet.sql");
     let global_sql = format!("{wallet_sql} {}", include_str!("sql/b2b_wallet_global.sql"));
@@ -4833,6 +4883,7 @@ pub async fn list_program_participants_handler(
         .bind(program_config.features.partner_reminders_enabled)
         .bind(program_config.features.appointments_enabled)
         .bind(now)
+        .bind(program_config.features.direct_partner_chat_enabled)
         .fetch_one(pool)
         .await
     {
@@ -4924,6 +4975,7 @@ pub async fn list_program_participants_handler(
             "PARTIAL"
         }
         .to_string();
+        let consent_version: Option<String> = row.try_get("consent_version").ok().flatten();
         // A carteira sempre devolve uma linha por membro ACTIVE; o fallback
         // abaixo evita sumir com o participante caso o vinculo seja encerrado
         // entre as duas consultas (consistencia eventual de leitura).
@@ -4951,6 +5003,7 @@ pub async fn list_program_participants_handler(
             pending_reminders_count,
             upcoming_appointments_count,
             consent_status,
+            consent_version,
         });
     }
 
@@ -7134,5 +7187,47 @@ mod tests {
         );
         assert_eq!(default_session_mode(ACCOUNT_MODE_PERSONAL), "PERSONAL");
         assert_eq!(default_session_mode(ACCOUNT_MODE_DUAL), "PERSONAL");
+    }
+
+    #[test]
+    fn context_descriptor_exposes_separated_hour_labels_additively() {
+        let cfg = default_experience_config_for_template(TemplateKey::ClinicaGeral);
+        let expected_hours = cfg.direct_chat_policy.service_hours_label.clone();
+        let expected_avail = cfg.appointments_policy.availabilities_summary.clone();
+        let ctx = ContextDescriptor {
+            mode: "PARTNER_OWNER".to_string(),
+            user_id: "owner-1".to_string(),
+            program_id: Some("prog-1".to_string()),
+            program_name: Some("Programa".to_string()),
+            company_name: Some("Clinica".to_string()),
+            primary_color: Some("#1A6B5C".to_string()),
+            logo_url: None,
+            approval_status: Some("APPROVED".to_string()),
+            shared_categories: Vec::new(),
+            template_key: Some(cfg.template_key.clone()),
+            service_hours_label: Some(expected_hours.clone()),
+            appointments_summary: Some(expected_avail.clone()),
+            experience_config: Some(cfg),
+            family_share_enabled: false,
+        };
+        let value = serde_json::to_value(&ctx).expect("contexto serializa");
+        // Atalhos top-level para a UI rotular "Atendimento" x "Agendamento"...
+        assert_eq!(value["serviceHoursLabel"], expected_hours);
+        assert_eq!(value["appointmentsSummary"], expected_avail);
+        // ...sem remover os campos antigos aninhados (compatibilidade).
+        assert_eq!(
+            value["experienceConfig"]["directChatPolicy"]["serviceHoursLabel"],
+            expected_hours
+        );
+        assert_eq!(
+            value["experienceConfig"]["appointmentsPolicy"]["availabilitiesSummary"],
+            expected_avail
+        );
+
+        // Contexto pessoal nao tem programa: chaves omitidas, nao null.
+        let personal = serde_json::to_value(personal_context("uid-1")).expect("contexto pessoal");
+        assert!(personal.get("serviceHoursLabel").is_none());
+        assert!(personal.get("appointmentsSummary").is_none());
+        assert_eq!(personal["mode"], "PERSONAL");
     }
 }
