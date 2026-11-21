@@ -857,8 +857,7 @@ mod tests {
     fn sovereign_prompt_distinguishes_service_hours_from_booking_windows() {
         let mut cfg = default_experience_config_for_template(TemplateKey::ClinicaGeral);
         cfg.direct_chat_policy.service_hours_label = "Seg a Sex, 08h às 18h".to_string();
-        cfg.appointments_policy.availabilities_summary =
-            "Terças e Quintas, 09h às 17h".to_string();
+        cfg.appointments_policy.availabilities_summary = "Terças e Quintas, 09h às 17h".to_string();
 
         let prompt = build_sovereign_system_prompt("Cardio Vida", "Clinica Ltda", &cfg);
 
