@@ -26,7 +26,7 @@ WITH members AS MATERIALIZED (
       AND $5::boolean
       AND (a.created_at >= ((($6::timestamptz AT TIME ZONE 'UTC')::date - 13)::timestamp AT TIME ZONE 'UTC')
            OR (a.status = 'CONFIRMED' AND (a.scheduled_at >= $6 OR a.updated_at >=
-               ((($6::timestamptz AT TIME ZONE 'UTC')::date - 6)::timestamp AT TIME ZONE 'UTC'))))
+               ((($6::timestamptz AT TIME ZONE 'UTC')::date - 13)::timestamp AT TIME ZONE 'UTC'))))
 ), events AS (
     SELECT patient_user_id, (acknowledged_at AT TIME ZONE 'UTC')::date AS day
     FROM visible_reminders
@@ -55,7 +55,10 @@ WITH members AS MATERIALIZED (
             AND scheduled_at < $6 + interval '7 days') AS upcoming,
         count(*) FILTER (WHERE status = 'CONFIRMED' AND updated_at >=
             ((($6::timestamptz AT TIME ZONE 'UTC')::date - 6)::timestamp AT TIME ZONE 'UTC')
-            AND updated_at <= $6) AS confirmed
+            AND updated_at <= $6) AS confirmed,
+        count(*) FILTER (WHERE status = 'CONFIRMED' AND (updated_at AT TIME ZONE 'UTC')::date
+            BETWEEN ($6::timestamptz AT TIME ZONE 'UTC')::date - 13
+                AND ($6::timestamptz AT TIME ZONE 'UTC')::date - 7) AS previous_confirmed
     FROM appointments GROUP BY patient_user_id
 ), metrics AS (
     SELECT e.patient_user_id,
@@ -65,7 +68,8 @@ WITH members AS MATERIALIZED (
         COALESCE(r.pending, 0)::bigint AS pending_reminders,
         COALESCE(r.read, 0)::bigint AS reminders_read,
         COALESCE(b.upcoming, 0)::bigint AS upcoming_appointments,
-        COALESCE(b.confirmed, 0)::bigint AS appointments_confirmed
+        COALESCE(b.confirmed, 0)::bigint AS appointments_confirmed,
+        COALESCE(b.previous_confirmed, 0)::bigint AS previous_confirmed
     FROM members e
     LEFT JOIN activity a USING (patient_user_id)
     LEFT JOIN reminders r USING (patient_user_id)

@@ -109,6 +109,8 @@ pub struct ProgramReminderDto {
     pub body: String,
     pub created_at: String,
     pub acknowledged_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipient_count: Option<i64>,
     pub acknowledged_at: Option<String>,
     pub acknowledged_by_uid: Option<String>,
 }
@@ -608,6 +610,7 @@ pub async fn create_program_reminder_handler(
         body: input.body,
         created_at: created_at.to_rfc3339(),
         acknowledged_count: 0,
+        recipient_count: Some(push_targets.len() as i64),
         acknowledged_at: None,
         acknowledged_by_uid: None,
     };
@@ -677,19 +680,22 @@ pub async fn list_owner_reminders_handler(
         "SELECT r.id::text AS reminder_id, \
                 r.program_id::text AS program_id, \
                 r.target_patient_id, \
-                p.full_name AS target_patient_name, \
                 r.target_category, \
                 r.reminder_type, \
                 r.title, \
                 r.body, \
                 r.created_at, \
+                CASE WHEN r.target_patient_id IS NOT NULL THEN 1 ELSE ( \
+                    SELECT (log.metadata->>'recipientCount')::bigint FROM program_audit_logs log \
+                    WHERE log.program_id = r.program_id AND log.action = 'PARTNER_REMINDER_BATCH_SENT' \
+                      AND log.metadata->>'reminderId' = r.id::text \
+                    ORDER BY log.id DESC LIMIT 1) END AS recipient_count, \
                 COALESCE(COUNT(rc.patient_user_id), 0) AS acknowledged_count \
            FROM program_reminders r \
-           LEFT JOIN profiles p ON p.id = r.target_patient_id \
            LEFT JOIN program_reminder_receipts rc ON rc.reminder_id = r.id \
           WHERE r.program_id = $1 \
             AND ($2::text IS NULL OR r.target_patient_id IS NULL OR r.target_patient_id = $2) \
-          GROUP BY r.id, p.full_name \
+          GROUP BY r.id \
           ORDER BY r.created_at DESC \
           LIMIT $3",
     )
@@ -716,16 +722,13 @@ pub async fn list_owner_reminders_handler(
                 reminder_id: row.get("reminder_id"),
                 program_id: row.get("program_id"),
                 target_patient_id: row.try_get("target_patient_id").ok().flatten(),
-                target_patient_name: row
-                    .try_get::<Option<String>, _>("target_patient_name")
-                    .ok()
-                    .flatten()
-                    .filter(|s| !s.trim().is_empty()),
+                target_patient_name: None,
                 target_category: row.try_get("target_category").ok().flatten(),
                 reminder_type: row.get("reminder_type"),
                 title: row.get("title"),
                 body: row.get("body"),
                 created_at: created_at.to_rfc3339(),
+                recipient_count: row.get("recipient_count"),
                 acknowledged_count: row.try_get("acknowledged_count").unwrap_or(0),
                 acknowledged_at: None,
                 acknowledged_by_uid: None,
@@ -749,6 +752,7 @@ pub(crate) fn map_enrollment_reminder_row(row: &sqlx::postgres::PgRow) -> Progra
         title: row.get("title"),
         body: row.get("body"),
         created_at: created_at.to_rfc3339(),
+        recipient_count: None,
         acknowledged_count: if ack_at.is_some() { 1 } else { 0 },
         acknowledged_at: ack_at.map(|d| d.to_rfc3339()),
         acknowledged_by_uid: row.try_get("acknowledged_by_uid").ok().flatten(),

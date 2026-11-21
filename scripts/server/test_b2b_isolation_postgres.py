@@ -459,6 +459,14 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((kpis["activeUsers"], kpis["inactiveUsers"]), (1, 1))
             self.assertEqual(kpis["retentionRate"], 100.0)
             self.assertEqual(kpis["appointmentsConfirmed"], 2)
+            self.assertEqual(kpis["dailyActiveUsers"], [0, 0, 0, 0, 0, 1, 0])
+            self.assertEqual(kpis["appointmentsDelta"], 2)
+            # Confirmation in the previous window counts even when the booking was created earlier.
+            await conn.execute("""INSERT INTO program_appointments
+                (program_id, patient_user_id, modality, requested_slot_text, status, scheduled_at, created_at, updated_at)
+                VALUES ($1, 'patient-1', 'REMOTE', 'Tarde', 'CONFIRMED', $2, $3, $2)""",
+                self.prog_a, now - timedelta(days=9), now - timedelta(days=20))
+            self.assertEqual(json.loads(await conn.fetchval(global_query, *args))["appointmentsDelta"], 1)
             # Page IDs bound details without affecting the independent global query.
             page = await conn.fetch(page_query, self.prog_a, ["patient-2"], ["steps"], True, True, now)
             self.assertEqual([r["patient_user_id"] for r in page], ["patient-2"])
@@ -478,6 +486,8 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(empty["activeUsers"], 0)
             self.assertEqual(empty["inactiveUsers"], 0)
             self.assertIsNone(empty["retentionRate"])
+            self.assertEqual(empty["dailyActiveUsers"], [0] * 7)
+            self.assertEqual(empty["appointmentsDelta"], 0)
 
     async def test_b2b_30_account_mode_defaults_and_check_constraint(self):
         async with self.pool.acquire() as conn:
