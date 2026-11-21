@@ -22,6 +22,7 @@ from core.devices import (
     dispatch_push_broadcast,
     load_devices_by_user,
     register_device_token,
+    deactivate_device_token,
     get_active_tokens_for_patient_caregivers,
 )
 from routers.admin import require_service_token
@@ -34,6 +35,12 @@ class DeviceRegistrationRequest(BaseModel):
     token: str
     role: Optional[str] = "PATIENT"
     name: Optional[str] = "Usuário Braga"
+    platform: Optional[str] = "android"
+
+
+class DeviceUnregistrationRequest(BaseModel):
+    userId: str
+    token: str
     platform: Optional[str] = "android"
 
 
@@ -149,6 +156,44 @@ async def register_device(req: DeviceRegistrationRequest, uid: str = Depends(fir
     except Exception as error:
         print(f"[Device Register] Falha ao gravar device_push_tokens para {req.userId}: {error}")
     return {"status": "success", "registeredUsers": len(devices), "database": database}
+
+
+@router.post("/api/device/unregister")
+async def unregister_device(
+    req: DeviceUnregistrationRequest, uid: str = Depends(firebase_uid)
+):
+    """Desvincula o token push do dispositivo no logout — idempotente.
+
+    O app (NotificationClient.unregisterCurrentDevice) faz POST a cada logout e
+    trata qualquer 2xx como sucesso. Antes deste handler a rota nao existia no
+    gateway e o proxy devolvia 404, o que o app interpretava como falha e podia
+    manter pushes de uma conta em aparelho compartilhado. Nao ha 404 de negocio:
+    token inexistente, ja inativo ou sem banco continuam respondendo 200.
+    """
+    require_owner(uid, req.userId)
+    legacy_removed = False
+    try:
+        devices = load_devices()
+        entry = devices.get(req.userId)
+        if isinstance(entry, dict) and entry.get("token") == req.token:
+            devices.pop(req.userId, None)
+            save_devices(devices)
+            legacy_removed = True
+    except Exception as error:
+        print(f"[Device Unregister] Falha ao limpar espelho JSON de {req.userId}: {error}")
+    database = False
+    try:
+        # Banco e a fonte de verdade do push; o JSON e apenas espelho legado.
+        database = await deactivate_device_token(
+            _state.db_pool, user_id=req.userId, token=req.token
+        )
+    except Exception as error:
+        print(f"[Device Unregister] Falha ao desativar token de {req.userId}: {error}")
+    return {
+        "status": "success",
+        "unregistered": legacy_removed or database,
+        "database": database,
+    }
 
 
 @router.get("/api/devices")

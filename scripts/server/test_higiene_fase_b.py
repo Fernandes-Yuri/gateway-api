@@ -152,6 +152,82 @@ class TestServerStartupAndProactiveCleanliness(unittest.IsolatedAsyncioTestCase)
         self.assertEqual(mock_push.call_args.kwargs["has_fcm"], server.HAS_FCM)
 
 
+class TestDeviceUnregister(unittest.IsolatedAsyncioTestCase):
+    """POST /api/device/unregister e idempotente (app trata 2xx como sucesso).
+
+    Regressao: a rota nao existia no gateway e o proxy devolvia 404 no logout,
+    mantendo pushes de uma conta em aparelho compartilhado.
+    """
+
+    def make_mock_pool(self):
+        conn = AsyncMock()
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+        pool = MagicMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+        return pool, conn
+
+    async def test_deactivate_device_token_only_touches_owner_pair(self):
+        pool, conn = self.make_mock_pool()
+        ok = await devices.deactivate_device_token(pool, user_id="user-123", token="token-abc")
+        self.assertTrue(ok)
+        conn.execute.assert_called_once()
+        sql, token, uid = conn.execute.call_args[0]
+        self.assertIn("is_active = false", sql)
+        self.assertIn("token = $1::text", sql)
+        self.assertIn("user_id = $2::varchar", sql)
+        self.assertEqual(token, "token-abc")
+        self.assertEqual(uid, "user-123")
+
+    async def test_deactivate_device_token_none_pool(self):
+        self.assertFalse(await devices.deactivate_device_token(None, "user-123", "token-abc"))
+
+    async def test_unregister_endpoint_returns_200_without_previous_registration(self):
+        from routers import health as health_router
+
+        request = health_router.DeviceUnregistrationRequest(
+            userId="user-1", token="token-1", platform="android"
+        )
+        with patch.object(health_router, "load_devices", return_value={}), \
+                patch.object(health_router, "save_devices") as save_mock, \
+                patch.object(health_router._state, "db_pool", None):
+            result = await health_router.unregister_device(request, uid="user-1")
+        self.assertEqual(result["status"], "success")
+        self.assertFalse(result["database"])
+        self.assertFalse(result["unregistered"])
+        save_mock.assert_not_called()
+
+    async def test_unregister_endpoint_clears_json_mirror_and_database(self):
+        from routers import health as health_router
+
+        request = health_router.DeviceUnregistrationRequest(
+            userId="user-1", token="token-1", platform="android"
+        )
+        legacy = {"user-1": {"userId": "user-1", "token": "token-1"}}
+        pool, conn = self.make_mock_pool()
+        with patch.object(health_router, "load_devices", return_value=legacy), \
+                patch.object(health_router, "save_devices") as save_mock, \
+                patch.object(health_router._state, "db_pool", pool):
+            result = await health_router.unregister_device(request, uid="user-1")
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(result["unregistered"])
+        self.assertTrue(result["database"])
+        self.assertEqual(legacy, {})
+        save_mock.assert_called_once_with({})
+        self.assertIn("is_active = false", conn.execute.call_args[0][0])
+
+    async def test_unregister_endpoint_rejects_other_account(self):
+        from fastapi import HTTPException
+        from routers import health as health_router
+
+        request = health_router.DeviceUnregistrationRequest(
+            userId="user-1", token="token-1", platform="android"
+        )
+        with self.assertRaises(HTTPException) as raised:
+            await health_router.unregister_device(request, uid="user-2")
+        self.assertEqual(raised.exception.status_code, 403)
+
+
 class TestDeployWorkflow(unittest.TestCase):
     def test_gatekeeper_present_in_workflow(self):
         root_dir = Path(__file__).resolve().parent.parent.parent

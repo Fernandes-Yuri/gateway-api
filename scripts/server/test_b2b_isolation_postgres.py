@@ -40,6 +40,8 @@ MIG_093_PATH = ROOT / "migrations/093_b2b_owner_account_mode_backfill.sql"
 MIG_093_ROLLBACK_PATH = (
     ROOT / "migrations/093_b2b_owner_account_mode_backfill_rollback.sql"
 )
+MIG_094_PATH = ROOT / "migrations/094_b2b_consent_version.sql"
+MIG_094_ROLLBACK_PATH = ROOT / "migrations/094_b2b_consent_version_rollback.sql"
 
 
 class B2BStaticGuardsTest(unittest.TestCase):
@@ -188,6 +190,40 @@ class B2BStaticGuardsTest(unittest.TestCase):
         self.assertNotIn("profiles_completion_check", sql_up)
         self.assertIn("account_mode = 'PERSONAL'", sql_down)
         self.assertIn("account_mode = 'DUAL'", sql_down)
+
+    def test_migration_094_consent_version_is_additive_and_reversible(self):
+        sql_up = MIG_094_PATH.read_text(encoding="utf-8")
+        sql_down = MIG_094_ROLLBACK_PATH.read_text(encoding="utf-8")
+        self.assertIn("SET LOCAL lock_timeout = '5s';", sql_up)
+        self.assertIn("SET LOCAL statement_timeout = '60s';", sql_up)
+        self.assertIn(
+            "ALTER TABLE program_enrollments\n    ADD COLUMN IF NOT EXISTS consent_version text;",
+            sql_up,
+        )
+        # Backfill so promove o vinculo quando o ULTIMO recibo declara a versao
+        # corrente; recibos de cliente antigo ficam NULL (fallback do runtime).
+        self.assertIn("metadata->>'consentVersion' = 'program-routine-v1'", sql_up)
+        self.assertIn("action IN ('ENROLLMENT_JOINED', 'CONSENT_UPDATED')", sql_up)
+        self.assertIn("lr.created_at >= e.consented_at", sql_up)
+        self.assertIn(
+            "revoked.action IN ('ENROLLMENT_REVOKED', 'PARTICIPANT_REMOVED')", sql_up
+        )
+        self.assertIn("e.status = 'ACTIVE'", sql_up)
+        self.assertIn("chk_program_enrollments_consent_version", sql_up)
+        self.assertIn("DROP CONSTRAINT IF EXISTS chk_program_enrollments_consent_version", sql_down)
+        self.assertIn("DROP COLUMN IF EXISTS consent_version", sql_down)
+        # Nenhuma tabela antiga e alterada alem da coluna aditiva.
+        self.assertNotIn("DROP TABLE", sql_up)
+        self.assertNotIn("DROP COLUMN", sql_up)
+
+    def test_rust_summary_reads_consent_version_column_before_audit_fallback(self):
+        src = B2B_RUST_PATH.read_text(encoding="utf-8")
+        self.assertIn("e.consent_version", src)
+        self.assertIn("column_consent_version", src)
+        self.assertIn("effective_consent_version", src)
+        # A coluna e fonte primaria e o fallback de auditoria so entra com NULL.
+        self.assertIn("consent_version.as_deref()", src)
+        self.assertIn("consent_receipt", src)
 
     def test_b2b_r2_key_extraction_email_templates_and_internal_notify(self):
         import asyncio
@@ -363,6 +399,11 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 # para refletir o estado snapshot (owner com programa aberto -> DUAL).
                 async with conn.transaction():
                     await conn.execute(MIG_093_PATH.read_text(encoding="utf-8-sig"))
+                # 094: coluna consent_version + backfill. No setup ainda nao ha
+                # vinculo com recibo de consentimento, entao o backfill e no-op;
+                # o teste dedicado reexecuta a migration depois dos fixtures.
+                async with conn.transaction():
+                    await conn.execute(MIG_094_PATH.read_text(encoding="utf-8-sig"))
         except Exception:
             await self.asyncTearDown()
             raise
@@ -448,7 +489,7 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             rows = await conn.fetch(page_query, *args)
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0]["active_days"], 1)
-            # date[] -> text[] com day anterior (UTC), 7 dias incluindo hoje.
+            # date[] -> text[] no calendario America/Sao_Paulo, 7 dias incluindo hoje.
             self.assertEqual(rows[0]["activity_dates"], ["2026-11-19"])
             self.assertEqual(rows[0]["pending_reminders"], 1)
             self.assertEqual(rows[0]["upcoming_appointments"], 2)
@@ -482,12 +523,44 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             kpis = json.loads(await conn.fetchval(global_query, *args))
             self.assertEqual(kpis["activeUsers"], 0)
             self.assertIsNone(kpis["retentionRate"])
+            self.assertIsNone(kpis["appointmentsDelta"])
             empty = json.loads(await conn.fetchval(global_query, self.prog_draft, None, ["steps"], True, True, now))
             self.assertEqual(empty["activeUsers"], 0)
             self.assertEqual(empty["inactiveUsers"], 0)
             self.assertIsNone(empty["retentionRate"])
             self.assertEqual(empty["dailyActiveUsers"], [0] * 7)
-            self.assertEqual(empty["appointmentsDelta"], 0)
+            # Sem semana anterior nao ha base: null, e nao 0 ("igual").
+            self.assertIsNone(empty["appointmentsDelta"])
+
+    async def test_wallet_calendar_day_uses_sao_paulo_timezone(self):
+        import json
+        sql_dir = ROOT / "rust/crates/braga-edge/src/sql"
+        base = (sql_dir / "b2b_wallet.sql").read_text()
+        global_query = base + (sql_dir / "b2b_wallet_global.sql").read_text()
+        page_query = base + " SELECT * FROM metrics WHERE patient_user_id = 'patient-1'"
+        now = datetime(2026, 11, 20, 12, tzinfo=timezone.utc)  # 09h em Sao Paulo
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE program_enrollments SET consented_at = $2 WHERE program_id = $1",
+                self.prog_a,
+                now - timedelta(days=30),
+            )
+            # 2026-11-19 01:00Z = 2026-11-18 22:00 em America/Sao_Paulo. No
+            # calendario UTC o dia seria 19 (regressao original); a carteira
+            # global precisa seguir a mesma base do detalhe (Sao Paulo).
+            await conn.execute(
+                """INSERT INTO program_appointments
+                    (program_id, patient_user_id, modality, requested_slot_text, status, scheduled_at, created_at, updated_at)
+                    VALUES ($1, 'patient-1', 'IN_PERSON', 'Noite', 'PENDING', NULL, $2, $2)""",
+                self.prog_a,
+                datetime(2026, 11, 19, 1, tzinfo=timezone.utc),
+            )
+            args = (self.prog_a, None, ["steps"], True, True, now)
+            rows = await conn.fetch(page_query, *args)
+            self.assertEqual(rows[0]["activity_dates"], ["2026-11-18"])
+            kpis = json.loads(await conn.fetchval(global_query, *args))
+            # offsets -6..0 = 14..20/11; o evento cai no deslocamento -2 (18/11).
+            self.assertEqual(kpis["dailyActiveUsers"], [0, 0, 0, 0, 1, 0, 0])
 
     async def test_b2b_30_account_mode_defaults_and_check_constraint(self):
         async with self.pool.acquire() as conn:
@@ -593,6 +666,138 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 ),
                 "PERSONAL",
             )
+
+    async def test_094_consent_version_backfills_only_current_legacy_receipts(self):
+        sql_up = MIG_094_PATH.read_text(encoding="utf-8-sig")
+        now = datetime(2026, 11, 20, 12, tzinfo=timezone.utc)
+        async with self.pool.acquire() as conn:
+            column_names = {
+                row["column_name"]
+                for row in await conn.fetch(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = $1 AND table_name = 'program_enrollments'",
+                    self.schema,
+                )
+            }
+            self.assertIn("consent_version", column_names)
+            await conn.execute(
+                "INSERT INTO profiles (id, full_name) VALUES "
+                "('legacy-ok','Legado ok'),('legacy-stale','Legado stale'),"
+                "('legacy-null','Sem versao'),('legacy-before','Recibo antigo'),"
+                "('legacy-revoked','Revogado depois'),('legacy-removed','Removido')"
+            )
+            await conn.execute(
+                """
+                INSERT INTO program_enrollments
+                    (program_id, patient_user_id, status, shared_categories, consented_at)
+                VALUES
+                    ($1, 'legacy-ok', 'ACTIVE', '["steps","medications"]'::jsonb, $2),
+                    ($1, 'legacy-stale', 'ACTIVE', '["steps","medications"]'::jsonb, $2),
+                    ($1, 'legacy-null', 'ACTIVE', '["steps"]'::jsonb, $2),
+                    ($1, 'legacy-before', 'ACTIVE', '["steps","medications"]'::jsonb, $3),
+                    ($1, 'legacy-revoked', 'ACTIVE', '["steps","medications"]'::jsonb, $2),
+                    ($1, 'legacy-removed', 'REVOKED', '[]'::jsonb, $2)
+                """,
+                self.prog_a,
+                now - timedelta(days=10),
+                now - timedelta(days=5),
+            )
+            await conn.execute(
+                """
+                INSERT INTO program_audit_logs
+                    (program_id, actor_user_id, target_user_id, action, metadata, created_at)
+                VALUES
+                    ($1, 'legacy-ok', 'legacy-ok', 'ENROLLMENT_JOINED',
+                        '{"consentVersion":"program-routine-v1"}'::jsonb, $2),
+                    ($1, 'legacy-stale', 'legacy-stale', 'ENROLLMENT_JOINED',
+                        '{"consentVersion":"program-routine-v1"}'::jsonb, $2),
+                    ($1, 'legacy-stale', 'legacy-stale', 'CONSENT_UPDATED',
+                        '{"consentVersion":null}'::jsonb, $3),
+                    ($1, 'legacy-null', 'legacy-null', 'CONSENT_UPDATED',
+                        '{"consentVersion":null}'::jsonb, $2),
+                    ($1, 'legacy-before', 'legacy-before', 'ENROLLMENT_JOINED',
+                        '{"consentVersion":"program-routine-v1"}'::jsonb, $2),
+                    ($1, 'legacy-revoked', 'legacy-revoked', 'ENROLLMENT_JOINED',
+                        '{"consentVersion":"program-routine-v1"}'::jsonb, $2),
+                    ($1, 'legacy-revoked', 'legacy-revoked', 'ENROLLMENT_REVOKED',
+                        '{"status":"REVOKED"}'::jsonb, $3),
+                    ($1, 'legacy-removed', 'legacy-removed', 'ENROLLMENT_JOINED',
+                        '{"consentVersion":"program-routine-v1"}'::jsonb, $2)
+                """,
+                self.prog_a,
+                now - timedelta(days=9),
+                now - timedelta(days=8),
+            )
+            async with conn.transaction():
+                await conn.execute(sql_up)
+
+            versions = {
+                row["patient_user_id"]: row["consent_version"]
+                for row in await conn.fetch(
+                    "SELECT patient_user_id, consent_version FROM program_enrollments "
+                    "WHERE program_id = $1 AND patient_user_id LIKE 'legacy-%'",
+                    self.prog_a,
+                )
+            }
+            self.assertEqual(versions["legacy-ok"], "program-routine-v1")
+            # Decisao mais recente sem a versao corrente prevalece.
+            self.assertIsNone(versions["legacy-stale"])
+            self.assertIsNone(versions["legacy-null"])
+            # Recibo anterior ao consented_at nao pertence a este ciclo.
+            self.assertIsNone(versions["legacy-before"])
+            # Revogacao posterior ao recibo bloqueia o backfill.
+            self.assertIsNone(versions["legacy-revoked"])
+            self.assertIsNone(versions["legacy-removed"])
+
+            # Reaplicar e idempotente e alcanca vinculos legados criados depois.
+            await conn.execute(
+                "INSERT INTO profiles (id, full_name) VALUES ('legacy-late','Legado tardio')"
+            )
+            await conn.execute(
+                """
+                INSERT INTO program_enrollments
+                    (program_id, patient_user_id, status, shared_categories, consented_at)
+                VALUES ($1, 'legacy-late', 'ACTIVE', '["medications"]'::jsonb, $2)
+                """,
+                self.prog_a,
+                now - timedelta(days=10),
+            )
+            await conn.execute(
+                """
+                INSERT INTO program_audit_logs
+                    (program_id, actor_user_id, target_user_id, action, metadata, created_at)
+                VALUES ($1, 'legacy-late', 'legacy-late', 'ENROLLMENT_JOINED',
+                        '{"consentVersion":"program-routine-v1"}'::jsonb, $2)
+                """,
+                self.prog_a,
+                now - timedelta(days=9),
+            )
+            async with conn.transaction():
+                await conn.execute(sql_up)
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT consent_version FROM program_enrollments "
+                    "WHERE program_id = $1 AND patient_user_id = 'legacy-late'",
+                    self.prog_a,
+                ),
+                "program-routine-v1",
+            )
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT count(*) FROM program_enrollments "
+                    "WHERE program_id = $1 AND consent_version = 'program-routine-v1'",
+                    self.prog_a,
+                ),
+                2,
+            )
+
+            # Invariante: versao em branco nao e versao.
+            with self.assertRaises(Exception):
+                await conn.execute(
+                    "UPDATE program_enrollments SET consent_version = '   ' "
+                    "WHERE program_id = $1 AND patient_user_id = 'legacy-ok'",
+                    self.prog_a,
+                )
 
     async def test_multi_tenant_isolation_and_revocation(self):
         async with self.pool.acquire() as conn:
@@ -1688,6 +1893,9 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(expected_idx, indexes)
 
             async with conn.transaction():
+                await conn.execute(
+                    MIG_094_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
+                )
                 await conn.execute(
                     MIG_092B_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
                 )
