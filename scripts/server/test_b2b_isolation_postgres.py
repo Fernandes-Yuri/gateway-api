@@ -42,6 +42,10 @@ MIG_093_ROLLBACK_PATH = (
 )
 MIG_094_PATH = ROOT / "migrations/094_b2b_consent_version.sql"
 MIG_094_ROLLBACK_PATH = ROOT / "migrations/094_b2b_consent_version_rollback.sql"
+MIG_095_PATH = ROOT / "migrations/095_b2b_appointment_requested_period.sql"
+MIG_095_ROLLBACK_PATH = (
+    ROOT / "migrations/095_b2b_appointment_requested_period_rollback.sql"
+)
 
 
 class B2BStaticGuardsTest(unittest.TestCase):
@@ -215,6 +219,59 @@ class B2BStaticGuardsTest(unittest.TestCase):
         # Nenhuma tabela antiga e alterada alem da coluna aditiva.
         self.assertNotIn("DROP TABLE", sql_up)
         self.assertNotIn("DROP COLUMN", sql_up)
+
+    def test_migration_095_requested_period_is_additive_and_reversible(self):
+        sql_up = MIG_095_PATH.read_text(encoding="utf-8")
+        sql_down = MIG_095_ROLLBACK_PATH.read_text(encoding="utf-8")
+        self.assertIn("SET LOCAL lock_timeout = '5s';", sql_up)
+        self.assertIn("SET LOCAL statement_timeout = '60s';", sql_up)
+        self.assertIn(
+            "ADD COLUMN IF NOT EXISTS requested_period varchar(40)", sql_up
+        )
+        self.assertIn("chk_program_appointments_requested_period", sql_up)
+        self.assertIn("requested_period = upper(requested_period)", sql_up)
+        # Nenhum backfill/inferencia: legado fica NULL e o texto livre permanece.
+        self.assertNotIn("UPDATE program_appointments", sql_up)
+        self.assertNotIn("requested_slot_text =", sql_up)
+        self.assertIn("DROP CONSTRAINT IF EXISTS chk_program_appointments_requested_period", sql_down)
+        self.assertIn("DROP COLUMN IF EXISTS requested_period", sql_down)
+
+        appt_src = (ROOT / "rust/crates/braga-edge/src/b2b_appointments.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("pub requested_period: Option<String>", appt_src)
+        self.assertIn("skip_serializing_if = \"Option::is_none\"", appt_src)
+        self.assertIn("normalize_requested_period", appt_src)
+        # Texto livre antigo continua no DTO/SQL: contrato nao foi substituido.
+        self.assertIn("pub requested_slot_text: String", appt_src)
+
+    def test_additive_badges_and_labels_contracts(self):
+        sql_dir = ROOT / "rust/crates/braga-edge/src/sql"
+        wallet = (sql_dir / "b2b_wallet.sql").read_text(encoding="utf-8")
+        wallet_global = (sql_dir / "b2b_wallet_global.sql").read_text(encoding="utf-8")
+        for field in ("remindersTotal", "unreadMessagesTotal", "pendingAppointmentsTotal"):
+            self.assertIn(f"'{field}'", wallet_global)
+        # Denominador de % lido e flag de chat entram na MESMA query global.
+        self.assertIn("reminders_total", wallet)
+        self.assertIn("$7::boolean", wallet_global)
+        self.assertIn("'PENDING', 'RESCHEDULE_REQUESTED'", wallet_global)
+        # Contadores de badge usam COALESCE(..., 0); taxas seguem nullable.
+        self.assertIn("'remindersTotal', COALESCE(sum(reminders_total), 0)", wallet_global)
+
+        b2b_src = B2B_RUST_PATH.read_text(encoding="utf-8")
+        self.assertIn("consent_status", b2b_src)
+        self.assertIn("consent_version", b2b_src)
+        self.assertIn("service_hours_label", b2b_src)
+        self.assertIn("appointments_summary", b2b_src)
+        self.assertIn("direct_partner_chat_enabled", b2b_src)
+
+        ai_src = (
+            ROOT / "rust/crates/braga-edge/src/b2b_ai_receptionist.rs"
+        ).read_text(encoding="utf-8")
+        # Rotulos explicitos e sem dados inventados no prompt do simulador/FAQ.
+        self.assertIn("- Atendimento humano: {hours}", ai_src)
+        self.assertIn("- Horários de agendamento: {avail}", ai_src)
+        self.assertIn("sem inventar horários, dias ou modalidades", ai_src)
 
     def test_rust_summary_reads_consent_version_column_before_audit_fallback(self):
         src = B2B_RUST_PATH.read_text(encoding="utf-8")
@@ -404,6 +461,9 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 # o teste dedicado reexecuta a migration depois dos fixtures.
                 async with conn.transaction():
                     await conn.execute(MIG_094_PATH.read_text(encoding="utf-8-sig"))
+                # 095: coluna aditiva requested_period (NULL para legado).
+                async with conn.transaction():
+                    await conn.execute(MIG_095_PATH.read_text(encoding="utf-8-sig"))
         except Exception:
             await self.asyncTearDown()
             raise
@@ -485,8 +545,40 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 (program_id, target_category, title, body, created_by, created_at, expires_at)
                 VALUES ($1, 'steps', 'Rotina', 'Confira sua rotina', 'owner-a', $2, $3) RETURNING id""",
                 self.prog_a, now - timedelta(days=1), now + timedelta(days=1))
-            args = (self.prog_a, None, ["steps"], True, True, now)
-            rows = await conn.fetch(page_query, *args)
+            # Lembrete expirado e nao lido, mas criado no recorte: conta como
+            # ENVIADO no denominador de % lido (visible_reminders nao o expoe).
+            await conn.execute("""INSERT INTO program_reminders
+                (program_id, target_category, title, body, created_by, created_at, expires_at)
+                VALUES ($1, 'steps', 'Expirado', 'Fechou sem leitura', 'owner-a', $2, $3)""",
+                self.prog_a, now - timedelta(days=2), now - timedelta(days=1))
+            # Badge de mensagens: so PATIENT + read_at NULL do proprio programa.
+            await conn.execute("""INSERT INTO program_direct_messages
+                (program_id, patient_user_id, sender_user_id, sender_role, body, read_at)
+                VALUES
+                    ($1, 'patient-1', 'patient-1', 'PATIENT', 'Nao lida', NULL),
+                    ($1, 'patient-1', 'patient-1', 'PATIENT', 'Ja lida', $2),
+                    ($1, 'patient-1', 'owner-a', 'PARTNER', 'Resposta', NULL)""",
+                self.prog_a, now)
+            await conn.execute("""INSERT INTO program_direct_messages
+                (program_id, patient_user_id, sender_user_id, sender_role, body, read_at)
+                VALUES ($1, 'patient-2', 'patient-2', 'PATIENT', 'Outro tenant', NULL)""",
+                self.prog_b)
+            # Badge de agenda: PENDING + RESCHEDULE_REQUESTED; cancelado nao conta.
+            await conn.execute("""INSERT INTO program_appointments
+                (program_id, patient_user_id, modality, requested_slot_text, status, created_at)
+                VALUES
+                    ($1, 'patient-1', 'IN_PERSON', 'Proxima semana', 'PENDING', $2),
+                    ($1, 'patient-1', 'REMOTE', 'Proxima semana', 'RESCHEDULE_REQUESTED', $2),
+                    ($1, 'patient-1', 'IN_PERSON', 'Cancelado', 'CANCELLED', $2)""",
+                self.prog_a, now - timedelta(days=1))
+            await conn.execute("""INSERT INTO program_appointments
+                (program_id, patient_user_id, modality, requested_slot_text, status, created_at)
+                VALUES ($1, 'patient-2', 'IN_PERSON', 'Outro tenant', 'PENDING', $2)""",
+                self.prog_b, now - timedelta(days=1))
+            # $7 = chat direto habilitado; so o SELECT global o consome.
+            page_args = (self.prog_a, None, ["steps"], True, True, now)
+            global_args = (*page_args, True)
+            rows = await conn.fetch(page_query, *page_args)
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0]["active_days"], 1)
             # date[] -> text[] no calendario America/Sao_Paulo, 7 dias incluindo hoje.
@@ -496,41 +588,93 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rows[1]["active_days"], 0)
             self.assertEqual(rows[1]["activity_dates"], [])
             self.assertEqual(rows[1]["pending_reminders"], 0)  # no category consent
-            kpis = json.loads(await conn.fetchval(global_query, *args))
+            kpis = json.loads(await conn.fetchval(global_query, *global_args))
             self.assertEqual((kpis["activeUsers"], kpis["inactiveUsers"]), (1, 1))
             self.assertEqual(kpis["retentionRate"], 100.0)
             self.assertEqual(kpis["appointmentsConfirmed"], 2)
             self.assertEqual(kpis["dailyActiveUsers"], [0, 0, 0, 0, 0, 1, 0])
             self.assertEqual(kpis["appointmentsDelta"], 2)
+            # Contrato aditivo: os KPIs antigos continuam no mesmo payload.
+            for legacy_key in (
+                "remindersRead",
+                "appointmentsConfirmed",
+                "retentionRate",
+                "dailyActiveUsers",
+            ):
+                self.assertIn(legacy_key, kpis)
+            # Novos contadores de badge: 2 lembretes enviados (1 expirado sem
+            # leitura), 1 DM nao lida do tenant A (lida/PARTNER/tenant B nao
+            # contam) e 2 pendencias.
+            self.assertEqual(kpis["remindersTotal"], 2)
+            self.assertEqual(kpis["unreadMessagesTotal"], 1)
+            self.assertEqual(kpis["pendingAppointmentsTotal"], 2)
             # Confirmation in the previous window counts even when the booking was created earlier.
             await conn.execute("""INSERT INTO program_appointments
                 (program_id, patient_user_id, modality, requested_slot_text, status, scheduled_at, created_at, updated_at)
                 VALUES ($1, 'patient-1', 'REMOTE', 'Tarde', 'CONFIRMED', $2, $3, $2)""",
                 self.prog_a, now - timedelta(days=9), now - timedelta(days=20))
-            self.assertEqual(json.loads(await conn.fetchval(global_query, *args))["appointmentsDelta"], 1)
+            self.assertEqual(json.loads(await conn.fetchval(global_query, *global_args))["appointmentsDelta"], 1)
             # Page IDs bound details without affecting the independent global query.
             page = await conn.fetch(page_query, self.prog_a, ["patient-2"], ["steps"], True, True, now)
             self.assertEqual([r["patient_user_id"] for r in page], ["patient-2"])
             await conn.execute("""INSERT INTO program_reminder_receipts
                 (reminder_id, patient_user_id, acknowledged_at, acknowledged_by_uid)
                 VALUES ($1, 'patient-1', $2, 'patient-1')""", reminder, now)
-            self.assertEqual(json.loads(await conn.fetchval(global_query, *args))["remindersRead"], 1)
+            read_kpis = json.loads(await conn.fetchval(global_query, *global_args))
+            self.assertEqual(read_kpis["remindersRead"], 1)
+            self.assertEqual(read_kpis["remindersTotal"], 2)
+            self.assertLessEqual(read_kpis["remindersRead"], read_kpis["remindersTotal"])
+            # Feature de lembretes desligada zera o par read/total.
+            reminders_off = json.loads(
+                await conn.fetchval(
+                    global_query, self.prog_a, None, ["steps"], False, True, now, True
+                )
+            )
+            self.assertEqual(reminders_off["remindersRead"], 0)
+            self.assertEqual(reminders_off["remindersTotal"], 0)
             # Revoked consent excludes category-targeted reminders immediately.
             await conn.execute("UPDATE program_enrollments SET shared_categories = '[]'::jsonb WHERE program_id = $1", self.prog_a)
-            self.assertEqual(json.loads(await conn.fetchval(global_query, *args))["remindersRead"], 0)
+            revoked_kpis = json.loads(await conn.fetchval(global_query, *global_args))
+            self.assertEqual(revoked_kpis["remindersRead"], 0)
+            self.assertEqual(revoked_kpis["remindersTotal"], 0)
+            # Badges operacionais refletem o estado atual do programa e nao a
+            # janela de atividade: mensagens/pendencias antigas continuam visiveis
+            # para o parceiro, mas nunca de outro tenant.
+            self.assertEqual(revoked_kpis["unreadMessagesTotal"], 1)
+            self.assertEqual(revoked_kpis["pendingAppointmentsTotal"], 2)
+            # Feature desligada zera o badge correspondente sem tocar nos demais.
+            disabled = json.loads(
+                await conn.fetchval(
+                    global_query, self.prog_a, None, ["steps"], True, False, now, False
+                )
+            )
+            self.assertEqual(disabled["unreadMessagesTotal"], 0)
+            self.assertEqual(disabled["pendingAppointmentsTotal"], 0)
             # Re-enrollment must not expose actions predating the new consent.
             await conn.execute("UPDATE program_enrollments SET consented_at = $2 WHERE program_id = $1", self.prog_a, now)
-            kpis = json.loads(await conn.fetchval(global_query, *args))
+            kpis = json.loads(await conn.fetchval(global_query, *global_args))
             self.assertEqual(kpis["activeUsers"], 0)
             self.assertIsNone(kpis["retentionRate"])
             self.assertIsNone(kpis["appointmentsDelta"])
-            empty = json.loads(await conn.fetchval(global_query, self.prog_draft, None, ["steps"], True, True, now))
+            # Badges sao contagens operacionais (estado atual), nao atividade.
+            self.assertEqual(kpis["unreadMessagesTotal"], 1)
+            self.assertEqual(kpis["pendingAppointmentsTotal"], 2)
+            empty = json.loads(await conn.fetchval(global_query, self.prog_draft, None, ["steps"], True, True, now, True))
             self.assertEqual(empty["activeUsers"], 0)
             self.assertEqual(empty["inactiveUsers"], 0)
             self.assertIsNone(empty["retentionRate"])
             self.assertEqual(empty["dailyActiveUsers"], [0] * 7)
             # Sem semana anterior nao ha base: null, e nao 0 ("igual").
             self.assertIsNone(empty["appointmentsDelta"])
+            # Contadores exibiveis usam 0 (e nao null) quando nao ha base.
+            for counter in (
+                "remindersRead",
+                "remindersTotal",
+                "unreadMessagesTotal",
+                "pendingAppointmentsTotal",
+                "appointmentsConfirmed",
+            ):
+                self.assertEqual(empty[counter], 0)
 
     async def test_wallet_calendar_day_uses_sao_paulo_timezone(self):
         import json
@@ -555,10 +699,12 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 self.prog_a,
                 datetime(2026, 11, 19, 1, tzinfo=timezone.utc),
             )
-            args = (self.prog_a, None, ["steps"], True, True, now)
-            rows = await conn.fetch(page_query, *args)
+            # $7 = chat direto habilitado; so o SELECT global o consome.
+            page_args = (self.prog_a, None, ["steps"], True, True, now)
+            global_args = (*page_args, True)
+            rows = await conn.fetch(page_query, *page_args)
             self.assertEqual(rows[0]["activity_dates"], ["2026-11-18"])
-            kpis = json.loads(await conn.fetchval(global_query, *args))
+            kpis = json.loads(await conn.fetchval(global_query, *global_args))
             # offsets -6..0 = 14..20/11; o evento cai no deslocamento -2 (18/11).
             self.assertEqual(kpis["dailyActiveUsers"], [0, 0, 0, 0, 1, 0, 0])
 
@@ -798,6 +944,68 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                     "WHERE program_id = $1 AND patient_user_id = 'legacy-ok'",
                     self.prog_a,
                 )
+
+    async def test_095_requested_period_is_nullable_and_rejects_unstable_values(self):
+        sql_up = MIG_095_PATH.read_text(encoding="utf-8-sig")
+        async with self.pool.acquire() as conn:
+            columns = {
+                row["column_name"]
+                for row in await conn.fetch(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = $1 AND table_name = 'program_appointments'",
+                    self.schema,
+                )
+            }
+            self.assertIn("requested_period", columns)
+            # Agendamento legado/cliente antigo: campo ausente fica NULL.
+            legacy_id = await conn.fetchval(
+                """INSERT INTO program_appointments
+                    (program_id, patient_user_id, modality, requested_slot_text)
+                   VALUES ($1, 'patient-1', 'IN_PERSON', 'Manha') RETURNING id""",
+                self.prog_a,
+            )
+            self.assertIsNone(
+                await conn.fetchval(
+                    "SELECT requested_period FROM program_appointments WHERE id = $1",
+                    legacy_id,
+                )
+            )
+            # Cliente novo envia o codigo estavel ja normalizado pelo Rust.
+            new_id = await conn.fetchval(
+                """INSERT INTO program_appointments
+                    (program_id, patient_user_id, modality, requested_slot_text, requested_period)
+                   VALUES ($1, 'patient-1', 'REMOTE', 'Proxima semana de manha',
+                           'PROXIMA_SEMANA_MANHA') RETURNING id""",
+                self.prog_a,
+            )
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT requested_period FROM program_appointments WHERE id = $1",
+                    new_id,
+                ),
+                "PROXIMA_SEMANA_MANHA",
+            )
+            # Invariante: nada de valor vazio, minusculo ou com espaco nas bordas.
+            for invalid in ("", "proxima_semana", " PROXIMA_SEMANA"):
+                with self.assertRaises(asyncpg.CheckViolationError):
+                    await conn.execute(
+                        """INSERT INTO program_appointments
+                            (program_id, patient_user_id, modality, requested_slot_text,
+                             requested_period)
+                           VALUES ($1, 'patient-1', 'IN_PERSON', 'Teste', $2)""",
+                        self.prog_a,
+                        invalid,
+                    )
+            # Reaplicar 095 e idempotente.
+            async with conn.transaction():
+                await conn.execute(sql_up)
+            self.assertEqual(
+                await conn.fetchval(
+                    "SELECT requested_period FROM program_appointments WHERE id = $1",
+                    new_id,
+                ),
+                "PROXIMA_SEMANA_MANHA",
+            )
 
     async def test_multi_tenant_isolation_and_revocation(self):
         async with self.pool.acquire() as conn:
@@ -1893,6 +2101,9 @@ class B2BIsolationPostgresTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(expected_idx, indexes)
 
             async with conn.transaction():
+                await conn.execute(
+                    MIG_095_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
+                )
                 await conn.execute(
                     MIG_094_ROLLBACK_PATH.read_text(encoding="utf-8-sig")
                 )

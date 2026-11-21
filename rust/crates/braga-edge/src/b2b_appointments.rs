@@ -42,6 +42,11 @@ pub struct ListAppointmentsQuery {
 pub struct CreateAppointmentRequest {
     pub modality: String,
     pub requested_slot_text: String,
+    /// Codigo estavel da preferencia (ex.: "PROXIMA_SEMANA_MANHA"). Aditivo e
+    /// opcional: ausente/null em clientes antigos. Nunca substitui o texto
+    /// livre `requestedSlotText`.
+    #[serde(alias = "requested_period")]
+    pub requested_period: Option<String>,
     pub patient_note: Option<String>,
 }
 
@@ -71,6 +76,10 @@ pub struct ProgramAppointmentDto {
     pub patient_name: Option<String>,
     pub modality: String,
     pub requested_slot_text: String,
+    /// Preferencia declarada pelo participante (badge). NULL para agendamentos
+    /// criados antes da migration 095 ou quando o cliente nao envia o campo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_period: Option<String>,
     pub scheduled_at: Option<String>,
     pub patient_note: Option<String>,
     pub partner_note: Option<String>,
@@ -83,7 +92,35 @@ pub struct ProgramAppointmentDto {
 pub(crate) struct NormalizedAppointmentInput {
     pub modality: String,
     pub requested_slot_text: String,
+    pub requested_period: Option<String>,
     pub patient_note: Option<String>,
+}
+
+/// Normaliza o codigo de preferencia (`requestedPeriod`) para um token estavel
+/// em MAIUSCULAS: espacos/hifens viram `_`, mantendo letras acentuadas. Retorna
+/// `None` quando o cliente nao envia o campo (compatibilidade v1.9.6) e nunca
+/// infere a partir do texto livre de `requestedSlotText`.
+pub(crate) fn normalize_requested_period(
+    raw: Option<&str>,
+) -> Result<Option<String>, (StatusCode, &'static str)> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let normalized = raw
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_")
+        .replace('-', "_")
+        .to_uppercase();
+    let valid_len = (2..=40).contains(&normalized.chars().count());
+    let valid_chars = normalized.chars().all(|c| c.is_alphanumeric() || c == '_');
+    if !valid_len || !valid_chars {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Período desejado inválido; use até 40 caracteres (ex.: PROXIMA_SEMANA_MANHA).",
+        ));
+    }
+    Ok(Some(normalized))
 }
 
 pub(crate) fn validate_create_appointment_input(
@@ -134,9 +171,12 @@ pub(crate) fn validate_create_appointment_input(
         ));
     }
 
+    let requested_period = normalize_requested_period(req.requested_period.as_deref())?;
+
     Ok(NormalizedAppointmentInput {
         modality,
         requested_slot_text: slot_text,
+        requested_period,
         patient_note: note,
     })
 }
@@ -218,6 +258,10 @@ pub(crate) fn map_appointment_row(
         },
         modality: row.get("modality"),
         requested_slot_text: row.get("requested_slot_text"),
+        requested_period: row
+            .try_get::<Option<String>, _>("requested_period")
+            .ok()
+            .flatten(),
         scheduled_at: scheduled_at.map(|dt| dt.to_rfc3339()),
         patient_note: row
             .try_get::<Option<String>, _>("patient_note")
@@ -453,7 +497,7 @@ pub async fn list_owner_appointments_handler(
     let rows = match sqlx::query(
         "SELECT a.id::text AS appointment_id, a.program_id::text AS program_id, \
                 a.patient_user_id, COALESCE(NULLIF(BTRIM(pf.full_name), ''), 'Participante') AS patient_name, \
-                a.modality, a.requested_slot_text, a.scheduled_at, a.patient_note, \
+                a.modality, a.requested_slot_text, a.requested_period, a.scheduled_at, a.patient_note, \
                 a.partner_note, a.status, a.created_at, a.updated_at \
            FROM program_appointments a \
            LEFT JOIN profiles pf ON pf.id = a.patient_user_id \
@@ -602,7 +646,7 @@ pub async fn update_owner_appointment_handler(
 
     let existing = match sqlx::query(
         "SELECT id::text AS appointment_id, program_id::text AS program_id, patient_user_id, \
-                modality, requested_slot_text, scheduled_at, patient_note, partner_note, \
+                modality, requested_slot_text, requested_period, scheduled_at, patient_note, partner_note, \
                 status, created_at, updated_at \
            FROM program_appointments \
           WHERE id = $1 AND program_id = $2 \
@@ -675,7 +719,7 @@ pub async fn update_owner_appointment_handler(
                 updated_at = NOW() \
           WHERE id = $1 AND program_id = $2 \
           RETURNING id::text AS appointment_id, program_id::text AS program_id, patient_user_id, \
-                    modality, requested_slot_text, scheduled_at, patient_note, partner_note, \
+                    modality, requested_slot_text, requested_period, scheduled_at, patient_note, partner_note, \
                     status, created_at, updated_at",
     )
     .bind(appt_uuid)
@@ -763,7 +807,7 @@ pub async fn list_enrollment_appointments_handler(
 
     let rows = match sqlx::query(
         "SELECT id::text AS appointment_id, program_id::text AS program_id, patient_user_id, \
-                modality, requested_slot_text, scheduled_at, patient_note, partner_note, \
+                modality, requested_slot_text, requested_period, scheduled_at, patient_note, partner_note, \
                 status, created_at, updated_at \
            FROM program_appointments \
           WHERE program_id = $1 AND patient_user_id = $2 \
@@ -899,16 +943,17 @@ pub async fn create_enrollment_appointment_handler(
 
     let inserted = match sqlx::query(
         "INSERT INTO program_appointments \
-            (program_id, patient_user_id, modality, requested_slot_text, patient_note, status) \
-         VALUES ($1, $2, $3, $4, $5, 'PENDING') \
+            (program_id, patient_user_id, modality, requested_slot_text, requested_period, patient_note, status) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'PENDING') \
          RETURNING id, id::text AS appointment_id, program_id::text AS program_id, \
-                   patient_user_id, modality, requested_slot_text, scheduled_at, \
+                   patient_user_id, modality, requested_slot_text, requested_period, scheduled_at, \
                    patient_note, partner_note, status, created_at, updated_at",
     )
     .bind(program_id)
     .bind(&identity.uid)
     .bind(&input.modality)
     .bind(&input.requested_slot_text)
+    .bind(&input.requested_period)
     .bind(&input.patient_note)
     .fetch_one(&mut *tx)
     .await
@@ -943,6 +988,7 @@ pub async fn create_enrollment_appointment_handler(
         json!({
             "appointmentId": appt_uuid.to_string(),
             "modality": input.modality,
+            "requestedPeriod": input.requested_period,
         }),
     )
     .await;
@@ -1051,7 +1097,7 @@ pub async fn cancel_enrollment_appointment_handler(
                 updated_at = NOW() \
           WHERE id = $1 AND program_id = $2 AND patient_user_id = $3 \
           RETURNING id::text AS appointment_id, program_id::text AS program_id, \
-                    patient_user_id, modality, requested_slot_text, scheduled_at, \
+                    patient_user_id, modality, requested_slot_text, requested_period, scheduled_at, \
                     patient_note, partner_note, status, created_at, updated_at",
     )
     .bind(appt_uuid)
@@ -1122,6 +1168,7 @@ mod tests {
         let req = CreateAppointmentRequest {
             modality: "REMOTE".to_string(),
             requested_slot_text: "Terca 14h".to_string(),
+            requested_period: None,
             patient_note: None,
         };
         let err = validate_create_appointment_input(&req, &sample_policy("EXTERNAL_LINK_ONLY"))
@@ -1134,6 +1181,7 @@ mod tests {
         let req = CreateAppointmentRequest {
             modality: "remote".to_string(),
             requested_slot_text: "Quinta de manha http://phish.local".to_string(),
+            requested_period: None,
             patient_note: Some("Prefiro apos as 10h javascript:alert(1)".to_string()),
         };
         let normalized =
@@ -1145,6 +1193,74 @@ mod tests {
             .contains("http://phish.local"));
         assert!(normalized.requested_slot_text.contains("[link removido]"));
         assert!(!normalized.patient_note.unwrap().contains("javascript:"));
+    }
+
+    #[test]
+    fn requested_period_is_optional_normalized_and_never_inferred() {
+        // Ausente/null: clientes antigos continuam funcionando (campo omitido).
+        assert_eq!(normalize_requested_period(None).unwrap(), None);
+        assert_eq!(normalize_requested_period(Some("   ")).unwrap(), None);
+        // Codigo estavel, aceitando a forma humana com acento/espaco.
+        assert_eq!(
+            normalize_requested_period(Some("próxima semana manhã")).unwrap(),
+            Some("PRÓXIMA_SEMANA_MANHÃ".to_string())
+        );
+        assert_eq!(
+            normalize_requested_period(Some("proxima-semana-manha")).unwrap(),
+            Some("PROXIMA_SEMANA_MANHA".to_string())
+        );
+        // Texto livre nao e classificado: o campo e preferencia explicita.
+        let req = CreateAppointmentRequest {
+            modality: "IN_PERSON".to_string(),
+            requested_slot_text: "Qualquer horario pela manha".to_string(),
+            requested_period: None,
+            patient_note: None,
+        };
+        let normalized =
+            validate_create_appointment_input(&req, &sample_policy("REQUEST_CONFIRMATION"))
+                .expect("solicitacao valida");
+        assert_eq!(normalized.requested_period, None);
+        // Valores hostis/fora do contrato sao rejeitados (422), sem markup.
+        let too_long = "a".repeat(41);
+        for raw in ["<script>", too_long.as_str(), "manha;drop"] {
+            assert_eq!(
+                normalize_requested_period(Some(raw)).unwrap_err().0,
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+        }
+    }
+
+    #[test]
+    fn appointment_dto_keeps_legacy_fields_and_omits_absent_requested_period() {
+        let legacy = ProgramAppointmentDto {
+            appointment_id: "appt-1".to_string(),
+            program_id: "prog-1".to_string(),
+            patient_user_id: "patient-1".to_string(),
+            patient_name: None,
+            modality: "IN_PERSON".to_string(),
+            requested_slot_text: "Próxima semana pela manhã".to_string(),
+            requested_period: None,
+            scheduled_at: Some("2026-11-25T12:00:00+00:00".to_string()),
+            patient_note: None,
+            partner_note: None,
+            status: "CONFIRMED".to_string(),
+            created_at: "2026-11-20T12:00:00+00:00".to_string(),
+            updated_at: "2026-11-20T12:00:00+00:00".to_string(),
+        };
+        let value = serde_json::to_value(&legacy).expect("dto serializa");
+        // Contrato antigo intacto: texto livre e scheduledAt (horario confirmado).
+        assert_eq!(value["requestedSlotText"], "Próxima semana pela manhã");
+        assert_eq!(value["scheduledAt"], "2026-11-25T12:00:00+00:00");
+        // Campo aditivo ausente nao vira null para clientes legados.
+        assert!(value.get("requestedPeriod").is_none());
+
+        let with_period = ProgramAppointmentDto {
+            requested_period: Some("PROXIMA_SEMANA_MANHA".to_string()),
+            ..legacy
+        };
+        let value = serde_json::to_value(&with_period).expect("dto serializa");
+        assert_eq!(value["requestedPeriod"], "PROXIMA_SEMANA_MANHA");
+        assert_eq!(value["requestedSlotText"], "Próxima semana pela manhã");
     }
 
     #[test]
