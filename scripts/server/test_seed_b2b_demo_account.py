@@ -98,7 +98,7 @@ class DemoSeedPostgresTest(unittest.IsolatedAsyncioTestCase):
         await self.conn.execute(f'CREATE SCHEMA "{self.schema}"')
         await self.conn.execute(f'SET search_path TO "{self.schema}", public')
         await self.conn.execute((ROOT / "scripts/docker/init_schema.sql").read_text(encoding="utf-8-sig"))
-        for number in ("001", "053", "080", "081", "084", "090", "091", "092", "092b", "094"):
+        for number in ("001", "053", "080", "081", "084", "090", "091", "092", "092b", "094", "095"):
             path = next(p for p in (ROOT / "migrations").glob(f"{number}_*.sql") if not p.stem.endswith("_rollback"))
             async with self.conn.transaction():
                 await self.conn.execute(path.read_text(encoding="utf-8-sig"))
