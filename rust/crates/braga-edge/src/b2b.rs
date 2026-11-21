@@ -41,6 +41,8 @@ use crate::{authenticate_request, AppState};
 
 pub const DEFAULT_PRIMARY_COLOR: &str = "#1A6B5C";
 pub const DEFAULT_TEMPLATE_KEY: &str = "CLINICA_GERAL";
+const ROUTINE_CONSENT_VERSION: &str = "program-routine-v1";
+
 pub const ALLOWED_SHARED_CATEGORIES: &[&str] =
     &["steps", "hydration", "medications", "authorized_records"];
 pub const ALLOWED_APPOINTMENT_MODALITIES: &[&str] = &["IN_PERSON", "REMOTE"];
@@ -582,6 +584,7 @@ pub struct AdminReviewRequest {
 #[serde(rename_all = "camelCase")]
 pub struct JoinProgramRequest {
     pub invite_code: String,
+    pub consent_version: Option<String>,
     #[serde(default)]
     pub shared_categories: Vec<String>,
     #[serde(alias = "family_share_enabled")]
@@ -591,6 +594,7 @@ pub struct JoinProgramRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateConsentRequest {
+    pub consent_version: Option<String>,
     #[serde(default)]
     pub shared_categories: Vec<String>,
     #[serde(alias = "family_share_enabled")]
@@ -617,6 +621,8 @@ pub struct ParticipantsQuery {
 #[derive(Debug, Deserialize)]
 pub struct ParticipantSummaryQuery {
     pub days: Option<i32>,
+    #[serde(rename = "detailCategory")]
+    pub detail_category: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -679,7 +685,6 @@ pub struct SharedHydrationSectionDto {
 #[serde(rename_all = "camelCase")]
 pub struct SharedMedicationItemDto {
     pub name: String,
-    pub dosage_mg: Option<f64>,
     pub schedule: String,
 }
 
@@ -734,6 +739,9 @@ pub struct ParticipantRoutineSummaryDto {
     pub patient_user_id: String,
     pub participant_name: String,
     pub period_days: i32,
+    pub period_end: chrono::NaiveDate,
+    pub available_details: Vec<String>,
+    pub detail_category: Option<String>,
     pub shared_categories: Vec<String>,
     pub family_support_active: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4137,7 +4145,7 @@ pub async fn join_program_handler(
         );
     }
 
-    let _ = record_audit(
+    if record_audit(
         &mut *tx,
         Some(prog_uuid),
         &identity.uid,
@@ -4145,11 +4153,14 @@ pub async fn join_program_handler(
         "ENROLLMENT_JOINED",
         json!({
             "sharedCategories": categories,
+            "consentVersion": req.consent_version.as_deref().filter(|v| *v == ROUTINE_CONSENT_VERSION),
             "familyShareEnabled": family_share,
             "rejoinedOrUpdated": already_active
         }),
     )
-    .await;
+    .await.is_err() {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Erro ao registrar consentimento.");
+    }
 
     if tx.commit().await.is_err() {
         return json_error(
@@ -4215,6 +4226,12 @@ pub async fn update_enrollment_consent_handler(
         Err((code, msg)) => return json_error(code, msg),
     };
 
+    let Ok(mut tx) = pool.begin().await else {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erro ao iniciar atualização.",
+        );
+    };
     let categories_json = json!(categories);
     let updated = match sqlx::query(
         "UPDATE program_enrollments e \
@@ -4236,7 +4253,7 @@ pub async fn update_enrollment_consent_handler(
     .bind(&identity.uid)
     .bind(&categories_json)
     .bind(req.family_share_enabled)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     {
         Ok(r) => r,
@@ -4256,18 +4273,27 @@ pub async fn update_enrollment_consent_handler(
     };
 
     let family_share: bool = row.try_get("family_share_enabled").unwrap_or(false);
-    let _ = record_audit(
-        pool,
+    if record_audit(
+        &mut *tx,
         Some(prog_uuid),
         &identity.uid,
         &identity.uid,
         "CONSENT_UPDATED",
         json!({
             "sharedCategories": categories,
+            "consentVersion": req.consent_version.as_deref().filter(|v| *v == ROUTINE_CONSENT_VERSION),
             "familyShareEnabled": family_share
         }),
     )
-    .await;
+    .await.is_err() {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Erro ao registrar consentimento.");
+    }
+    if tx.commit().await.is_err() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erro ao confirmar o consentimento.",
+        );
+    }
 
     let raw_tk: Option<String> = row.try_get("template_key").ok();
     let raw_cfg: Option<Value> = row.try_get("experience_config").ok();
@@ -4847,7 +4873,7 @@ pub async fn list_program_participants_handler(
         let family_support_active =
             program_config.features.family_link_enabled && fam_share && has_binding;
         let family_support_summary = if family_support_active {
-            Some("Familiar autorizado ativo".to_string())
+            Some("Rede familiar vinculada ao participante".to_string())
         } else {
             None
         };
@@ -4922,19 +4948,23 @@ pub async fn list_program_participants_handler(
         .into_response()
 }
 
-async fn load_steps_section(pool: &PgPool, patient_id: &str, days: i32) -> SharedStepsSectionDto {
+async fn load_steps_section(
+    conn: &mut sqlx::PgConnection,
+    patient_id: &str,
+    days: i32,
+) -> SharedStepsSectionDto {
     let rows = sqlx::query(
         "SELECT date, steps, active_minutes, \
                 COALESCE(distance_final_meters, distance_meters, 0.0)::double precision AS dist \
            FROM daily_metrics \
           WHERE user_id = $1 \
-            AND date >= (CURRENT_DATE - make_interval(days => $2))::date \
+            AND date BETWEEN (now() AT TIME ZONE 'America/Sao_Paulo')::date - ($2::int - 1) AND (now() AT TIME ZONE 'America/Sao_Paulo')::date \
           ORDER BY date DESC \
           LIMIT 31",
     )
     .bind(patient_id)
     .bind(days)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .unwrap_or_default();
 
@@ -4984,7 +5014,7 @@ async fn load_steps_section(pool: &PgPool, patient_id: &str, days: i32) -> Share
 }
 
 async fn load_hydration_section(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     patient_id: &str,
     days: i32,
 ) -> SharedHydrationSectionDto {
@@ -4996,14 +5026,14 @@ async fn load_hydration_section(
             AND deleted_at IS NULL \
             AND hydration_ml IS NOT NULL \
             AND hydration_ml > 0 \
-            AND measured_at >= NOW() - make_interval(days => $2) \
+            AND measured_at BETWEEN (((now() AT TIME ZONE 'America/Sao_Paulo')::date - ($2::int - 1))::timestamp AT TIME ZONE 'America/Sao_Paulo') AND NOW() \
           GROUP BY 1 \
           ORDER BY 1 DESC \
           LIMIT 31",
     )
     .bind(patient_id)
     .bind(days)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .unwrap_or_default();
 
@@ -5037,40 +5067,27 @@ async fn load_hydration_section(
 }
 
 async fn load_medications_section(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     patient_id: &str,
     days: i32,
 ) -> SharedMedicationsSectionDto {
     let med_rows = sqlx::query(
-        "SELECT name, dosage_mg, COALESCE(NULLIF(schedule_times, ''), schedule_time, '') AS sched \
+        "SELECT name, COALESCE(NULLIF(schedule_times, ''), schedule_time, '') AS sched \
            FROM medications \
           WHERE user_id = $1 \
           ORDER BY created_at DESC \
           LIMIT 30",
     )
     .bind(patient_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .unwrap_or_default();
 
     let items: Vec<SharedMedicationItemDto> = med_rows
         .into_iter()
-        .map(|r| {
-            let dosage_mg = r
-                .try_get::<Option<f64>, _>("dosage_mg")
-                .ok()
-                .flatten()
-                .or_else(|| {
-                    r.try_get::<Option<i32>, _>("dosage_mg")
-                        .ok()
-                        .flatten()
-                        .map(f64::from)
-                });
-            SharedMedicationItemDto {
-                name: r.try_get("name").unwrap_or_default(),
-                dosage_mg,
-                schedule: r.try_get::<String, _>("sched").unwrap_or_default(),
-            }
+        .map(|r| SharedMedicationItemDto {
+            name: r.try_get("name").unwrap_or_default(),
+            schedule: r.try_get::<String, _>("sched").unwrap_or_default(),
         })
         .collect();
 
@@ -5078,11 +5095,11 @@ async fn load_medications_section(
         "SELECT COUNT(*)::bigint \
            FROM medication_logs \
           WHERE user_id = $1 \
-            AND taken_at >= NOW() - make_interval(days => $2)",
+            AND taken_at BETWEEN (((now() AT TIME ZONE 'America/Sao_Paulo')::date - ($2::int - 1))::timestamp AT TIME ZONE 'America/Sao_Paulo') AND NOW()",
     )
     .bind(patient_id)
     .bind(days)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await
     .unwrap_or(0);
 
@@ -5096,7 +5113,7 @@ async fn load_medications_section(
 }
 
 async fn load_authorized_records_section(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     patient_id: &str,
     days: i32,
 ) -> SharedAuthorizedRecordsSectionDto {
@@ -5106,7 +5123,7 @@ async fn load_authorized_records_section(
            FROM vital_signs \
           WHERE user_id = $1 \
             AND deleted_at IS NULL \
-            AND measured_at >= NOW() - make_interval(days => $2) \
+            AND measured_at BETWEEN (((now() AT TIME ZONE 'America/Sao_Paulo')::date - ($2::int - 1))::timestamp AT TIME ZONE 'America/Sao_Paulo') AND NOW() \
             AND (systolic_pressure IS NOT NULL OR diastolic_pressure IS NOT NULL \
                  OR heart_rate IS NOT NULL OR glucose_level IS NOT NULL \
                  OR oxygen_saturation IS NOT NULL) \
@@ -5115,7 +5132,7 @@ async fn load_authorized_records_section(
     )
     .bind(patient_id)
     .bind(days)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .unwrap_or_default();
 
@@ -5146,13 +5163,13 @@ async fn load_authorized_records_section(
         "SELECT measured_at, weight_kg, height_m, imc \
            FROM biometrics \
           WHERE user_id = $1 \
-            AND measured_at >= NOW() - make_interval(days => $2) \
+            AND measured_at BETWEEN (((now() AT TIME ZONE 'America/Sao_Paulo')::date - ($2::int - 1))::timestamp AT TIME ZONE 'America/Sao_Paulo') AND NOW() \
           ORDER BY measured_at DESC \
           LIMIT 20",
     )
     .bind(patient_id)
     .bind(days)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .unwrap_or_default();
 
@@ -5188,6 +5205,22 @@ async fn load_authorized_records_section(
     }
 }
 
+fn clinical_detail_categories(effective: &[String], consent: Option<&Value>) -> Vec<String> {
+    let Some(record) =
+        consent.filter(|v| v["consentVersion"].as_str() == Some(ROUTINE_CONSENT_VERSION))
+    else {
+        return Vec::new();
+    };
+    let recorded = parse_categories_json(&record["sharedCategories"]);
+    effective
+        .iter()
+        .filter(|cat| {
+            matches!(cat.as_str(), "medications" | "authorized_records") && recorded.contains(cat)
+        })
+        .cloned()
+        .collect()
+}
+
 pub async fn get_participant_summary_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -5214,10 +5247,17 @@ pub async fn get_participant_summary_handler(
         Err((code, msg)) => return json_error(code, msg),
     };
 
+    let Ok(mut tx) = pool.begin().await else {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erro ao consultar o vínculo.",
+        );
+    };
     let access_row = match sqlx::query(
         "SELECT p.id AS program_id, p.owner_user_id, p.approval_status, p.program_name, \
                 p.company_name, p.template_key, p.experience_config, \
-                e.status AS enrollment_status, e.shared_categories, \
+                e.status AS enrollment_status, e.shared_categories, e.consented_at, \
+                (now() AT TIME ZONE 'America/Sao_Paulo')::date AS period_end, \
                 COALESCE(e.family_share_enabled, false) AS family_share_enabled, \
                 EXISTS( \
                     SELECT 1 FROM family_bindings fb \
@@ -5225,14 +5265,14 @@ pub async fn get_participant_summary_handler(
                 ) AS has_family_binding, \
                 COALESCE(NULLIF(BTRIM(pr.full_name), ''), 'Participante') AS participant_name \
            FROM partner_programs p \
-           LEFT JOIN program_enrollments e \
+           JOIN program_enrollments e \
              ON e.program_id = p.id AND e.patient_user_id = $2 \
            LEFT JOIN profiles pr ON pr.id = e.patient_user_id \
-          WHERE p.owner_user_id = $1 AND p.closed_at IS NULL",
+          WHERE p.owner_user_id = $1 AND p.closed_at IS NULL FOR SHARE OF p, e",
     )
     .bind(&identity.uid)
     .bind(&target_patient_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     {
         Ok(r) => r,
@@ -5279,50 +5319,99 @@ pub async fn get_participant_summary_handler(
         intersect_effective_categories(&program_config.enabled_metrics, &consented_categories);
     let period_days = clamp_summary_days(query.days);
 
+    // Latest participant decision for this enrollment, including decisions from legacy clients.
+    let consent: Option<Value> = match sqlx::query_scalar(
+        "SELECT metadata FROM program_audit_logs WHERE program_id = $1 AND actor_user_id = $2 \
+         AND target_user_id = $2 AND created_at >= $3 AND action IN ('ENROLLMENT_JOINED', 'CONSENT_UPDATED') \
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(prog_uuid)
+    .bind(&target_patient_id)
+    .bind(row.get::<DateTime<Utc>, _>("consented_at"))
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Erro ao verificar o consentimento.",
+            )
+        }
+    };
+    let available_details = clinical_detail_categories(&shared_categories, consent.as_ref());
+    if query
+        .detail_category
+        .as_ref()
+        .is_some_and(|cat| !available_details.contains(cat))
+    {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "Categoria sem autorização de detalhe vigente.",
+        );
+    }
+
     let steps_section = if shared_categories.iter().any(|c| c == "steps") {
-        Some(load_steps_section(pool, &target_patient_id, period_days).await)
+        Some(load_steps_section(&mut tx, &target_patient_id, period_days).await)
     } else {
         None
     };
 
     let hydration_section = if shared_categories.iter().any(|c| c == "hydration") {
-        Some(load_hydration_section(pool, &target_patient_id, period_days).await)
+        Some(load_hydration_section(&mut tx, &target_patient_id, period_days).await)
     } else {
         None
     };
 
-    let medications_section = if shared_categories.iter().any(|c| c == "medications") {
-        Some(load_medications_section(pool, &target_patient_id, period_days).await)
+    let medications_section = if query.detail_category.as_deref() == Some("medications") {
+        Some(load_medications_section(&mut tx, &target_patient_id, period_days).await)
     } else {
         None
     };
 
-    let authorized_records_section = if shared_categories.iter().any(|c| c == "authorized_records")
-    {
-        Some(load_authorized_records_section(pool, &target_patient_id, period_days).await)
-    } else {
-        None
-    };
+    let authorized_records_section =
+        if query.detail_category.as_deref() == Some("authorized_records") {
+            Some(load_authorized_records_section(&mut tx, &target_patient_id, period_days).await)
+        } else {
+            None
+        };
 
-    let _ = record_audit(
-        pool,
+    let categories_returned: Vec<_> = shared_categories
+        .iter()
+        .filter(|cat| {
+            matches!(cat.as_str(), "steps" | "hydration")
+                || Some(cat.as_str()) == query.detail_category.as_deref()
+        })
+        .collect();
+    if record_audit(
+        &mut *tx,
         Some(prog_uuid),
         &identity.uid,
         &target_patient_id,
         "PARTNER_VIEWED_PARTICIPANT_SUMMARY",
         json!({
             "days": period_days,
-            "categoriesReturned": shared_categories
+            "categoriesReturned": categories_returned,
+            "detailCategory": query.detail_category,
+            "purpose": "program_routine_followup"
         }),
     )
-    .await;
+    .await
+    .is_err()
+        || tx.commit().await.is_err()
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Erro ao registrar consulta ao resumo.",
+        );
+    }
 
     let fam_share: bool = row.try_get("family_share_enabled").unwrap_or(false);
     let has_binding: bool = row.try_get("has_family_binding").unwrap_or(false);
     let family_support_active =
         program_config.features.family_link_enabled && fam_share && has_binding;
     let family_support_summary = if family_support_active {
-        Some("Familiar autorizado ativo".to_string())
+        Some("Rede familiar vinculada ao participante".to_string())
     } else {
         None
     };
@@ -5334,6 +5423,9 @@ pub async fn get_participant_summary_handler(
         patient_user_id: target_patient_id,
         participant_name: row.get("participant_name"),
         period_days,
+        period_end: row.get("period_end"),
+        available_details,
+        detail_category: query.detail_category,
         shared_categories,
         family_support_active,
         family_support_summary,
@@ -5343,7 +5435,12 @@ pub async fn get_participant_summary_handler(
         authorized_records_section,
     };
 
-    (StatusCode::OK, Json(json!({ "summary": summary }))).into_response()
+    (
+        StatusCode::OK,
+        [(CACHE_CONTROL, "no-store")],
+        Json(json!({ "summary": summary })),
+    )
+        .into_response()
 }
 
 // =========================================================================
@@ -6426,6 +6523,23 @@ mod tests {
             10,
         )
         .is_ok());
+    }
+
+    #[test]
+    fn clinical_details_require_the_current_purpose_and_category_in_both_lists() {
+        let effective = vec!["steps".to_owned(), "medications".to_owned()];
+        assert!(clinical_detail_categories(&effective, None).is_empty());
+        let legacy = json!({"sharedCategories": ["medications"]});
+        assert!(clinical_detail_categories(&effective, Some(&legacy)).is_empty());
+        let receipt = json!({"consentVersion": ROUTINE_CONSENT_VERSION,
+            "sharedCategories": ["steps", "authorized_records", "medications"]});
+        assert_eq!(
+            clinical_detail_categories(&effective, Some(&receipt)),
+            vec!["medications"]
+        );
+        let revoked =
+            json!({"consentVersion": ROUTINE_CONSENT_VERSION, "sharedCategories": ["steps"]});
+        assert!(clinical_detail_categories(&effective, Some(&revoked)).is_empty());
     }
 
     #[test]
