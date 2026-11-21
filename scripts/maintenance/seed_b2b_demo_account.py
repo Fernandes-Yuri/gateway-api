@@ -186,12 +186,13 @@ async def seed_participant(conn, program_id, owner, patient, *, full, family_sha
     )
     await conn.execute(
         "INSERT INTO program_appointments(id,program_id,patient_user_id,modality,requested_slot_text,"
-        "scheduled_at,patient_note,status) VALUES($1,$2,$3,$4,$5,"
-        "CASE WHEN $6='CONFIRMED' THEN now()+interval '7 days' ELSE NULL END,$7,$6) "
-        "ON CONFLICT(id) DO NOTHING",
+        "scheduled_at,patient_note,status,requested_period) VALUES($1,$2,$3,$4,$5,"
+        "CASE WHEN $6='CONFIRMED' THEN now()+interval '7 days' ELSE NULL END,$7,$6,$8) "
+        "ON CONFLICT(id) DO UPDATE SET requested_period=EXCLUDED.requested_period",
         record_id(program_id, patient, "appointment"), program_id, patient,
         "IN_PERSON" if full else "REMOTE", "Próxima semana, período da manhã (teste)",
         "PENDING" if full else "CONFIRMED", "Agendamento demonstrativo B2B-31.",
+        "PROXIMA_SEMANA_MANHA" if full else None,
     )
     reminder_id = record_id(program_id, patient, "reminder")
     await conn.execute(
