@@ -171,11 +171,17 @@ async def supplement_metrics(conn, patient_id):
 
 
 async def seed_participant(conn, program_id, owner, patient, *, full, family_share):
+    # O seed representa o aceite do app novo (migration 094): sem a versao
+    # corrente o resumo do responsavel nao libera medications/authorized_records
+    # para as contas de demonstracao.
     await conn.execute(
-        "INSERT INTO program_enrollments(program_id,patient_user_id,shared_categories,family_share_enabled) "
-        "VALUES($1,$2,$3::jsonb,$4) ON CONFLICT(program_id,patient_user_id) DO UPDATE SET "
+        "INSERT INTO program_enrollments(program_id,patient_user_id,shared_categories,"
+        "family_share_enabled,consent_version) "
+        "VALUES($1,$2,$3::jsonb,$4,'program-routine-v1') ON CONFLICT(program_id,patient_user_id) DO UPDATE SET "
         "status='ACTIVE',shared_categories=EXCLUDED.shared_categories,"
-        "family_share_enabled=EXCLUDED.family_share_enabled,revoked_at=NULL,updated_at=now()",
+        "family_share_enabled=EXCLUDED.family_share_enabled,"
+        "consent_version=EXCLUDED.consent_version,"
+        "revoked_at=NULL,updated_at=now()",
         program_id, patient, json.dumps(METRICS if full else METRICS[:2]), family_share,
     )
     await conn.execute(

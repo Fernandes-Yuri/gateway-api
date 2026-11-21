@@ -64,6 +64,29 @@ async def register_device_token(
     return True
 
 
+async def deactivate_device_token(pool, user_id: str, token: str) -> bool:
+    """Desativa o token push do proprio usuario (logout/troca de conta).
+
+    Idempotente por desenho: nao dispara excecao nem 404 quando o token nao
+    existe ou ja esta inativo. So desativa o par (user_id, token) do titular —
+    se o token foi reaproveitado por outra conta, nada e tocado. Devolve False
+    apenas quando nao ha banco (JSON legado segue sendo limpo pelo chamador).
+    """
+    if not pool:
+        return False
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE device_push_tokens
+               SET is_active = false
+             WHERE token = $1::text AND user_id = $2::varchar AND is_active = true
+            """,
+            token,
+            user_id,
+        )
+    return True
+
+
 async def get_active_tokens_for_caregivers(pool, exclude_user_id: Optional[str] = None) -> List[str]:
     """Retorna lista de tokens FCM ativos de cuidadores."""
     if not pool:

@@ -10,8 +10,15 @@ SELECT jsonb_build_object(
         FROM generate_series(-6, 0) AS offset_day
         LEFT JOIN (
             SELECT day, count(*) AS total FROM events GROUP BY day
-        ) daily ON daily.day = ($6::timestamptz AT TIME ZONE 'UTC')::date + offset_day
+        ) daily ON daily.day = ($6::timestamptz AT TIME ZONE 'America/Sao_Paulo')::date + offset_day
     ),
-    'appointmentsDelta', COALESCE(sum(appointments_confirmed - previous_confirmed), 0),
+    -- Sem NENHUM membro com atividade na semana anterior nao existe base de
+    -- comparacao: devolve NULL (e nao 0) para o app distinguir "sem base" de
+    -- "igual a semana anterior". `previous_week` e o mesmo criterio usado em
+    -- retentionRate, restrito a America/Sao_Paulo.
+    'appointmentsDelta', CASE
+        WHEN count(*) FILTER (WHERE previous_week) = 0 THEN NULL::bigint
+        ELSE COALESCE(sum(appointments_confirmed - previous_confirmed), 0)
+    END,
     'appointmentsConfirmed', COALESCE(sum(appointments_confirmed), 0)
 ) AS kpis FROM metrics

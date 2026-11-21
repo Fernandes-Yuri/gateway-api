@@ -621,6 +621,10 @@ pub struct ParticipantsQuery {
 #[derive(Debug, Deserialize)]
 pub struct ParticipantSummaryQuery {
     pub days: Option<i32>,
+    /// `medications` | `authorized_records`. Obrigatorio para receber a secao
+    /// de detalhe correspondente; sem ele a resposta traz `null` (contrato
+    /// adotado na Sprint C — clientes anteriores recebem o resumo agregado e
+    /// precisam ser atualizados para ver os cards).
     #[serde(rename = "detailCategory")]
     pub detail_category: Option<String>,
 }
@@ -3537,6 +3541,7 @@ pub async fn close_my_program_handler(
         "UPDATE program_enrollments \
             SET status = 'REVOKED', \
                 shared_categories = '[]'::jsonb, \
+                consent_version = NULL, \
                 revoked_at = NOW(), \
                 updated_at = NOW() \
           WHERE program_id = $1 AND status = 'ACTIVE'",
@@ -4119,14 +4124,22 @@ pub async fn join_program_handler(
 
     let categories_json = json!(categories);
     let family_share = req.family_share_enabled.unwrap_or(false);
+    // So a versao corrente e persistida no vinculo; versao desconhecida/ausente
+    // grava NULL, o que mantem o detalhe clinico negado ate nova confirmacao
+    // (mesma semantica ja usada no metadata de auditoria).
+    let accepted_consent_version = req
+        .consent_version
+        .as_deref()
+        .filter(|v| *v == ROUTINE_CONSENT_VERSION);
     if sqlx::query(
         "INSERT INTO program_enrollments \
-            (program_id, patient_user_id, status, shared_categories, family_share_enabled, consented_at, revoked_at, updated_at) \
-         VALUES ($1, $2, 'ACTIVE', $3, $4, NOW(), NULL, NOW()) \
+            (program_id, patient_user_id, status, shared_categories, family_share_enabled, consent_version, consented_at, revoked_at, updated_at) \
+         VALUES ($1, $2, 'ACTIVE', $3, $4, $5, NOW(), NULL, NOW()) \
          ON CONFLICT (program_id, patient_user_id) DO UPDATE \
             SET status = 'ACTIVE', \
                 shared_categories = EXCLUDED.shared_categories, \
                 family_share_enabled = EXCLUDED.family_share_enabled, \
+                consent_version = EXCLUDED.consent_version, \
                 consented_at = NOW(), \
                 revoked_at = NULL, \
                 updated_at = NOW()",
@@ -4135,6 +4148,7 @@ pub async fn join_program_handler(
     .bind(&identity.uid)
     .bind(&categories_json)
     .bind(family_share)
+    .bind(accepted_consent_version)
     .execute(&mut *tx)
     .await
     .is_err()
@@ -4233,10 +4247,18 @@ pub async fn update_enrollment_consent_handler(
         );
     };
     let categories_json = json!(categories);
+    // A ultima decisao governa: se o request nao trouxer a versao corrente, o
+    // vinculo passa a NULL e o detalhe clinico fica negado ate nova confirmacao
+    // (mesma regra do recibo de auditoria usado no fallback legado).
+    let accepted_consent_version = req
+        .consent_version
+        .as_deref()
+        .filter(|v| *v == ROUTINE_CONSENT_VERSION);
     let updated = match sqlx::query(
         "UPDATE program_enrollments e \
             SET shared_categories = $3, \
                 family_share_enabled = COALESCE($4, e.family_share_enabled), \
+                consent_version = $5, \
                 updated_at = NOW() \
            FROM partner_programs p \
           WHERE e.program_id = p.id \
@@ -4253,6 +4275,7 @@ pub async fn update_enrollment_consent_handler(
     .bind(&identity.uid)
     .bind(&categories_json)
     .bind(req.family_share_enabled)
+    .bind(accepted_consent_version)
     .fetch_optional(&mut *tx)
     .await
     {
@@ -4351,6 +4374,7 @@ pub async fn leave_program_handler(
         "UPDATE program_enrollments \
             SET status = 'REVOKED', \
                 shared_categories = '[]'::jsonb, \
+                consent_version = NULL, \
                 revoked_at = NOW(), \
                 updated_at = NOW() \
           WHERE program_id = $1 AND patient_user_id = $2 AND status = 'ACTIVE'",
@@ -5205,18 +5229,47 @@ async fn load_authorized_records_section(
     }
 }
 
-fn clinical_detail_categories(effective: &[String], consent: Option<&Value>) -> Vec<String> {
-    let Some(record) =
-        consent.filter(|v| v["consentVersion"].as_str() == Some(ROUTINE_CONSENT_VERSION))
-    else {
+/// Versao de consentimento vigente para liberar detalhes clinicos.
+///
+/// A coluna `program_enrollments.consent_version` e a fonte primaria: ela e
+/// gravada na mesma transacao em que o participante aceita os termos e as
+/// categorias atuais. O recibo de auditoria e apenas fallback para vinculos
+/// legados ainda nao migrados (coluna NULL/em branco) e nunca sobrepoe uma
+/// versao nao vazia: se a ultima decisao gravou outra versao, o detalhe fica
+/// negado. Versao em branco equivale a ausente.
+fn effective_consent_version<'a>(
+    column_version: Option<&'a str>,
+    consent_receipt: Option<&'a Value>,
+) -> Option<&'a str> {
+    match column_version.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(version) => Some(version),
+        None => consent_receipt
+            .and_then(|record| record["consentVersion"].as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty()),
+    }
+}
+
+/// Categorias de detalhe clinico autorizadas no resumo do responsavel.
+///
+/// Exige as DUAS coisas ao mesmo tempo: versao de consentimento corrente
+/// (coluna do vinculo ou recibo de auditoria de fallback) E categoria presente
+/// nas `shared_categories` ATUAIS do vinculo (ja intersectadas com o que o
+/// programa habilita). Sem versao vigente nao ha detalhe clinico.
+fn clinical_detail_categories(
+    effective_version: Option<&str>,
+    consent_receipt: Option<&Value>,
+    shared_categories: &[String],
+) -> Vec<String> {
+    let Some(version) = effective_consent_version(effective_version, consent_receipt) else {
         return Vec::new();
     };
-    let recorded = parse_categories_json(&record["sharedCategories"]);
-    effective
+    if version != ROUTINE_CONSENT_VERSION {
+        return Vec::new();
+    }
+    shared_categories
         .iter()
-        .filter(|cat| {
-            matches!(cat.as_str(), "medications" | "authorized_records") && recorded.contains(cat)
-        })
+        .filter(|cat| matches!(cat.as_str(), "medications" | "authorized_records"))
         .cloned()
         .collect()
 }
@@ -5257,6 +5310,7 @@ pub async fn get_participant_summary_handler(
         "SELECT p.id AS program_id, p.owner_user_id, p.approval_status, p.program_name, \
                 p.company_name, p.template_key, p.experience_config, \
                 e.status AS enrollment_status, e.shared_categories, e.consented_at, \
+                e.consent_version, \
                 (now() AT TIME ZONE 'America/Sao_Paulo')::date AS period_end, \
                 COALESCE(e.family_share_enabled, false) AS family_share_enabled, \
                 EXISTS( \
@@ -5319,6 +5373,9 @@ pub async fn get_participant_summary_handler(
         intersect_effective_categories(&program_config.enabled_metrics, &consented_categories);
     let period_days = clamp_summary_days(query.days);
 
+    // Vinculos legados (migracao 094) seguem com consent_version NULL e caem no
+    // recibo de auditoria como fallback de compatibilidade.
+    let column_consent_version: Option<String> = row.try_get("consent_version").ok().flatten();
     // Latest participant decision for this enrollment, including decisions from legacy clients.
     let consent: Option<Value> = match sqlx::query_scalar(
         "SELECT metadata FROM program_audit_logs WHERE program_id = $1 AND actor_user_id = $2 \
@@ -5339,7 +5396,11 @@ pub async fn get_participant_summary_handler(
             )
         }
     };
-    let available_details = clinical_detail_categories(&shared_categories, consent.as_ref());
+    let available_details = clinical_detail_categories(
+        column_consent_version.as_deref(),
+        consent.as_ref(),
+        &shared_categories,
+    );
     if query
         .detail_category
         .as_ref()
@@ -5363,6 +5424,9 @@ pub async fn get_participant_summary_handler(
         None
     };
 
+    // Detalhe clinico exige `detailCategory` explicito e autorizacao vigente
+    // (checada acima). Sem o parametro a resposta traz a secao null — clientes
+    // anteriores ao contrato de categorias precisam ser atualizados.
     let medications_section = if query.detail_category.as_deref() == Some("medications") {
         Some(load_medications_section(&mut tx, &target_patient_id, period_days).await)
     } else {
@@ -5383,6 +5447,12 @@ pub async fn get_participant_summary_handler(
                 || Some(cat.as_str()) == query.detail_category.as_deref()
         })
         .collect();
+    // P1 conhecido da Sprint C: `medicationsSection` e `authorizedRecordsSection`
+    // so sao devolvidos quando o request traz `detailCategory` (o app <= #240 nao
+    // envia e recebe null). A versao antiga sera forcada a atualizar; enquanto
+    // isso, marcamos o request legado na auditoria para medir o impacto real em
+    // producao sem alterar o contrato do app.
+    let legacy_client_without_detail_category = query.detail_category.is_none();
     if record_audit(
         &mut *tx,
         Some(prog_uuid),
@@ -5393,6 +5463,7 @@ pub async fn get_participant_summary_handler(
             "days": period_days,
             "categoriesReturned": categories_returned,
             "detailCategory": query.detail_category,
+            "legacyClientWithoutDetailCategory": legacy_client_without_detail_category,
             "purpose": "program_routine_followup"
         }),
     )
@@ -5520,6 +5591,7 @@ pub async fn remove_program_participant_handler(
             SET status = 'REMOVED', \
                 shared_categories = '[]'::jsonb, \
                 family_share_enabled = false, \
+                consent_version = NULL, \
                 revoked_at = NOW(), \
                 updated_at = NOW() \
           WHERE program_id = $1 AND patient_user_id = $2 AND status = 'ACTIVE'",
@@ -6526,20 +6598,65 @@ mod tests {
     }
 
     #[test]
-    fn clinical_details_require_the_current_purpose_and_category_in_both_lists() {
-        let effective = vec!["steps".to_owned(), "medications".to_owned()];
-        assert!(clinical_detail_categories(&effective, None).is_empty());
+    fn clinical_details_require_the_current_version_and_current_category() {
+        let v1 = ROUTINE_CONSENT_VERSION;
+        let current = vec!["steps".to_owned(), "medications".to_owned()];
+
+        // Sem versao vigente (coluna NULL e sem recibo) nao ha detalhe clinico.
+        assert!(clinical_detail_categories(None, None, &current).is_empty());
+
+        // Recibo de cliente antigo, sem consentVersion: nunca autoriza.
         let legacy = json!({"sharedCategories": ["medications"]});
-        assert!(clinical_detail_categories(&effective, Some(&legacy)).is_empty());
+        assert!(clinical_detail_categories(None, Some(&legacy), &current).is_empty());
+
+        // Fallback de compatibilidade: vinculo legado (coluna NULL) com recibo
+        // auditado na versao corrente libera a categoria vigente.
         let receipt = json!({"consentVersion": ROUTINE_CONSENT_VERSION,
-            "sharedCategories": ["steps", "authorized_records", "medications"]});
+            "sharedCategories": ["steps", "medications"]});
         assert_eq!(
-            clinical_detail_categories(&effective, Some(&receipt)),
+            clinical_detail_categories(None, Some(&receipt), &current),
             vec!["medications"]
         );
-        let revoked =
-            json!({"consentVersion": ROUTINE_CONSENT_VERSION, "sharedCategories": ["steps"]});
-        assert!(clinical_detail_categories(&effective, Some(&revoked)).is_empty());
+
+        // Coluna preenchida e a fonte primaria: autoriza mesmo sem recibo de
+        // auditoria, desde que a categoria siga nas shared_categories atuais.
+        assert_eq!(
+            clinical_detail_categories(Some(v1), None, &current),
+            vec!["medications"]
+        );
+
+        // Coluna vence o fallback: versao diferente nega mesmo quando existe
+        // um recibo antigo com a versao corrente.
+        let stale_receipt = json!({"consentVersion": ROUTINE_CONSENT_VERSION});
+        let other = clinical_detail_categories(Some("v2"), Some(&stale_receipt), &current);
+        assert!(other.is_empty());
+        // Versao em branco equivale a ausente: cai no fallback (recibo corrente).
+        assert_eq!(
+            clinical_detail_categories(Some("   "), Some(&stale_receipt), &current),
+            vec!["medications"]
+        );
+        // Em branco e sem recibo: negado.
+        assert!(clinical_detail_categories(Some(""), None, &current).is_empty());
+
+        // Categoria retirada pelo participante (shared_categories atuais) nega,
+        // mesmo com a versao corrente gravada no vinculo.
+        let steps_only = vec!["steps".to_owned()];
+        let no_cat = clinical_detail_categories(Some(v1), None, &steps_only);
+        assert!(no_cat.is_empty());
+        let no_cat_receipt = clinical_detail_categories(Some(v1), Some(&receipt), &steps_only);
+        assert!(no_cat_receipt.is_empty());
+
+        // Detalhe clinico nunca inclui categorias de rotina, mesmo pedidas.
+        let everything = vec![
+            "steps".to_owned(),
+            "hydration".to_owned(),
+            "medications".to_owned(),
+            "authorized_records".to_owned(),
+        ];
+        assert_eq!(
+            clinical_detail_categories(Some(v1), None, &everything),
+            vec!["medications", "authorized_records"]
+        );
     }
 
     #[test]
